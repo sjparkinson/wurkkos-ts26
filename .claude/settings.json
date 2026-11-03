@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(cargo xtask ping:*)",
+      "Bash(cargo xtask backup:*)",
+      "Bash(cargo xtask flash:*)",
+      "Bash(cargo xtask restore:*)",
+      "Bash(cargo run --package xtask -- ping:*)",
+      "Bash(cargo run --package xtask -- backup:*)",
+      "Bash(cargo run --package xtask -- flash:*)",
+      "Bash(cargo run --package xtask -- restore:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ruby --disable-gems \"$(git rev-parse --show-toplevel)/.claude/hooks/pre-tool-use.rb\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ruby --disable-gems \"$(git rev-parse --show-toplevel)/.claude/hooks/post-tool-use.rb\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

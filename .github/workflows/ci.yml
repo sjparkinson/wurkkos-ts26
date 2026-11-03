@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: ~
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # Turns rustc, clippy, rustfmt, test panic and rust-lld errors in the
+      # log into annotations on the PR diff.
+      - run: echo "::add-matcher::.github/rust-matchers.json"
+
+      # rustup reads rust-toolchain.toml and installs the pinned nightly,
+      # with rust-src, rustfmt and clippy, the first time cargo runs.
+      - run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: actions/cache@v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}-
+
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo clippy-fw
+      - run: cargo xtask size
+      - run: cargo xtask hex
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wurkkos-ts26-0721
+          path: |
+            target/wurkkos-ts26-0721.hex
+            target/avr-none/release/ts26.elf
