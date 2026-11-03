@@ -14,9 +14,8 @@ Rust firmware for the Wurkkos TS26 torch (Anduril model 0721), with a much small
 You need [rustup](https://rustup.rs). The pinned nightly, `rust-src` and everything else come down on the first build.
 
 ```sh
-cargo fw            # target/avr-none/release/ts26.elf
-cargo xtask hex     # target/wurkkos-ts26-0721.hex
-cargo xtask size    # flash and RAM use
+cargo xtask hex     # build the firmware, write target/wurkkos-ts26-0721.hex and print flash and RAM use
+cargo test --workspace
 ```
 
 See [docs/toolchain.md](docs/toolchain.md) for how it builds and links.

@@ -9,8 +9,8 @@
 //! then stops in `link_probe_done`. There's no simulator to run it in this
 //! repo, so xtask only checks where the linker put each section
 //! (`layout::memory`) and that none of them came out empty
-//! (`probe_sections` in xtask/src/main.rs). `cargo fw` builds this alongside
-//! the firmware; it's never flashed.
+//! (`probe_sections` in xtask/src/main.rs). `cargo xtask hex` builds this
+//! alongside the firmware; it's never flashed.
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
@@ -87,6 +87,6 @@ mod probe {
 
 #[cfg(not(target_arch = "avr"))]
 fn main() {
-    eprintln!("this is a linker check for the ATtiny1616; `cargo xtask size` runs it");
+    eprintln!("this is a linker check for the ATtiny1616; `cargo xtask hex` runs it");
     std::process::exit(1);
 }

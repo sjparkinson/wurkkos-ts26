@@ -8,12 +8,11 @@ CI runs these on every pull request, so run them before you push.
 cargo fmt --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-cargo clippy-fw
-cargo xtask size
+cargo clippy --package ts26 --release --target avr-none -Zbuild-std=core -- -D warnings
 cargo xtask hex
 ```
 
-The first three run on your machine's own target. `cargo clippy-fw` lints the firmware as the AVR sees it, which is the only place `src/hw.rs` and `src/rt.rs` get linted. `cargo xtask size` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `src/bin/link_probe.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses. `cargo xtask hex` writes the file you'd flash. CI keeps that hex and the ELF as a build artefact.
+The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/hw.rs` and `src/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `src/bin/link_probe.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses. It also writes the file you'd flash. CI keeps that hex and the ELF as a build artefact.
 
 There's no simulator here, unlike the TS21. Nothing runs the firmware before it reaches a torch, so the layout checks and the host tests are all there is.
 
@@ -53,7 +52,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and then the light needs
 
 ## Bumping the nightly
 
-AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask size` before and after. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed. The TS21 pins the same nightly, so bump them together.
+AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed. The TS21 pins the same nightly, so bump them together.
 
 ## Commits
 

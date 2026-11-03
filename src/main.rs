@@ -2,7 +2,7 @@
 //! second.
 //!
 //! On the host this builds to a stub, so `cargo test` and `cargo clippy`
-//! work across the workspace. `cargo fw` builds the real thing.
+//! work across the workspace. `cargo xtask hex` builds the real thing.
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
@@ -44,6 +44,6 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 #[cfg(not(target_arch = "avr"))]
 fn main() {
-    eprintln!("this is firmware for the ATtiny1616; build it with `cargo fw`");
+    eprintln!("this is firmware for the ATtiny1616; build it with `cargo xtask hex`");
     std::process::exit(1);
 }

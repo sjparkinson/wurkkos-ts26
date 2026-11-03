@@ -10,7 +10,7 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's 
 - Registers written out by hand in `src/hw.rs`, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
 - The UPDI programmer lives in `xtask`, so rustup is the only thing to install.
 
-`cargo fw` builds `target/avr-none/release/ts26.elf`. `cargo xtask hex` turns it into Intel HEX at `target/wurkkos-ts26-0721.hex`, and `cargo xtask size` reports flash and RAM use.
+`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, turns it into Intel HEX at `target/wurkkos-ts26-0721.hex` and reports flash and RAM use.
 
 ## Linking with rust-lld
 
@@ -34,7 +34,7 @@ The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 
 
 What does work: 8- and 16-bit multiplication compile to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
 
-So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of two or a runtime value. Host tests won't catch a slip here, since the host has a 32-bit multiply; `cargo fw` will. If something genuinely needs a 32-bit product, these are the options, in order of preference.
+So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of two or a runtime value. Host tests won't catch a slip here, since the host has a 32-bit multiply; `cargo xtask hex` will. If something genuinely needs a 32-bit product, these are the options, in order of preference.
 
 1. Split one operand into bytes so each partial product fits 16 bits. When the result is shifted right by 8 anyway (a calibration scale, say), the low byte's product only needs its top half and the whole thing stays in 16 bits.
 2. Do it as 16 × 16 → 32 in a small shift-and-add helper in the library, tested on the host.
@@ -75,7 +75,7 @@ LLVM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/
 ELF=target/avr-none/release/ts26.elf
 ```
 
-Then, after `cargo fw`:
+Then, after `cargo xtask hex` (it leaves the ELF behind even when its checks fail):
 
 ```sh
 "$LLVM/llvm-objdump" -d --no-show-raw-insn "$ELF"                          # everything, vector table first
@@ -84,12 +84,12 @@ Then, after `cargo fw`:
 "$LLVM/llvm-objdump" -h "$ELF"                                             # section addresses
 ```
 
-`-S` works because the release profile keeps debug info. `llvm-size -A` should add `.text` and `.rodata` up to the same number `cargo xtask size` reports (it did on the TS21), so that command stays the one to use for budgets. These are for when you want to know *why*, such as which function grew, or whether an interrupt handler saves more registers than it should.
+`-S` works because the release profile keeps debug info. `llvm-size -A` should add `.text` and `.rodata` up to the same number `cargo xtask hex` reports (it did on the TS21), so that command stays the one to use for budgets. These are for when you want to know *why*, such as which function grew, or whether an interrupt handler saves more registers than it should.
 
 ## Host builds
 
-`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/hw.rs` and `src/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy-fw` lints them for the AVR target.
+`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/hw.rs` and `src/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
 
 ## First build
 
-The first `cargo fw` downloads the pinned nightly with `rust-src`, and then the handful of crates that `core`'s build needs from crates.io. After that it's offline.
+The first `cargo xtask hex` downloads the pinned nightly with `rust-src`, and then the handful of crates that `core`'s build needs from crates.io. After that it's offline.

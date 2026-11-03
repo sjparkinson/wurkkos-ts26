@@ -1,4 +1,5 @@
-//! `cargo xtask <command>`: the steps around `cargo fw` that cargo can't do.
+//! `cargo xtask <command>`: the AVR build and the steps around it that cargo
+//! can't do.
 //!
 //! No dependencies. ELF reading, Intel HEX and the UPDI programmer are all
 //! small enough to do by hand, which saves needing avr-objcopy, avrdude or
@@ -25,8 +26,8 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  hex                     build the firmware and write target/wurkkos-ts26-0721.hex
-  size                    build the firmware and print flash and RAM use
+  hex                     build the firmware, write target/wurkkos-ts26-0721.hex
+                          and print flash and RAM use
   ping <port>             check the programmer can see the chip, change nothing
   backup <port>           save the torch's flash, EEPROM and fuses into backup/
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
@@ -37,7 +38,7 @@ or /dev/ttyUSB0 on Linux.
 ";
 
 const ELF: &str = "target/avr-none/release/ts26.elf";
-/// src/bin/link_probe.rs, which `cargo fw` builds alongside the firmware.
+/// src/bin/link_probe.rs, which `build` builds alongside the firmware.
 const PROBE: &str = "target/avr-none/release/link-probe.elf";
 const HEX: &str = "target/wurkkos-ts26-0721.hex";
 
@@ -47,7 +48,6 @@ fn main() -> ExitCode {
 
     let result = match args.as_slice() {
         ["hex"] => hex(),
-        ["size"] => size(),
         ["ping", port] => ping(port),
         ["backup", port] => backup(port),
         ["flash", port] => build().and_then(|elf| flash(port, &elf.flash_image())),
@@ -80,7 +80,15 @@ fn root() -> PathBuf {
 /// checks fail.
 fn build() -> Result<elf::Elf, String> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    run(Command::new(cargo).current_dir(root()).arg("fw"))?;
+    run(Command::new(cargo).current_dir(root()).args([
+        "build",
+        "--package",
+        "ts26",
+        "--release",
+        "--target",
+        "avr-none",
+        "-Zbuild-std=core",
+    ]))?;
     let path = root().join(ELF);
     let bytes = fs::read(&path).map_err(at(&path))?;
     let elf = elf::Elf::parse(&bytes).map_err(at(&path))?;
@@ -106,28 +114,50 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
     Ok(())
 }
 
+/// Writes the image `flash` would, then prints flash and RAM use.
 fn hex() -> Result<(), String> {
-    let image = build()?.flash_image();
+    let elf = build()?;
+    let image = elf.flash_image();
     write(&root().join(HEX), &ihex::encode(&image))?;
-    eprintln!("wrote {HEX} ({} bytes of flash)", image.len());
+    eprintln!("wrote {HEX}");
+
+    let flash = image.len() as u64;
+    let ram = elf.ram_bytes().into();
+    let ram_size = (elf::RAM.end - elf::RAM.start).into();
+    println!(
+        "{}",
+        row("flash", flash, Some(map::FLASH_SIZE as u64), "bytes")
+    );
+    println!("{}", row("ram", ram, Some(ram_size), "bytes"));
     Ok(())
 }
 
-fn size() -> Result<(), String> {
-    let elf = build()?;
-    let flash = elf.flash_image().len() as u32;
-    let flash_size = map::FLASH_SIZE as u32;
-    let ram = elf.ram_bytes();
-    let ram_size = elf::RAM.end - elf::RAM.start;
-    println!(
-        "flash {flash:>5} / {flash_size} bytes ({}%)",
-        flash * 100 / flash_size
-    );
-    println!(
-        "ram   {ram:>5} / {ram_size} bytes ({}%), plus the stack",
-        ram * 100 / ram_size
-    );
-    Ok(())
+/// One line of the size report, in columns: used, out of, percent, unit.
+fn row(label: &str, used: u64, of: Option<u64>, unit: &str) -> String {
+    let (of, percent) = match of {
+        Some(of) => (
+            format!("/ {:>6}", commas(of)),
+            format!("{:>3}%", used * 100 / of),
+        ),
+        None => (String::new(), String::new()),
+    };
+    format!(
+        "{label:<5} {:>6} {of:<8} {percent:>4}  {unit}",
+        commas(used)
+    )
+}
+
+/// `39062` as `39,062`.
+fn commas(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 fn connect(port: &str) -> Result<Programmer<Port>, String> {
@@ -257,5 +287,31 @@ fn run(command: &mut Command) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{program} failed ({status})"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{commas, row};
+
+    #[test]
+    fn rows_line_up_with_and_without_a_total() {
+        assert_eq!(
+            row("flash", 3978, Some(16384), "bytes"),
+            "flash  3,978 / 16,384  24%  bytes"
+        );
+        assert_eq!(
+            row("stack", 107, None, "bytes"),
+            "stack    107                bytes"
+        );
+    }
+
+    #[test]
+    fn commas_group_thousands() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(107), "107");
+        assert_eq!(commas(3978), "3,978");
+        assert_eq!(commas(39062), "39,062");
+        assert_eq!(commas(1_234_567), "1,234,567");
     }
 }
