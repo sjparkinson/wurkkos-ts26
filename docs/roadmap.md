@@ -17,7 +17,7 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 
 ## 2. It's safe to leave a cell in
 
-- [ ] Sleep when off, in power-down, woken by the switch on PA5. Borrow the TS21's plan, and make sure PB2 is low before sleeping so the boost converter's off
+- [ ] Sleep when off, in power-down, woken by the switch on PA5. Borrow the TS21's plan, and make sure PB2 is low before sleeping so the boost converter's off. PA5's BOTHEDGES sense already arms the PORTA interrupt and the PIT flag sets on its own, so the first `sei` needs real handlers that clear both flags, or the bare `reti` in `src/rt.rs` re-fires forever
 - [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. Work out the divider and reference, and check against a multimeter
 - [ ] Low-voltage protection. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge
 - [ ] Thermal regulation from the internal temperature sensor

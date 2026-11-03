@@ -112,7 +112,8 @@ fn protected_write(addr: usize, value: u8) {
 
 pub fn init() {
     // 20 MHz oscillator (the factory OSCCFG fuse) divided by 2. 10 MHz is
-    // safe down to 2.7 V, below anywhere a lithium cell should be run.
+    // specified down to 2.7 V of VCC. VCC here comes from a regulator, not
+    // the cell, and nobody knows yet how it behaves as the cell sags.
     protected_write(
         reg::CLKCTRL_MCLKCTRLB,
         regs::CLKCTRL_PDIV_2X | regs::CLKCTRL_PEN,
@@ -168,8 +169,9 @@ pub fn init() {
 ///
 /// The flag goes up whether or not the interrupt is enabled, so for now
 /// this busy-waits with the CPU awake. Sleeping between ticks (and properly
-/// when off) is on the roadmap, and until then the torch drains its cell
-/// in a few days.
+/// when off) is on the roadmap. Until then the MCU alone draws about 3 mA
+/// (DS40002204A table 36-4), a 5,000 mAh cell in a couple of months, plus
+/// whatever the regulator takes, which nobody's measured.
 pub fn wait_for_tick() {
     while read(reg::RTC_PITINTFLAGS) & regs::RTC_PI == 0 {}
     write(reg::RTC_PITINTFLAGS, regs::RTC_PI);
