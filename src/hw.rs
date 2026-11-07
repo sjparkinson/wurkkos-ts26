@@ -150,8 +150,10 @@ pub fn init() {
 
     // Dual-slope PWM on WO0, straight off the 10 MHz clock. The BUF
     // registers apply at the bottom of a cycle, so duty changes never
-    // glitch.
-    write16(reg::TCA0_PERBUF, PWM_TOP);
+    // glitch. PER goes in directly, with the timer stopped, or the first
+    // cycle would run at the reset value of 0xFFFF, 13 ms before the first
+    // UPDATE.
+    write16(reg::TCA0_PER, PWM_TOP);
     write16(reg::TCA0_CMP0BUF, 0);
     write(
         reg::TCA0_CTRLB,

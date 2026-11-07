@@ -9,7 +9,9 @@
 
 #[cfg(target_arch = "avr")]
 mod hw;
+// hw.rs and rt.rs need some of regs.rs's constants, not all of them.
 #[cfg(target_arch = "avr")]
+#[allow(dead_code)]
 mod regs;
 #[cfg(target_arch = "avr")]
 mod rt;

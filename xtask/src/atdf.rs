@@ -238,6 +238,16 @@ impl Atdf {
         property.num("value")
     }
 
+    /// The vector table slot of one interrupt.
+    pub fn vector(&self, instance: &str, name: &str) -> u32 {
+        self.device()
+            .child("interrupts")
+            .all("interrupt")
+            .find(|i| i.attr("module-instance") == Some(instance) && i.attr("name") == Some(name))
+            .unwrap_or_else(|| panic!("no interrupt {instance}.{name}"))
+            .num("index")
+    }
+
     /// Reset plus every interrupt: the highest vector index, plus one.
     pub fn vectors(&self) -> u32 {
         let interrupts = self.device().child("interrupts").all("interrupt");
@@ -349,9 +359,53 @@ mod tests {
             (regs::addr::CPU_CCP, "CPU", None, "CCP", 1),
             (regs::addr::CPU_SREG, "CPU", None, "SREG", 1),
             (regs::addr::VPORTA_IN, "VPORTA", None, "IN", 1),
+            (regs::addr::VPORTA_INTFLAGS, "VPORTA", None, "INTFLAGS", 1),
             (regs::addr::VPORTB_DIR, "VPORTB", None, "DIR", 1),
             (regs::addr::VPORTB_OUT, "VPORTB", None, "OUT", 1),
             (regs::addr::VPORTC_DIR, "VPORTC", None, "DIR", 1),
+            (regs::addr::GPIO_GPIOR0, "GPIO", None, "GPIOR0", 1),
+            (regs::addr::GPIO_GPIOR1, "GPIO", None, "GPIOR1", 1),
+            (regs::addr::GPIO_GPIOR2, "GPIO", None, "GPIOR2", 1),
+            (regs::addr::GPIO_GPIOR3, "GPIO", None, "GPIOR3", 1),
+            (regs::addr::RSTCTRL_RSTFR, "RSTCTRL", None, "RSTFR", 1),
+            (regs::addr::SLPCTRL_CTRLA, "SLPCTRL", None, "CTRLA", 1),
+            (regs::addr::VREF_CTRLA, "VREF", None, "CTRLA", 1),
+            (regs::addr::VREF_CTRLB, "VREF", None, "CTRLB", 1),
+            (regs::addr::WDT_CTRLA, "WDT", None, "CTRLA", 1),
+            (regs::addr::WDT_STATUS, "WDT", None, "STATUS", 1),
+            (regs::addr::CRCSCAN_CTRLA, "CRCSCAN", None, "CTRLA", 1),
+            (regs::addr::CRCSCAN_CTRLB, "CRCSCAN", None, "CTRLB", 1),
+            (regs::addr::CRCSCAN_STATUS, "CRCSCAN", None, "STATUS", 1),
+            (regs::addr::RTC_PITINTCTRL, "RTC", None, "PITINTCTRL", 1),
+            (regs::addr::ADC0_CTRLA, "ADC0", None, "CTRLA", 1),
+            (regs::addr::ADC0_CTRLB, "ADC0", None, "CTRLB", 1),
+            (regs::addr::ADC0_CTRLC, "ADC0", None, "CTRLC", 1),
+            (regs::addr::ADC0_CTRLD, "ADC0", None, "CTRLD", 1),
+            (regs::addr::ADC0_SAMPCTRL, "ADC0", None, "SAMPCTRL", 1),
+            (regs::addr::ADC0_MUXPOS, "ADC0", None, "MUXPOS", 1),
+            (regs::addr::ADC0_COMMAND, "ADC0", None, "COMMAND", 1),
+            (regs::addr::ADC0_INTFLAGS, "ADC0", None, "INTFLAGS", 1),
+            (regs::addr::ADC0_RES, "ADC0", None, "RES", 2),
+            (regs::addr::ADC0_CALIB, "ADC0", None, "CALIB", 1),
+            (
+                regs::addr::SIGROW_TEMPSENSE0,
+                "SIGROW",
+                None,
+                "TEMPSENSE0",
+                1,
+            ),
+            (
+                regs::addr::SIGROW_TEMPSENSE1,
+                "SIGROW",
+                None,
+                "TEMPSENSE1",
+                1,
+            ),
+            (regs::addr::FUSE_WDTCFG, "FUSE", None, "WDTCFG", 1),
+            (regs::addr::FUSE_OSCCFG, "FUSE", None, "OSCCFG", 1),
+            (regs::addr::FUSE_SYSCFG0, "FUSE", None, "SYSCFG0", 1),
+            (regs::addr::FUSE_APPEND, "FUSE", None, "APPEND", 1),
+            (regs::addr::FUSE_BOOTEND, "FUSE", None, "BOOTEND", 1),
             (
                 regs::addr::CLKCTRL_MCLKCTRLB,
                 "CLKCTRL",
@@ -367,7 +421,10 @@ mod tests {
             (regs::addr::PORTC_PIN0CTRL, "PORTC", None, "PIN0CTRL", 1),
             (regs::addr::TCA0_CTRLA, "TCA0", single, "CTRLA", 1),
             (regs::addr::TCA0_CTRLB, "TCA0", single, "CTRLB", 1),
-            (regs::addr::TCA0_PERBUF, "TCA0", single, "PERBUF", 2),
+            (regs::addr::TCA0_INTCTRL, "TCA0", single, "INTCTRL", 1),
+            (regs::addr::TCA0_INTFLAGS, "TCA0", single, "INTFLAGS", 1),
+            (regs::addr::TCA0_PER, "TCA0", single, "PER", 2),
+            (regs::addr::TCA0_CMP0, "TCA0", single, "CMP0", 2),
             (regs::addr::TCA0_CMP0BUF, "TCA0", single, "CMP0BUF", 2),
         ] {
             let (address, theirs) = at(instance, mode, name);
@@ -404,6 +461,29 @@ mod tests {
         let pitctrla = atdf.register("RTC", None, "PITCTRLA");
         let pitstatus = atdf.register("RTC", None, "PITSTATUS");
         let pitintflags = atdf.register("RTC", None, "PITINTFLAGS");
+        let pitintctrl = atdf.register("RTC", None, "PITINTCTRL");
+        let tca_intctrl = atdf.register("TCA0", Some("SINGLE"), "INTCTRL");
+        let tca_intflags = atdf.register("TCA0", Some("SINGLE"), "INTFLAGS");
+        let rstfr = atdf.register("RSTCTRL", None, "RSTFR");
+        let slpctrl = atdf.register("SLPCTRL", None, "CTRLA");
+        let vref_a = atdf.register("VREF", None, "CTRLA");
+        let vref_b = atdf.register("VREF", None, "CTRLB");
+        let wdt_ctrla = atdf.register("WDT", None, "CTRLA");
+        let wdt_status = atdf.register("WDT", None, "STATUS");
+        let crc_a = atdf.register("CRCSCAN", None, "CTRLA");
+        let crc_b = atdf.register("CRCSCAN", None, "CTRLB");
+        let crc_status = atdf.register("CRCSCAN", None, "STATUS");
+        let osccfg = atdf.register("FUSE", None, "OSCCFG");
+        let syscfg0 = atdf.register("FUSE", None, "SYSCFG0");
+        let adc_a = atdf.register("ADC0", None, "CTRLA");
+        let adc_b = atdf.register("ADC0", None, "CTRLB");
+        let adc_c = atdf.register("ADC0", None, "CTRLC");
+        let adc_d = atdf.register("ADC0", None, "CTRLD");
+        let sampctrl = atdf.register("ADC0", None, "SAMPCTRL");
+        let muxpos = atdf.register("ADC0", None, "MUXPOS");
+        let command = atdf.register("ADC0", None, "COMMAND");
+        let adc_flags = atdf.register("ADC0", None, "INTFLAGS");
+        let calib = atdf.register("ADC0", None, "CALIB");
 
         for (ours, theirs, label) in [
             (
@@ -459,6 +539,148 @@ mod tests {
                 "RTC.PITSTATUS.CTRLBUSY",
             ),
             (regs::RTC_PI, pitintflags.mask("PI"), "RTC.PITINTFLAGS.PI"),
+            (regs::RTC_PI, pitintctrl.mask("PI"), "RTC.PITINTCTRL.PI"),
+            (regs::TCA_OVF, tca_intctrl.mask("OVF"), "TCA0.INTCTRL.OVF"),
+            (regs::TCA_OVF, tca_intflags.mask("OVF"), "TCA0.INTFLAGS.OVF"),
+            (regs::RSTCTRL_WDRF, rstfr.mask("WDRF"), "RSTCTRL.RSTFR.WDRF"),
+            (regs::SLPCTRL_SEN, slpctrl.mask("SEN"), "SLPCTRL.CTRLA.SEN"),
+            (
+                regs::SLPCTRL_SMODE_IDLE,
+                slpctrl.value("SMODE", "IDLE"),
+                "SLPCTRL.CTRLA.SMODE=IDLE",
+            ),
+            (
+                regs::SLPCTRL_SMODE_PDOWN,
+                slpctrl.value("SMODE", "PDOWN"),
+                "SLPCTRL.CTRLA.SMODE=PDOWN",
+            ),
+            (
+                regs::VREF_ADC0REFSEL_1V1,
+                vref_a.value("ADC0REFSEL", "1V1"),
+                "VREF.CTRLA.ADC0REFSEL=1V1",
+            ),
+            (
+                regs::VREF_ADC0REFEN,
+                vref_b.mask("ADC0REFEN"),
+                "VREF.CTRLB.ADC0REFEN",
+            ),
+            (
+                regs::WDT_PERIOD_32CLK,
+                wdt_ctrla.value("PERIOD", "32CLK"),
+                "WDT.CTRLA.PERIOD=32CLK",
+            ),
+            (
+                regs::WDT_WINDOW_32CLK,
+                wdt_ctrla.value("WINDOW", "32CLK"),
+                "WDT.CTRLA.WINDOW=32CLK",
+            ),
+            (
+                regs::WDT_SYNCBUSY,
+                wdt_status.mask("SYNCBUSY"),
+                "WDT.STATUS.SYNCBUSY",
+            ),
+            (
+                regs::CRCSCAN_ENABLE,
+                crc_a.mask("ENABLE"),
+                "CRCSCAN.CTRLA.ENABLE",
+            ),
+            (
+                regs::CRCSCAN_SRC_FLASH,
+                crc_b.value("SRC", "FLASH"),
+                "CRCSCAN.CTRLB.SRC=FLASH",
+            ),
+            (
+                regs::CRCSCAN_MODE_PRIORITY,
+                crc_b.value("MODE", "PRIORITY"),
+                "CRCSCAN.CTRLB.MODE=PRIORITY",
+            ),
+            (
+                regs::CRCSCAN_BUSY,
+                crc_status.mask("BUSY"),
+                "CRCSCAN.STATUS.BUSY",
+            ),
+            (regs::CRCSCAN_OK, crc_status.mask("OK"), "CRCSCAN.STATUS.OK"),
+            (
+                regs::FUSE_FREQSEL,
+                osccfg.mask("FREQSEL"),
+                "FUSE.OSCCFG.FREQSEL",
+            ),
+            (
+                regs::FUSE_FREQSEL_20MHZ,
+                osccfg.value("FREQSEL", "20MHZ"),
+                "FUSE.OSCCFG.FREQSEL=20MHZ",
+            ),
+            (
+                regs::FUSE_OSCLOCK,
+                osccfg.mask("OSCLOCK"),
+                "FUSE.OSCCFG.OSCLOCK",
+            ),
+            (
+                regs::FUSE_RSTPINCFG,
+                syscfg0.mask("RSTPINCFG"),
+                "FUSE.SYSCFG0.RSTPINCFG",
+            ),
+            (
+                regs::FUSE_RSTPINCFG_UPDI,
+                syscfg0.value("RSTPINCFG", "UPDI"),
+                "FUSE.SYSCFG0.RSTPINCFG=UPDI",
+            ),
+            (regs::ADC_ENABLE, adc_a.mask("ENABLE"), "ADC0.CTRLA.ENABLE"),
+            (
+                regs::ADC_SAMPNUM_ACC4,
+                adc_b.value("SAMPNUM", "ACC4"),
+                "ADC0.CTRLB.SAMPNUM=ACC4",
+            ),
+            (
+                regs::ADC_SAMPCAP,
+                adc_c.mask("SAMPCAP"),
+                "ADC0.CTRLC.SAMPCAP",
+            ),
+            (
+                regs::ADC_REFSEL_INTREF,
+                adc_c.value("REFSEL", "INTREF"),
+                "ADC0.CTRLC.REFSEL=INTREF",
+            ),
+            (
+                regs::ADC_PRESC_DIV16,
+                adc_c.value("PRESC", "DIV16"),
+                "ADC0.CTRLC.PRESC=DIV16",
+            ),
+            (
+                regs::ADC_INITDLY_DLY32,
+                adc_d.value("INITDLY", "DLY32"),
+                "ADC0.CTRLD.INITDLY=DLY32",
+            ),
+            (
+                regs::ADC_SAMPLEN,
+                sampctrl.mask("SAMPLEN"),
+                "ADC0.SAMPCTRL.SAMPLEN",
+            ),
+            (
+                regs::ADC_MUXPOS_AIN1,
+                muxpos.value("MUXPOS", "AIN1"),
+                "ADC0.MUXPOS=AIN1",
+            ),
+            (
+                regs::ADC_MUXPOS_TEMPSENSE,
+                muxpos.value("MUXPOS", "TEMPSENSE"),
+                "ADC0.MUXPOS=TEMPSENSE",
+            ),
+            (
+                regs::ADC_STCONV,
+                command.mask("STCONV"),
+                "ADC0.COMMAND.STCONV",
+            ),
+            (
+                regs::ADC_RESRDY,
+                adc_flags.mask("RESRDY"),
+                "ADC0.INTFLAGS.RESRDY",
+            ),
+            (
+                regs::ADC_DUTYCYC_DUTY25,
+                calib.value("DUTYCYC", "DUTY25"),
+                "ADC0.CALIB.DUTYCYC=DUTY25",
+            ),
         ] {
             assert!(
                 u32::from(ours) == theirs,
@@ -470,6 +692,22 @@ mod tests {
     #[test]
     fn vector_count_matches_the_atdf() {
         assert_eq!(regs::VECTORS as u32, Atdf::load().vectors());
+    }
+
+    #[test]
+    fn handled_vectors_match_the_atdf() {
+        let atdf = Atdf::load();
+        for (ours, instance, name) in [
+            (regs::VECTOR_PORTA_PORT, "PORTA", "PORT"),
+            (regs::VECTOR_RTC_PIT, "RTC", "PIT"),
+            (regs::VECTOR_TCA0_OVF, "TCA0", "OVF"),
+        ] {
+            assert_eq!(
+                ours as u32,
+                atdf.vector(instance, name),
+                "{instance}.{name}"
+            );
+        }
     }
 
     #[test]
