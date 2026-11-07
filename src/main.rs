@@ -28,7 +28,7 @@ extern "C" fn main() -> ! {
 
     loop {
         hw::wait_for_tick();
-        torch.tick(hw::switch_pressed());
+        torch.tick(hw::switch_pressed(), None);
         if let Some(output) = changes.update(torch.output()) {
             hw::set_output(output);
         }

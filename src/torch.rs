@@ -1,13 +1,9 @@
-//! One pass of the firmware's loop, minus the hardware: a switch sample in,
-//! what the boost converter and its PWM should be doing out.
+//! One pass of the firmware's loop, minus the hardware: a switch sample and
+//! an ADC result in, a level out.
 
 use crate::button::{Clicks, Event};
 use crate::ramp::{self, Output};
-use crate::ui::{Mode, Ui};
-
-/// The one level the torch runs at, a duty of about 10 of 255. Dim on purpose,
-/// until someone's measured what the MP3432 does with PWM.
-pub const DIM_LEVEL: u8 = 52;
+use crate::ui::{Aux, Ui};
 
 #[derive(Clone, Debug, Default)]
 pub struct Torch {
@@ -23,9 +19,15 @@ impl Torch {
         }
     }
 
-    /// One 64 Hz tick, `pressed` meaning the switch is down. Returns the
-    /// click or hold this sample finished, if any.
-    pub fn tick(&mut self, pressed: bool) -> Option<Event> {
+    /// One 64 Hz tick, `pressed` meaning the switch is down and `adc` the
+    /// ADC's result, if it has one ready. Returns the click or hold this
+    /// sample finished, if any.
+    ///
+    /// Nothing reads `adc` until `limits::Limits` lands. That's the seam: it
+    /// takes `self.ui.output_level()` and `adc` here, [`Torch::level`] returns
+    /// its answer, its `off` calls `self.ui.off()`, and [`Torch::resting`]
+    /// checks its level too.
+    pub fn tick(&mut self, pressed: bool, _adc: Option<u16>) -> Option<Event> {
         let event = self.clicks.tick(pressed);
         if let Some(event) = event {
             self.ui.handle(event);
@@ -33,11 +35,23 @@ impl Torch {
         event
     }
 
+    /// Whether there's nothing to do until the switch moves: the light's off
+    /// and no click is being counted.
+    pub fn resting(&self) -> bool {
+        self.clicks.idle() && self.level() == 0
+    }
+
+    /// The level the LEDs should be at right now, `0` meaning off.
+    pub fn level(&self) -> u8 {
+        self.ui.output_level()
+    }
+
     pub fn output(&self) -> Output {
-        match self.ui.mode() {
-            Mode::Off => Output::OFF,
-            Mode::On => ramp::output(DIM_LEVEL),
-        }
+        ramp::output(self.level())
+    }
+
+    pub fn aux(&self) -> Aux {
+        self.ui.aux()
     }
 }
 
@@ -67,46 +81,96 @@ impl<T: Copy + PartialEq> Changes<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TICKS_PER_SECOND;
     use crate::button::RELEASE_TICKS;
-    use crate::ramp::DSM_BITS;
+    use crate::ui::{CEIL, DEFAULT_LEVEL, FLOOR};
+
+    const UI_MD: &str = include_str!("../docs/ui.md");
 
     fn dim() -> Output {
-        ramp::output(DIM_LEVEL)
+        ramp::output(DEFAULT_LEVEL)
     }
 
     fn run(torch: &mut Torch, pressed: bool, ticks: u16) {
         for _ in 0..ticks {
-            torch.tick(pressed);
+            torch.tick(pressed, None);
+        }
+    }
+
+    fn clicks(torch: &mut Torch, n: u8) {
+        for _ in 0..n {
+            run(torch, true, 4);
+            run(torch, false, 4);
         }
     }
 
     fn click(torch: &mut Torch) {
-        run(torch, true, 4);
+        clicks(torch, 1);
         run(torch, false, RELEASE_TICKS + 1);
+    }
+
+    /// `2s` or `500ms` in ticks.
+    fn duration(text: &str) -> u16 {
+        let number = |digits: &str| digits.parse::<u16>().unwrap();
+        match text.strip_suffix("ms") {
+            Some(ms) => number(ms) * TICKS_PER_SECOND / 1000,
+            None => number(text.strip_suffix('s').unwrap()) * TICKS_PER_SECOND,
+        }
+    }
+
+    /// Plays a docs/ui.md script with the timings `cargo xtask simulate` uses,
+    /// so these rows hold there too, and returns the level it ends at.
+    fn play(script: &str) -> u8 {
+        let mut torch = Torch::new();
+        for word in script.split_whitespace() {
+            if let Some(time) = word.strip_prefix("wait:") {
+                run(&mut torch, false, duration(time));
+                continue;
+            }
+            let (word, time) = word.split_once(':').unwrap_or((word, "1s"));
+            let (count, kind) = word.split_at(word.len() - 1);
+            let count: u8 = count.parse().unwrap();
+            match kind {
+                "C" => clicks(&mut torch, count),
+                "H" => {
+                    clicks(&mut torch, count - 1);
+                    run(&mut torch, true, duration(time));
+                }
+                _ => panic!("can't read {word}"),
+            }
+            run(&mut torch, false, RELEASE_TICKS + 1);
+        }
+        torch.level()
+    }
+
+    #[test]
+    fn every_example_in_docs_ui_md_holds() {
+        let mut checked = 0;
+        for row in UI_MD.lines().filter(|line| line.starts_with('|')) {
+            let Some(example) = row.split('|').find(|cell| cell.contains('→')) else {
+                continue;
+            };
+            let (script, expect) = example.split_once('→').unwrap();
+            let level = play(script.trim().trim_matches('`'));
+            match expect.trim() {
+                "off" => assert_eq!(level, 0, "{row}"),
+                "on" => assert!(level > 0, "{row}"),
+                other => {
+                    let want = other.strip_prefix("level ").unwrap();
+                    assert_eq!(level, want.parse::<u8>().unwrap(), "{row}");
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked >= 16, "only found {checked} examples");
     }
 
     #[test]
     fn starts_off() {
         let mut torch = Torch::new();
-        assert_eq!(torch.tick(false), None);
+        assert_eq!(torch.tick(false, None), None);
+        assert_eq!(torch.level(), 0);
         assert_eq!(torch.output(), Output::OFF);
-    }
-
-    #[test]
-    fn off_means_the_boost_converter_is_off_and_the_duty_is_zero() {
-        assert_eq!(
-            Output::OFF,
-            Output {
-                enable: false,
-                dsm: 0
-            }
-        );
-    }
-
-    #[test]
-    fn on_means_the_boost_converter_is_on_at_a_duty_of_ten() {
-        assert!(dim().enable);
-        assert_eq!(dim().dsm >> DSM_BITS, 10);
     }
 
     #[test]
@@ -115,7 +179,7 @@ mod tests {
         run(&mut torch, true, 4);
         run(&mut torch, false, RELEASE_TICKS);
         assert_eq!(torch.output(), Output::OFF);
-        assert_eq!(torch.tick(false), Some(Event::Click(1)));
+        assert_eq!(torch.tick(false, None), Some(Event::Click(1)));
         assert_eq!(torch.output(), dim());
     }
 
@@ -127,16 +191,55 @@ mod tests {
         assert_eq!(torch.output(), Output::OFF);
     }
 
+    /// Lockout: 1H. A script can only see the light after the hold ends.
     #[test]
-    fn holding_does_nothing() {
+    fn lockout_lights_at_the_floor_only_while_held() {
         let mut torch = Torch::new();
-        run(&mut torch, true, 3 * 64);
+        clicks(&mut torch, 4);
         run(&mut torch, false, RELEASE_TICKS + 1);
-        assert_eq!(torch.output(), Output::OFF);
+        run(&mut torch, true, 2 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), FLOOR);
+        run(&mut torch, false, 1);
+        assert_eq!(torch.level(), 0);
+    }
+
+    #[test]
+    fn the_ramp_never_asks_for_more_than_the_ceiling() {
+        let mut torch = Torch::new();
         click(&mut torch);
-        run(&mut torch, true, 3 * 64);
+        run(&mut torch, true, 10 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), CEIL);
+        assert_eq!(torch.output(), ramp::output(ramp::CEILING));
+    }
+
+    #[test]
+    fn rests_only_with_the_light_off_and_no_click_counting() {
+        let mut torch = Torch::new();
+        assert!(torch.resting());
+        run(&mut torch, true, 4);
+        assert!(!torch.resting(), "pressed");
+        run(&mut torch, false, RELEASE_TICKS);
+        assert!(!torch.resting(), "a click waiting to count");
+        run(&mut torch, false, 1);
+        assert!(!torch.resting(), "on");
+        click(&mut torch);
+        assert!(torch.resting());
+    }
+
+    #[test]
+    fn a_locked_torch_rests() {
+        let mut torch = Torch::new();
+        clicks(&mut torch, 4);
         run(&mut torch, false, RELEASE_TICKS + 1);
-        assert_eq!(torch.output(), dim());
+        assert!(torch.resting());
+    }
+
+    #[test]
+    fn the_aux_leds_follow_the_ui() {
+        let mut torch = Torch::new();
+        assert_eq!(torch.aux(), Aux::Blue);
+        click(&mut torch);
+        assert_eq!(torch.aux(), Aux::Off);
     }
 
     #[test]

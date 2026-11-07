@@ -2,32 +2,73 @@
 
 What every click and hold does. This is the spec. `src/ui.rs` implements it and its tests check it, so change this file in the same commit as the code.
 
-The notation is Anduril's. **1C** is one click, **1H** press and hold, and so on. Clicks count once the switch has been left alone for about 280 ms.
+The notation is Anduril's. **1C** is one click, **2C** two quick clicks, **1H** press and hold, **2H** click then press and hold, and so on. A press becomes a hold after about 375 ms, and clicks count once the switch has been left alone for about 280 ms.
 
-For the first flash the UI is as small as it gets, so that when something doesn't work it's the hardware or the toolchain, not the UI.
+Every row has an example: a script in that notation, starting from a torch that's just had its battery put in, and how the light should be after it (`off`, `on` or `level N`). A hold lasts a second unless it says otherwise (`1H:3s`), and `wait:1s` leaves the switch alone. `cargo test` runs the examples against the library, so a wrong one fails. Only Planned rows can leave it as `-`. The background table at the end is the exception, since it isn't clicks.
 
 ## Off
 
-| Action | Does | Status |
-|---|---|---|
-| 1C | On, at the one dim level | Done |
-| Anything else | Nothing | Done |
+| Action | Does | Example | Status |
+|---|---|---|---|
+| 1C | On, at level 52 on a fresh torch | `1C` → level 52 | Done |
+| 1C, after using it | On, at the last level used | `1C 1H 1C 1C` → level 92 | Done |
+| 1H | On at the lowest level. Keep holding and nothing more happens | `1H:3s` → level 13 | Done |
+| 1H, then 1H again | Let go and hold again to ramp up | `1H 1H` → level 53 | Done |
+| 2C | On at turbo | `2C` → level 120 | Done |
+| 4C | Lockout | `4C 1C` → off | Done |
+| Anything else | Nothing | `3C 5C 2H:2s wait:1s` → off | Done |
 
 ## On
 
-| Action | Does | Status |
-|---|---|---|
-| 1C | Off | Done |
-| Anything else | Nothing | Done |
+| Action | Does | Example | Status |
+|---|---|---|---|
+| 1C | Off, remembering the level | `1C 1C` → off | Done |
+| 1C at turbo | Off, and turbo's the level it remembers | `2C 1C 1C` → level 120 | Done |
+| 1H | Ramp up, stopping at turbo | `1C 1H:3s` → level 120 | Done |
+| 2H | Ramp down, stopping at the lowest level | `1C 2H:3s` → level 13 | Done |
+| 2C | Turbo | `1C 2C` → level 120 | Done |
+| 2C at turbo | Back to the level before turbo | `1C 1H 2C 2C` → level 92 | Done |
+| 2C at a remembered turbo | Back to the last level before turbo | `2C 1C 2C 2C` → level 52 | Done |
+| Anything else | Nothing | `1C 3C 4C 5C 3H wait:1s` → level 52 | Done |
 
-"On" means the boost converter enabled (PB2 high) with a PWM duty of 10 of 255 on PB0. What that comes out as in lumens nobody knows yet, since the MP3432's response to PWM on this board hasn't been measured. Off means PB2 low and the duty at 0. The aux LEDs stay off.
+The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.7 seconds.
+
+Turbo is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13: Anduril's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
+
+The remembered level lives in RAM and never in EEPROM. The torch sleeps rather than losing power, and SRAM is kept through sleep (DS §11.2), so nothing needs writing. It costs this: a cell swap or any reset loses the level, and it comes back on at 52. USB charging should keep it, since the cell stays in, but that's likely and not confirmed.
+
+## Lockout
+
+For pockets and bags.
+
+| Action | Does | Example | Status |
+|---|---|---|---|
+| 1H | The lowest level, for as long as you hold it | `4C 1H:2s` → off | Done |
+| 4C | Unlock, back to off | `4C 4C 1C` → level 52 | Done |
+| Anything else | Nothing | `4C 1C 2C 3C 2H:2s wait:1s` → off | Done |
+
+An example can only see the light once the script's over, so the 1H row shows it going out again. `lockout_lights_at_the_floor_only_while_held` in `src/torch.rs` checks it mid-hold.
 
 ## Always on, in the background
 
 | What | Does | Status |
 |---|---|---|
+| Aux LEDs | Dim and steady: blue when off, red in lockout, out while the main LED's lit. They never flash. The library decides this, and nothing drives the pins yet | Planned |
 | Sleep when off | Powers down and wakes on the switch | Planned |
 | Low-voltage protection | Steps down, then off, on a low cell | Planned |
 | Thermal regulation | Steps down when hot | Planned |
 
+The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware.
+
 Until those are in, this isn't firmware to carry. See the [roadmap](roadmap.md).
+
+## Differences from Anduril
+
+On purpose:
+
+- There's one UI and it's this page. No Simple and Advanced split.
+- 2C from off goes to turbo.
+- 1H from off doesn't carry on into a ramp. One hold, one action.
+- No status flashes. This is a torch, so there's no 3C voltage blink and no version blink, and 3C does nothing.
+
+Not here: strobes and blinkies, candle mode, stepped ramping, aux patterns, configurable floor and ceiling, a factory-reset gesture.
