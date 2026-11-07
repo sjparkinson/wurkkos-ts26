@@ -17,20 +17,24 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 
 ## 2. It's safe to leave a cell in
 
-- [ ] Sleep when off, in power-down, woken by the switch on PA5. Borrow the TS21's plan, and make sure PB2 is low before sleeping so the boost converter's off. PA5's BOTHEDGES sense already arms the PORTA interrupt and the PIT flag sets on its own, so the first `sei` needs real handlers that clear both flags, or the bare `reti` in `src/rt.rs` re-fires forever
-- [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. Work out the divider and reference, and check against a multimeter
-- [ ] Low-voltage protection. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge
-- [ ] Thermal regulation from the internal temperature sensor
-- [ ] A watchdog, so a hang can't leave the boost converter running
+A tick here means the firmware does it and it runs on the simulator. Nothing below has met a real light, so none of it means the torch is safe yet. [bench-plan.md](bench-plan.md) is what would.
+
+- [x] Sleep when off, in power-down, with PB2 low first. Firmware only. The PIT wakes it every tick and the loop samples PA5. On the tick after a watchdog feed it idles instead, because the datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped
+- [ ] Test power-down straight after a feed on a real light (T4 in [bench-plan.md](bench-plan.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA, so this isn't fit for a drawer until then
+- [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. The firmware reads it with Anduril's slope of 1094. Still needs checking against a multimeter
+- [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge
+- [x] Thermal regulation from the internal temperature sensor. Firmware only, and every constant's unmeasured. `ramp::CEILING` holds the light at level 120 until it's been run on a real light
+- [x] A watchdog, so a hang can't leave the boost converter running. Firmware only: a plain window, with no proof at power-on, so nobody's seen it bite. The simulator can't show that either, since it doesn't model resets
+- [x] Check flash against its CRC, and read the fuses back, at power-on. Firmware only. A failure, or a watchdog reset, caps the light at level 50. Neither check has seen a real chip
 
 ## 3. It's nice to use
 
-- [ ] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way Anduril does it on this board
-- [ ] The RGB aux LEDs on PC1 to PC3
-- [ ] Battery check
-- [ ] Remember the level in EEPROM
+- [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way Anduril does it on this board. Firmware only, on my own curve
+- [x] The RGB aux LEDs on PC1 to PC3. Firmware only
+- [x] Remember the level in RAM, which a cell swap or any reset loses. Firmware only
+- [x] A simulator: `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
+- ~~Battery check~~ Struck: no magic flashes, so no 3C voltage blink (docs/ui.md)
 
 ## Maybe
 
-- A UI simulator, like the TS21's `cargo xtask simulate`
 - Share a crate with the TS21 for the bits that are the same (button decoder, UPDI programmer, toolchain glue), once both have settled. Zero dependencies still applies, so that would be a path dependency in a shared repo, not crates.io
