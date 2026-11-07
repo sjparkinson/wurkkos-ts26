@@ -3,19 +3,20 @@
 Rust firmware for the Wurkkos TS26 torch (Anduril model 0721), with a much smaller UI than [Anduril](https://github.com/ToyKeeper/anduril). It's a sibling of [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21) and borrows its toolchain, its approach and a fair bit of its code.
 
 > [!WARNING]
-> This is a framework, not firmware you'd carry. It turns the light on and off at one dim level and does nothing else: no sleep when off (it'll flatten a cell in days), no low-voltage protection and no thermal regulation. The TS26 has a boost driver, so the risks differ from the TS21's FET, but they're no smaller. See the [roadmap](docs/roadmap.md).
+> This isn't firmware to carry yet. It has never run on a real TS26. Its sleep, low-voltage protection, thermal regulation and watchdog have only run on a simulator, which finds mistakes and proves nothing, and every threshold behind them is unmeasured on this light. The cell's unprotected and turbo pulls about 11 A, so level 120 of 150 is the most it'll do until that changes. See the [roadmap](docs/roadmap.md) and the [bench plan](docs/bench-plan.md).
 
 ## Using it
 
-1C turns it on, 1C turns it off. That's the whole UI for now. [docs/ui.md](docs/ui.md) is the spec.
+From off, 1C turns it on at the last level, 1H gives the lowest level, 2C gives turbo, and 4C locks it. While it's on, 1H ramps up, 2H ramps down, 2C goes to turbo and back, and 1C turns it off. The aux LEDs glow dim blue when off and dim red in lockout. It never flashes to tell you anything. [docs/ui.md](docs/ui.md) is the spec.
 
 ## Building
 
 You need [rustup](https://rustup.rs). The pinned nightly, `rust-src` and everything else come down on the first build.
 
 ```sh
-cargo xtask hex     # build the firmware, write target/wurkkos-ts26-0721.hex and print flash and RAM use
+cargo xtask hex     # build the firmware, run it on the simulator, write target/wurkkos-ts26-0721.hex and print flash and RAM use
 cargo test --workspace
+cargo xtask simulate 1C 2H:1.5s wait:1s 3C   # try the UI on a script, or leave the script off to try it live
 ```
 
 See [docs/toolchain.md](docs/toolchain.md) for how it builds and links.
