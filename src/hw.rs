@@ -315,7 +315,9 @@ fn adc_channel(muxpos: u8) {
 }
 
 /// Starts a conversion, four accumulated, which takes 260 µs or so and carries
-/// on through idle.
+/// on through idle. Going to rest turns the ADC off even if one's running, and
+/// the datasheet doesn't say what becomes of it, which is why the first
+/// reading after a rest gets thrown away.
 ///
 /// It never clears RESRDY. That works because [`adc_result`] runs every tick
 /// and reading the result clears it, so a stale one is never read twice.
@@ -486,8 +488,10 @@ pub extern "avr-interrupt" fn tca0_ovf() {
 /// PB0 only belongs to TCA0 while the light's on. The datasheet doesn't say
 /// what level a waveform output holds in power-down, with TCA0 stopped, so
 /// going off hands the pin back to PORT, whose OUT is 0. CMP0 gets a direct
-/// write too, so power-down can follow on this very pass, and the next turn-on
-/// starts dark whatever TCA0 was doing when it stopped.
+/// write too, so power-down can follow on this very pass. The datasheet
+/// doesn't say whether that clears the waveform output before BOTTOM, so PB0
+/// could go high for up to one cycle at the next turn-on, 51 µs, inside the
+/// 180 µs above. That's my reasoning, and not checked on a real light.
 pub fn set_output(output: Output) {
     if !output.enable {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
