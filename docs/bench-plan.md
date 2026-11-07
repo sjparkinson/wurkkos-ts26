@@ -63,7 +63,7 @@ What the breakout can't tell you: anything about the driver. There's no MP3432, 
 
 Read this before plugging the Friend into anything. It's a serial UPDI adapter (CH340E, 1 kΩ from TX to RX, and it powers the target at 3.3 V or USB's 5 V), and it **never goes on the torch**, not for flashing and not for recovery.
 
-Its [schematic](https://github.com/adafruit/Adafruit-High-Voltage-UPDI-Friend-PCB) has RTS# going through a 10 nF capacitor to the control pin of an analog switch, which a 10 kΩ resistor holds high. High connects the UPDI line to the serial port. Low connects it to the 12 V rail, which is always up. So a falling edge on RTS# puts 12 V on UPDI for roughly 100 µs (my reading of the RC, not a spec), and no switch or jumper stops it. From the feedback resistors the rail should be about 12.4 V, if the MT3608's reference is the usual 0.6 V.
+Its [schematic](https://github.com/adafruit/Adafruit-High-Voltage-UPDI-Friend-PCB) has RTS# going through a 10 nF capacitor to the control pin of an analogue switch, which a 10 kΩ resistor holds high. High connects the UPDI line to the serial port. Low connects it to the 12 V rail, which is always up. So a falling edge on RTS# puts 12 V on UPDI for roughly 100 µs (my reading of the RC, not a spec), and no switch or jumper stops it. From the feedback resistors the rail should be about 12.4 V, if the MT3608's reference is the usual 0.6 V.
 
 Opening a serial port normally asserts RTS, which is that falling edge, and `xtask/src/serial.rs` can't prevent it, because the kernel does it during `open`, before `stty` runs. So assume **every `cargo xtask` command fires one pulse as it starts.** Likely, not confirmed: the CH340 driver on macOS might behave differently, and the meter's too slow to see it.
 

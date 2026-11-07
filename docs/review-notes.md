@@ -16,7 +16,6 @@ Things to decide or check once the port from the TS21 is finished. Each has what
 
 - **"Capped until the cell comes out" has gaps.** With no marker, the cap only lasts for the boot that sees the watchdog flag. A later reset clears it, and a jump to the reset vector doesn't count as a hang. I think that's a fair trade for simpler code.
 - **`selftest::hung` doesn't exempt a UPDI reset.** A watchdog bite just before a flash could cap fresh firmware at level 50 until the cell comes out. It's rare and easily cleared, so I'd leave it.
-
 - **The first boot might cap itself for no real reason.** Flashing over Anduril without a real power-on reset can leave the watchdog flag set. A cell bounce with the BOD off might do the same, and nobody's read this light's `BODCFG`. The cell-out step in docs/flashing.md covers the first case, as long as VCC really collapses.
 - **Three checks can cap a good torch at level 50.** `Fuses::ok` has never seen a real TS26's fuse bytes, the CRC has never been checked by real hardware, and neither has the watchdog's window. If a fresh flash won't go above level 50, suspect these before the torch. `cargo xtask backup` gives you the real fuses before the first flash.
 
@@ -37,14 +36,14 @@ Things to decide or check once the port from the TS21 is finished. Each has what
 
 - **`ping` and `peek` should reset the chip as they finish.** They end by writing UPDIDIS, and the datasheet says that issues a system reset (§33.3.2.2.2), so "changes nothing" was wrong. A reset loses the remembered level and clears a hang's cap, so run `peek` first on a dark light, because only the first run counts. That's from an agent's reading of the PDF, which I haven't checked myself, and nobody's seen it on a real chip.
 - **T4 in docs/bench-plan.md goes on the torch.** It's the test build for power-down straight after a feed, it changes `src/main.rs`, and it's the only test build allowed on the light. Say if you'd rather keep it on the breakout.
-
 - **`peek` isn't denied in `.claude/settings.json`.** It only reads, but it drives real hardware, so you'll probably want it next to `ping`, `backup`, `flash` and `restore`. I can't edit that file, and agents shouldn't.
 - **The simulator doesn't model chip resets.** So a watchdog bite is an error there, and the `Faults.hang` path and the panic handler never run on it. It doesn't model anything analogue either, or a real tick landing between `sei` and `sleep`.
-- **`flash`'s model check only reads the file name.** It catches a `-0614` hex, a rename defeats it, and it refuses `backup/flash.hex`, pointing you at `restore`. Stamping the model into the image would be the real fix.
+- **`flash`'s model check only reads the file name.** It catches a `-0614` hex, a rename defeats it, and it refuses `backup/flash.hex`, pointing you at `restore`. Stamping the model into the image would be the real fix. It does now refuse a full 16 KB image whose CRC doesn't check, and warns about a shorter one, since Anduril's hex is short and needs no CRC.
 - **`backup` stays a fixed `backup/`.** The TS21 moved to a `<dir>` argument, which wasn't ported, so a second torch needs its `backup/` moved first.
 - **`sim.rs` keeps its own register table,** a partial copy of `src/regs.rs`, ATDF-checked, so the model doesn't move with the firmware. That bends the "every address lives in regs.rs" rule.
 - **The fake chip's SIB is a TS21 reading.** No TS26 has been read yet.
-- **The `.rs` files came in with `cp` and `sed`,** which `.claude/CLAUDE.md` says not to do, so the lint hook skipped them. Clippy and fmt both pass on the result.
+- **The `.rs` files came in with `cp` and `sed`,** which `.claude/CLAUDE.md` says not to do, so the lint hook skipped them. The hook only runs `rustfmt --check` and the two clippy commands, and both pass on every file, so nothing it would have caught got through.
+- **TCA0 runs for good, even with the light off.** Stopping it would save its clock in the idle ticks, but the simulator treats a running TCA0 as an invariant, and a timer that stops and restarts mid-cycle is new turn-on behaviour nobody's checked. The saving is small next to the idle cost above, so I left it. Worth revisiting if the idle-after-feed goes.
 
 ## Housekeeping
 
