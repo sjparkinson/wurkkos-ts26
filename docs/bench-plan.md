@@ -8,7 +8,9 @@ Each check says what it needs:
 
 - **Tag**: the `first-light` tag.
 - **Main**: the full firmware on main.
-- **T1**, **T2**, **T3**: a [test build](#test-builds).
+- **T1**, **T2**, **T3**, **T4**: a [test build](#test-builds).
+
+The firmware passing the simulator doesn't change any of this. It's a mistake-finder written from the same reading of the datasheet as the firmware, and it doesn't model a chip reset or anything analogue, so none of its passes count as a result here.
 
 Checks this kit can't do at all are at [the end](#what-this-kit-cant-do), with what would unlock them.
 
@@ -109,9 +111,10 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port>` with `backup-breakout/` put back as `backup/`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
 | 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the PB2 LED never staying lit | 4.3 |
 | 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so go through the suspects in 6.1 here, where it costs nothing | 6.1 |
-| 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means a `wdr` got lost in power-down and the bite counted as a hang | 6.2 |
+| 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
 | 0.13 | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |
 | 0.14 | Develop T2 here | T2 | Blinks a number you can read | 7.2 |
+| 0.15 | T4: power-down straight after a feed. Pick a level away from 52, click off, leave it an hour, then 1C, then 2C and DC volts on SCL | T4 | Comes back at the level you left, and 51% at the top. Back at 52 means the chip reset, and 3.6% means a bite | 6.4 |
 
 Stop at anything unexplained. What goes wrong here would've gone wrong on the torch, except here `flash` puts it right.
 
@@ -170,12 +173,12 @@ Write the result in the [table](#results) before going on.
 
 | # | Do | Expect | Closes |
 |---|---|---|---|
-| 4.1 | Back on main, `cargo xtask flash <port>`, then `ping`, then probe off | Verify passes, and it still talks | |
-| 4.2 | If the light's dark from here on | Go back to the [steps in flashing.md](flashing.md#flash-this-firmware): `ping`, then `first-light` again. If `first-light` still works, it's the firmware, and the board's fine | |
+| 4.1 | Back on main, `cargo xtask flash <port>`, then `ping`, then probe off and leave it a few seconds with no cell, so VCC really collapses | Verify passes, and it still talks. A flash doesn't power-cycle the chip, and what Anduril left in the reset flags could otherwise count as a hang | |
+| 4.2 | If the light's dark from here on | `cargo xtask peek <port>` shows how far the firmware got, then go back to the [steps in flashing.md](flashing.md#flash-this-firmware): `ping`, then `first-light` again. If `first-light` still works, it's the firmware, and the board's fine | |
 | 4.3 | Cell in, head on, ten times, watching the emitters | No flash, and it's off until clicked. A reset loop would be dark too, so go on to 4.4 | |
 | 4.4 | 1C on, 1C off, a few dozen times, then holds | Same feel as the docs/ui.md rows. The 64 Hz tick has the delta-sigma interrupt running under it now, so sluggish clicks mean the interrupt's eating the loop | |
 | 4.5 | Tail current, off, on the 4 A range | Reads 0.000 to 0.003 once it's asleep. Anything steadily over about 5 mA isn't a sleeping chip, or it's a reset loop | The rough version of the off current |
-| 4.6 | Aux, through what docs/ui.md says it does | Each colour where the row says. hardware.md has PC1 blue, PC2 green, PC3 red from Anduril | "Likely" on the aux pins |
+| 4.6 | Aux, off, in lockout (4C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from Anduril, so the wrong colour means that's wrong here | "Likely" on the aux pins |
 | 4.7 | An hour on at a low level, in sight | Stays on and doesn't move. It going out on its own is the watchdog biting | "It never trips in normal use", in part |
 | 4.8 | Leave it off overnight, then 1C | Comes on at once. 6.2 is the real test | |
 
@@ -185,8 +188,8 @@ Short bursts above level 75, and the meter comes out at 3 A.
 
 | # | Do | Expect | Closes |
 |---|---|---|---|
-| 5.1 | Bottom of the ramp, in the dark | It lights, steadily. If it doesn't, `ramp::DSM_FLOOR`'s 20 doesn't suit this light | That ToyKeeper's floor holds on this one |
-| 5.2 | The bottom few levels, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2 | "Is the low-end flicker the driver, the delta-sigma, or both" |
+| 5.1 | 1H from off, for the lowest level, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
+| 5.2 | The bottom few levels from 13 up, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2. Level 13 was picked to clear that flicker, from a figure on Anduril's curve that nobody's checked on this one | "Is the low-end flicker the driver, the delta-sigma, or both" |
 | 5.3 | Ramp slowly end to end | Smooth, no steps that jump, no blip, each direction. The curve's my own cubic, so an ugly spot is a finding, not a surprise | |
 | 5.4 | T1 at levels 25, 50, 75, 100: tail current, and stop at 3 A. Those are duties of about 0.5%, 3.6%, 12% and 29% | Plot current against duty. That's the first picture of what turns PB0 into current, filtered reference or otherwise | "Measure what PWM duty does to output" |
 | 5.5 | Ear to the head at low and middle levels | Any whine, compared with 1.2 | |
@@ -199,19 +202,20 @@ There's no proof at power-on here, on purpose, so this is where anyone first see
 
 | # | Do | Needs | Expect | Closes |
 |---|---|---|---|---|
-| 6.1 | Top of the ramp, right after a flash | Main | Clearly brighter than level 50. If not, it's capped. Suspect, in order, a bite (a cell swap clears it), then `xtask/src/crc.rs`, then the fuses | The CRC convention, the fuse check |
-| 6.2 | Leave it off for an hour, then the top of the ramp | Main | Not capped. Capped means a `wdr` got lost in power-down, since the loop feeds and sleeps at once, mid-sync, and the datasheet doesn't promise that finishes | "`wdr` survives power-down" |
+| 6.1 | Top of the ramp, right after a flash | Main | Clearly brighter than level 50. If not, it's capped. Suspect, in order, a bite (a cell swap clears it), then `xtask/src/crc.rs`, then the fuses ([flashing.md](flashing.md#if-its-capped-at-level-50)) | The CRC convention, the fuse check |
+| 6.2 | Leave it off for an hour, then the top of the ramp | Main | Not capped. `main` idles the tick after each feed, so a `wdr` gets to sync with the clock running. Capped means the watchdog bit it anyway while it rested | That a resting torch doesn't bite |
 | 6.3 | Note the cap goes when the cell comes out and back | Main | It does. The hang flag lasts until the next reset. A brown-out reset would clear it, if 1.10 says the BOD's on | |
+| 6.4 | After 6.2 and 0.15 pass, T4 on the torch: power-down straight after a feed. Pick a level away from 52, click off, then leave it overnight, watching the aux in the dark for a while first. Then 1C, then the top of the ramp. Tail current off too, on the 4 A range | T4 | Back at the level you left, not capped, steady aux, and 0.000 to 0.003 A. Back at 52 means the chip reset. Capped means a bite. A flickering aux or steady mA means it's resetting over and over, so a `wdr` doesn't survive an immediate power-down: flash main again and keep the idle. If all of it passes, the idle can go, which saves about 0.37 mA: drop `&& !fed` from `src/main.rs` and `REST_IDLE_TICKS` from `xtask/src/sim.rs` | "Test power-down straight after a feed" |
 
-A real bite only gets seen on the breakout (0.13). On the torch, the check is that 4.7 and 6.2 never see one, which is as far as this kit can say the window suits a real chip.
+A real bite only gets seen on purpose on the breakout (0.13). On the torch, the check is that 4.7 and 6.2 never see one, which is as far as this kit can say the window suits a real chip.
 
 ## Stage 7: voltage and heat
 
 | # | Do | Needs | Expect | Closes |
 |---|---|---|---|---|
-| 7.1 | Run a cell down, with the meter across it between bursts. Then a low level until it steps down, checking the cell | Main | It steps down, then turns off, near the thresholds in `src/battery.rs`. Rest voltage will read higher. Anduril's own figure is 2.90 V | "Low-voltage protection" |
+| 7.1 | Run a cell down, with the meter across it between bursts, then a middling level, checking the cell | Main | By `src/battery.rs`, under 3.00 V for five seconds it steps down, and under 2.90 V for a second it fades down the ceiling (120, 90, 60, 30, 1) and turns off in about 7 s. It steps back up at 3.30 V. All loaded voltages, so rest voltage will read higher, and all unmeasured | The roadmap's low-voltage item, on a real light |
 | 7.2 | Compare a blinked-out voltage with the Fluke at three or four charge levels, off and on | T2 | Within 0.1 V. This is what tests the 1094 calibration, and the 4.03 ratio behind it, on this light | "Check against a multimeter", the open question on 1094 |
-| 7.3 | Near the cut-off, off for a minute, then on | Main | It starts. The MP3432 needs 2.7 V on VIN to start and 0.8 V to keep going, so a nearly flat cell might run and then not restart. A sag at turn-on is the thing to watch for | The 2.7 V start-up against the cut-off |
+| 7.3 | Near the cut-off, off for a minute, then on | Main | It starts. The MP3432 needs 2.7 V on VIN to start and 0.8 V to keep going, and the 2.90 V cut-off only leaves 0.2 V over that, so a nearly flat cell might run and then not restart. A sag at turn-on is the thing to watch for | The 2.7 V start-up against the cut-off |
 | 7.4 | Blink out the temperature at a stable room, three or four readings | T2 | Near the room, ±3 °C by the datasheet. There's no reference to hold it to, so this only finds gross errors | Part of the thermal item |
 | 7.5 | Blink out several temperature readings, light off, then at a low, a middle and a high level | T2 | How far they scatter, one against the next | The sensor's noise with the light on |
 | 7.6 | Top of the ramp until it steps down, with a thermometer on the head | A thermometer | It steps down before the head's painful, near 50 °C at the sensor, and doesn't go under level 50. 1Lumen's head peaked at 52 °C. Only after this does `ramp::CEILING` get raised, a step at a time | "Thermal regulation", the `ramp::CEILING` decision |
@@ -226,6 +230,8 @@ None exist yet, and they should stay on a throwaway branch: they aren't the firm
 **T2, a number out.** A build that blinks a value out on the main LED, tens on long blinks and units on short, at a low level. One build per value is fine. Blink codes stay out of the real firmware.
 
 **T3, a hang on demand.** A build that stops feeding the watchdog when the switch has been held for ten seconds, so a real bite can be seen once. **Breakout only.** It's the only deliberate reset anywhere in this plan, and it isn't going near the torch: the real firmware doesn't do this at start-up, by choice, because of what happened to the TS21.
+
+**T4, power-down after a feed.** `src/main.rs` with `hw::wait_for_tick(torch.resting())`, dropping the `&& !fed`, and `REST_IDLE_TICKS` raised to match, or the simulator refuses it. It's the one test build that goes on the torch, after 0.15 passes, and only to find out if the idle in the real firmware can go. It has the real firmware's protection and nothing else changed.
 
 ## What this kit can't do
 
