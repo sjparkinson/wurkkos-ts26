@@ -52,7 +52,7 @@ For pockets and bags.
 
 The light looks after the cell and itself whatever you've asked for. It never flashes to say so: it goes down gently, and the level you asked for comes back once it can.
 
-These scripts have three more words. `cell:2.95V` is the cell's voltage from there on, `heat:80C` the temperature, and `fault` starts a torch whose power-on checks failed. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
+These scripts have four more words. `cell:2.95V` is the cell's voltage from there on and `heat:80C` the temperature. `fault` starts a torch whose power-on checks failed (on the simulated chip, a fuse that isn't what the firmware expects), and `flash:corrupt` one whose flash doesn't match its checksum. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
 
 | When | Does | Example | Status |
 |---|---|---|---|
@@ -65,6 +65,7 @@ These scripts have three more words. `cell:2.95V` is the cell's voltage from the
 | Hot, at a level under 50 | Nothing | `heat:80C 1H:3s wait:120s` → level 13 | Done |
 | Hot, then cool | Back up to the level you asked for | `heat:80C 2C wait:120s heat:25C wait:120s` → level 120 | Done |
 | A failed check at power-on | Holds the light at level 50 until the cell comes out | `fault 2C` → level 50 | Done |
+| Flash that doesn't match its checksum | The same as any failed check | `flash:corrupt 2C` → level 50 | Done |
 | A failed check, at a lower level | Nothing | `fault 1H:3s` → level 13 | Done |
 
 A failed check is flash that doesn't match its checksum, a fuse that isn't what the firmware expects, or the watchdog having reset the chip. The light still works, since one that won't come on tells you nothing.

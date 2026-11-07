@@ -89,10 +89,9 @@ use std::iter;
 use std::ops::Range;
 use std::thread;
 
-use ts26::limits::FAULT_CEILING;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
-use ts26::testing::{self, Example, Expect, Rig, Row, Sample, Scene};
+use ts26::testing::{self, Example, Rig, Sample, Scene};
 use ts26::ui::Aux;
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words};
@@ -386,18 +385,7 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     startup_with_statics(&image, reset, &linked)
         .map_err(|e| format!("startup with statics: {e}"))?;
 
-    let mut examples = spec::examples(spec::UI_MD)?;
-    // docs/ui.md's `fault` is a bad fuse. This one's the firmware's CRC check
-    // failing, which otherwise never sees anything but a good image.
-    examples.push(Example {
-        line: 0,
-        row: Row {
-            section: "sim.rs",
-            action: "a flash that doesn't match its CRC",
-        },
-        script: "flash:corrupt 2C",
-        expect: Expect::Level(FAULT_CEILING),
-    });
+    let examples = spec::examples(spec::UI_MD)?;
     // Every example, then the random switching, each with and without
     // overflows landing mid-pass. Each is its own chip, so they run side by
     // side: the long ones take minutes of simulated time.
