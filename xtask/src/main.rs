@@ -7,6 +7,9 @@
 
 #[cfg(test)]
 mod atdf;
+#[cfg(test)]
+mod avr;
+mod crc;
 mod elf;
 mod ihex;
 mod layout;
@@ -50,7 +53,9 @@ fn main() -> ExitCode {
         ["hex"] => hex(),
         ["ping", port] => ping(port),
         ["backup", port] => backup(port),
-        ["flash", port] => build().and_then(|elf| flash(port, &elf.flash_image())),
+        ["flash", port] => build()
+            .and_then(|elf| crc::sign(&elf.flash_image()))
+            .and_then(|image| flash(port, &image)),
         ["flash", port, file] => read_hex(Path::new(file)).and_then(|image| flash(port, &image)),
         ["restore", port] => restore(port),
         _ => {
@@ -114,14 +119,17 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes the image `flash` would, then prints flash and RAM use.
+/// Writes the image `flash` would: the firmware padded to all of flash with
+/// 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints flash and
+/// RAM use.
 fn hex() -> Result<(), String> {
     let elf = build()?;
-    let image = elf.flash_image();
+    let firmware = elf.flash_image();
+    let image = crc::sign(&firmware)?;
     write(&root().join(HEX), &ihex::encode(&image))?;
     eprintln!("wrote {HEX}");
 
-    let flash = image.len() as u64;
+    let flash = firmware.len() as u64;
     let ram = elf.ram_bytes().into();
     let ram_size = (elf::RAM.end - elf::RAM.start).into();
     println!(
