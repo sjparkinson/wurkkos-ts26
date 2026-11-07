@@ -38,6 +38,8 @@ commands:
                           target/wurkkos-ts26-0721.hex and print flash, RAM,
                           stack, loop and handler use
   ping <port>             check the programmer can see the chip, change nothing
+  peek <port>             read the running chip's registers and SRAM, change
+                          nothing, to see how far the firmware got
   backup <port>           save the torch's flash, EEPROM and fuses into backup/
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
   restore <port>          put backup/flash.hex and backup/eeprom.hex back
@@ -60,11 +62,14 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["hex"] => hex(),
         ["ping", port] => ping(port),
+        ["peek", port] => peek(port),
         ["backup", port] => backup(port),
         ["flash", port] => build()
             .and_then(|(elf, _)| crc::sign(&elf.flash_image()))
             .and_then(|image| flash(port, &image)),
-        ["flash", port, file] => read_hex(Path::new(file)).and_then(|image| flash(port, &image)),
+        ["flash", port, file] => this_boards_hex(Path::new(file))
+            .and_then(|()| read_hex(Path::new(file)))
+            .and_then(|image| flash(port, &image)),
         ["restore", port] => restore(port),
         ["simulate"] => simulate::interactive(),
         ["simulate", script @ ..] => simulate::script(script),
@@ -230,6 +235,72 @@ fn ping(port: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads what the running firmware has left behind, without a reset or a
+/// write: UPDI reaches data space while the CPU runs. Only `hw::init` sets the
+/// clock, the pin directions and the PIT, so those say whether it ran.
+/// VPORTB.OUT says whether the boost converter's on.
+fn peek(port: &str) -> Result<(), String> {
+    let registers = [
+        ("RSTCTRL.RSTFR", sim::reg::RSTCTRL_RSTFR),
+        ("CLKCTRL.MCLKCTRLB", sim::reg::CLKCTRL_MCLKCTRLB),
+        ("WDT.CTRLA", sim::reg::WDT_CTRLA),
+        ("CPU.SPL", usize::from(avr::SPL)),
+        ("CPU.SPH", usize::from(avr::SPH)),
+        ("CPU.SREG", usize::from(avr::SREG)),
+        ("VPORTB.DIR", sim::reg::VPORTB_DIR),
+        ("VPORTB.OUT", sim::reg::VPORTB_OUT),
+        ("VPORTC.DIR", sim::reg::VPORTC_DIR),
+        ("TCA0.CTRLA", sim::reg::TCA0_CTRLA),
+        ("TCA0.CTRLB", sim::reg::TCA0_CTRLB),
+        ("RTC.PITCTRLA", sim::reg::RTC_PITCTRLA),
+    ];
+
+    let mut p = connect(port)?;
+    for (name, at) in registers {
+        println!("{name:18} {:02X}", p.read(at as u16, 1)?[0]);
+    }
+    let start = (elf::RAM.start - elf::DATA_SPACE) as u16;
+    let sram = p.read(start, (elf::RAM.end - elf::RAM.start) as usize)?;
+    p.disconnect()?;
+
+    println!("SRAM");
+    for line in runs(start, &sram) {
+        println!("  {line}");
+    }
+    Ok(())
+}
+
+/// `bytes` as one line per run of equal bytes, so a pattern and where it stops
+/// stand out from the 2 KB around it.
+fn runs(start: u16, bytes: &[u8]) -> Vec<String> {
+    bytes
+        .chunk_by(|a, b| a == b)
+        .scan(start, |at, run| {
+            let line = format!("{at:04X} {:02X} x{}", run[0], run.len());
+            *at += run.len() as u16;
+            Some(line)
+        })
+        .collect()
+}
+
+/// Refuses a file whose name doesn't say it's for this board. An image has no
+/// model in it, so the name's all there is. It catches picking up the TS21's
+/// hex by mistake, not a file that's been renamed.
+fn this_boards_hex(path: &Path) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if name.contains("ts26") || name.contains("0721") {
+        return Ok(());
+    }
+    Err(format!(
+        "{} doesn't say it's for the TS26 (model 0721), so it won't be flashed. Flash the \
+         file `cargo xtask hex` writes, or use `restore` for a backup",
+        path.display()
+    ))
+}
+
 fn backup(port: &str) -> Result<(), String> {
     let dir = root().join("backup");
     let flash_path = dir.join("flash.hex");
@@ -340,7 +411,36 @@ fn run(command: &mut Command) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{commas, row};
+    use std::path::Path;
+
+    use super::{commas, row, runs, this_boards_hex};
+
+    #[test]
+    fn runs_show_where_a_pattern_stops() {
+        assert_eq!(
+            runs(0x3800, &[0xAA, 0xAA, 0xAA, 0x55, 0x00, 0x00]),
+            ["3800 AA x3", "3803 55 x1", "3804 00 x2"]
+        );
+    }
+
+    #[test]
+    fn flash_takes_this_boards_hex_and_refuses_the_ts21s() {
+        for good in [
+            "target/wurkkos-ts26-0721.hex",
+            "anduril.wurkkos-ts26.hex",
+            "WURKKOS-TS26.HEX",
+        ] {
+            assert!(this_boards_hex(Path::new(good)).is_ok(), "{good}");
+        }
+        for bad in [
+            "target/wurkkos-ts21-0614.hex",
+            "backup/flash.hex",
+            "ts26/firmware.hex",
+        ] {
+            let err = this_boards_hex(Path::new(bad)).unwrap_err();
+            assert!(err.contains("model 0721"), "{bad}: {err}");
+        }
+    }
 
     #[test]
     fn rows_line_up_with_and_without_a_total() {

@@ -500,7 +500,14 @@ mod tests {
     #[test]
     fn reads_the_sib() {
         let mut p = Programmer::connect(Tiny::new()).unwrap();
-        assert_eq!(&p.sib().unwrap(), b"tinyAVR P:0D:1-3");
+        assert_eq!(&p.sib().unwrap(), b"tinyAVR P:0D:0-3");
+    }
+
+    #[test]
+    fn reads_data_space_while_the_firmware_runs() {
+        let mut p = Programmer::connect(Tiny::new()).unwrap();
+        assert_eq!(p.read(map::SIGNATURE, 3).unwrap(), map::ATTINY1616);
+        p.disconnect().unwrap();
     }
 
     #[test]
@@ -840,7 +847,9 @@ mod tests {
                     _ if op & 0xF0 == STCS => Expect::CsValue(op & 0x0F),
                     0xE0 => Expect::Key(Vec::new()),
                     0xE5 => {
-                        self.replies.extend(b"tinyAVR P:0D:1-3");
+                        // What a real TS21 reported. The TS26 has the same
+                        // part, but nobody's read one yet.
+                        self.replies.extend(b"tinyAVR P:0D:0-3");
                         Expect::Sync
                     }
                     0x04 => Expect::LdsAddress(Vec::new()),
