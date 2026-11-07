@@ -616,6 +616,9 @@ pub enum Problem<'a> {
     Shape(Row<'a>, &'a str),
     /// A script with a word it can't read.
     Script(Row<'a>, ScriptError<'a>),
+    /// A row with a different number of cells from its header, most likely
+    /// two rows run together, whose second example would go unread.
+    Cells { found: usize, header: usize },
 }
 
 impl fmt::Display for SpecError<'_> {
@@ -628,6 +631,9 @@ impl fmt::Display for SpecError<'_> {
                 "{row}: expected `script` → off, on or level N, not {example:?}"
             ),
             Problem::Script(row, error) => write!(f, "{row}: {error}"),
+            Problem::Cells { found, header } => {
+                write!(f, "this row has {found} cells and its header has {header}")
+            }
         }
     }
 }
@@ -674,6 +680,13 @@ impl<'a> Iterator for Examples<'a> {
             };
             if split(cells).all(|c| c.starts_with('-') || c.starts_with(':')) {
                 continue;
+            }
+            let (found, header_cells) = (split(cells).count(), split(header).count());
+            if found != header_cells {
+                return fail(Problem::Cells {
+                    found,
+                    header: header_cells,
+                });
             }
             let cell = |name| {
                 let column = split(header).position(|c| c == name)?;
@@ -1028,6 +1041,23 @@ mod tests {
         let error = problem(&spec).unwrap();
         assert_eq!(error.line, 6);
         assert_eq!(error.to_string(), "Off: 2C has no example");
+    }
+
+    #[test]
+    fn refuses_two_rows_run_together() {
+        let spec = SPEC.replace(
+            "| 2C | Nothing | `2C 1H:2s` → off |",
+            "| 2C | Nothing | `2C 1H:2s` → off | 3C | Nothing | `3C` → off |",
+        );
+        let error = problem(&spec).unwrap();
+        assert_eq!(error.line, 6);
+        assert_eq!(
+            error.problem,
+            Problem::Cells {
+                found: 7,
+                header: 4
+            }
+        );
     }
 
     #[test]
