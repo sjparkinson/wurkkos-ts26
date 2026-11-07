@@ -43,6 +43,7 @@ extern "C" fn main() -> ! {
 
     let mut torch = Torch::new(hw::temperature_calibration(), faults);
     let mut changes = Changes::new();
+    let mut aux_changes = Changes::new();
     let mut feeder = Feeder::new();
     let mut fed = false;
 
@@ -60,7 +61,9 @@ extern "C" fn main() -> ! {
         if let Some(output) = changes.update(torch.output()) {
             hw::set_output(output);
         }
-        hw::set_aux(torch.aux());
+        if let Some(aux) = aux_changes.update(torch.aux()) {
+            hw::set_aux(aux);
+        }
         // The only place the running torch feeds the watchdog.
         fed = feeder.tick();
         if fed {
