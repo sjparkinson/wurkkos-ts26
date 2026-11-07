@@ -7,6 +7,8 @@ use std::ops::Range;
 pub const DATA_SPACE: u32 = 0x80_0000;
 /// SRAM's data-space range on the ATtiny1616, as ELF addresses.
 pub const RAM: Range<u32> = 0x80_3800..0x80_4000;
+/// The same range as the CPU and UPDI see it, as data-space addresses.
+pub const SRAM: Range<u16> = (RAM.start - DATA_SPACE) as u16..(RAM.end - DATA_SPACE) as u16;
 
 const PT_LOAD: u32 = 1;
 const SHT_SYMTAB: u32 = 2;

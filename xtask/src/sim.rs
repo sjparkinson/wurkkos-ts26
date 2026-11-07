@@ -96,7 +96,7 @@ use ts26::ui::Aux;
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words};
 use crate::crc;
-use crate::elf::{DATA_SPACE, Elf, RAM};
+use crate::elf::{DATA_SPACE, Elf, SRAM};
 use crate::spec;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
@@ -249,8 +249,6 @@ const CONVERSION_INSTRUCTIONS: u64 = 165 * 16;
 /// it as wrong as it gets.
 const UNSETTLED: u16 = 0;
 
-/// SRAM as data-space addresses.
-const SRAM: Range<u16> = (RAM.start - DATA_SPACE) as u16..(RAM.end - DATA_SPACE) as u16;
 /// Where flash appears in data space, and how much of it there is.
 const MAPPED: u16 = map::FLASH;
 const FLASH_SIZE: usize = map::FLASH_SIZE;

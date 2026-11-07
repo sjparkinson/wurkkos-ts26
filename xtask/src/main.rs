@@ -264,12 +264,14 @@ fn peek(port: &str) -> Result<(), String> {
     for (name, at) in registers {
         println!("{name:18} {:02X}", p.read(at as u16, 1)?[0]);
     }
-    let start = (elf::RAM.start - elf::DATA_SPACE) as u16;
-    let sram = p.read(start, (elf::RAM.end - elf::RAM.start) as usize)?;
+    let sram = p.read(
+        elf::SRAM.start,
+        usize::from(elf::SRAM.end - elf::SRAM.start),
+    )?;
     p.disconnect()?;
 
     println!("SRAM");
-    for line in runs(start, &sram) {
+    for line in runs(elf::SRAM.start, &sram) {
         println!("  {line}");
     }
     Ok(())

@@ -664,9 +664,7 @@ fn unknown(w: u16) -> String {
 mod tests {
     use super::*;
     use crate::atdf::Atdf;
-    use crate::elf::{DATA_SPACE, RAM as ELF_RAM};
-
-    const RAM: Range<u16> = (ELF_RAM.start - DATA_SPACE) as u16..(ELF_RAM.end - DATA_SPACE) as u16;
+    use crate::elf::SRAM as RAM;
 
     #[test]
     fn stack_pointer_and_status_addresses_match_the_atdf() {
