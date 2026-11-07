@@ -2,38 +2,12 @@
 //! what the boost converter and its PWM should be doing out.
 
 use crate::button::{Clicks, Event};
+use crate::ramp::{self, Output};
 use crate::ui::{Mode, Ui};
 
-/// TCA0's period. Dual-slope PWM at 10 MHz with a TOP of 255 runs at
-/// 10 MHz / (2 × 255) ≈ 19.6 kHz, well above anything you'd hear or see.
-pub const PWM_TOP: u16 = 255;
-
-/// The one level the torch runs at, as a duty out of [`PWM_TOP`]. Dim on
-/// purpose, until someone's measured what the MP3432 does with PWM.
-pub const DIM_DUTY: u8 = 10;
-
-const _: () = assert!(DIM_DUTY > 0 && DIM_DUTY as u16 <= PWM_TOP);
-
-/// What the main LED's driver should be doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Output {
-    /// The boost converter's enable pin (PB2).
-    pub enable: bool,
-    /// The PWM duty on PB0, out of [`PWM_TOP`].
-    pub duty: u8,
-}
-
-impl Output {
-    pub const OFF: Self = Self {
-        enable: false,
-        duty: 0,
-    };
-
-    pub const DIM: Self = Self {
-        enable: true,
-        duty: DIM_DUTY,
-    };
-}
+/// The one level the torch runs at, a duty of about 10 of 255. Dim on purpose,
+/// until someone's measured what the MP3432 does with PWM.
+pub const DIM_LEVEL: u8 = 52;
 
 #[derive(Clone, Debug, Default)]
 pub struct Torch {
@@ -62,7 +36,7 @@ impl Torch {
     pub fn output(&self) -> Output {
         match self.ui.mode() {
             Mode::Off => Output::OFF,
-            Mode::On => Output::DIM,
+            Mode::On => ramp::output(DIM_LEVEL),
         }
     }
 }
@@ -94,6 +68,11 @@ impl<T: Copy + PartialEq> Changes<T> {
 mod tests {
     use super::*;
     use crate::button::RELEASE_TICKS;
+    use crate::ramp::DSM_BITS;
+
+    fn dim() -> Output {
+        ramp::output(DIM_LEVEL)
+    }
 
     fn run(torch: &mut Torch, pressed: bool, ticks: u16) {
         for _ in 0..ticks {
@@ -119,20 +98,15 @@ mod tests {
             Output::OFF,
             Output {
                 enable: false,
-                duty: 0
+                dsm: 0
             }
         );
     }
 
     #[test]
-    fn on_means_the_boost_converter_is_on_at_the_dim_duty() {
-        assert_eq!(
-            Output::DIM,
-            Output {
-                enable: true,
-                duty: 10
-            }
-        );
+    fn on_means_the_boost_converter_is_on_at_a_duty_of_ten() {
+        assert!(dim().enable);
+        assert_eq!(dim().dsm >> DSM_BITS, 10);
     }
 
     #[test]
@@ -142,7 +116,7 @@ mod tests {
         run(&mut torch, false, RELEASE_TICKS);
         assert_eq!(torch.output(), Output::OFF);
         assert_eq!(torch.tick(false), Some(Event::Click(1)));
-        assert_eq!(torch.output(), Output::DIM);
+        assert_eq!(torch.output(), dim());
     }
 
     #[test]
@@ -162,7 +136,7 @@ mod tests {
         click(&mut torch);
         run(&mut torch, true, 3 * 64);
         run(&mut torch, false, RELEASE_TICKS + 1);
-        assert_eq!(torch.output(), Output::DIM);
+        assert_eq!(torch.output(), dim());
     }
 
     #[test]
@@ -173,7 +147,7 @@ mod tests {
         for _ in 0..4 {
             run(&mut torch, false, u16::MAX);
         }
-        assert_eq!(torch.output(), Output::DIM);
+        assert_eq!(torch.output(), dim());
         click(&mut torch);
         assert_eq!(torch.output(), Output::OFF);
     }
@@ -181,7 +155,7 @@ mod tests {
     #[test]
     fn the_first_output_always_counts_as_a_change() {
         assert_eq!(Changes::new().update(Output::OFF), Some(Output::OFF));
-        assert_eq!(Changes::new().update(Output::DIM), Some(Output::DIM));
+        assert_eq!(Changes::new().update(dim()), Some(dim()));
     }
 
     #[test]
@@ -189,8 +163,8 @@ mod tests {
         let mut changes = Changes::new();
         assert_eq!(changes.update(Output::OFF), Some(Output::OFF));
         assert_eq!(changes.update(Output::OFF), None);
-        assert_eq!(changes.update(Output::DIM), Some(Output::DIM));
-        assert_eq!(changes.update(Output::DIM), None);
+        assert_eq!(changes.update(dim()), Some(dim()));
+        assert_eq!(changes.update(dim()), None);
         assert_eq!(changes.update(Output::OFF), Some(Output::OFF));
     }
 }

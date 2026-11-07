@@ -18,7 +18,7 @@
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
-use ts26::torch::{Output, PWM_TOP};
+use ts26::ramp::{DSM_BITS, Output, PWM_TOP};
 
 use crate::regs::{self, addr as reg};
 
@@ -185,7 +185,7 @@ pub fn switch_pressed() -> bool {
 /// enable, then zeroes the duty. The duty goes through CMP0BUF, so it lands
 /// at the bottom of the PWM cycle, up to 51 µs after the write.
 pub fn set_output(output: Output) {
-    let duty = u16::from(output.duty);
+    let duty = output.dsm >> DSM_BITS;
     if output.enable {
         write16(reg::TCA0_CMP0BUF, duty);
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);

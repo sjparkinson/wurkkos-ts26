@@ -38,7 +38,7 @@ extern "C" fn main() -> ! {
 #[cfg(target_arch = "avr")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    hw::set_output(ts26::torch::Output::OFF);
+    hw::set_output(ts26::ramp::Output::OFF);
     loop {}
 }
 

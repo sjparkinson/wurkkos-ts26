@@ -7,6 +7,7 @@
 #![no_std]
 
 pub mod button;
+pub mod ramp;
 pub mod torch;
 pub mod ui;
 
