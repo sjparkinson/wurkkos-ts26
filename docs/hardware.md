@@ -94,15 +94,15 @@ The same sensor as the TS21, inside the MCU on the driver.
 
 Wurkkos says the board has them ("Yes, the pads on the PCB does have", 26 November 2025, [BLF](https://budgetlightforum.com/t/wurkkos-ts26-update-ts26-anduril-version-update/230944)), and the product page says "Flashing Pads Available". 1Lumen calls them a "3-pin UPDI pattern" and EDC Tips counts "three flashing pads on the driver". The driver is glued in. Confirmed that there are three.
 
-Nobody gives their position, labels, order or pitch, and the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942) has no TS26 entry. The [Unofficial Guide](https://anduril.click/drivers/updi.html) warns that pad order differs between lights. So the TS21's R, G, V layout and 1.27 mm pitch are a guess here, not a fact.
+Nobody gives their position, labels, order or pitch, and the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942) has no TS26 entry. The [Unofficial Guide](https://anduril.click/drivers/updi.html) warns that pad order differs between lights. So the TS21's R, G, V layout is a guess here, not a fact. Don't assume a pitch either. The TS21's own pads measured about 1.75 mm, not the 1.27 mm the standard layout has and I'd written down for it, so that light is no guide, and nor is the standard.
 
-Before pressing a programmer onto them, take the cell out and check with a multimeter which pad is continuous with battery negative. VCC on this board comes from a regulator I can't identify, and I don't know what feeding it from a programmer does.
+Before pressing a programmer onto them, take the cell out, measure the pitch, and check with a multimeter which pad is continuous with battery negative. VCC on this board comes from a regulator I can't identify, and I don't know what feeding it from a programmer does. Only a plain UPDI adapter goes on these pads, never the 12 V HV Friend ([flashing.md](flashing.md#only-the-plain-adapter-goes-on-this-torch)).
 
 ## The MCU
 
 The same ATtiny1616 as the TS21, so the TS21's [MCU notes](https://github.com/sjparkinson/wurkkos-ts21/blob/main/docs/hardware.md#the-mcu) apply: mapped flash at 0x8000, two-word vectors, low byte first on 16-bit registers, `CPU.CCP` for clock changes, never write fuses. What's different:
 
-- The clock's the same, 10 MHz (the 20 MHz oscillator divided by 2) in `mcu_clock_speed()`. Confirmed.
+- The clock's 10 MHz (the 20 MHz oscillator divided by 2) in `mcu_clock_speed()`. Confirmed. The TS21 has since moved to 5 MHz, because its VCC follows the cell. This one's VCC is regulated, and the PWM frequency hangs off the clock.
 - The battery is read on AIN1 against the 1.1 V reference, where the TS21 reads VDD against 1.5 V.
 - TCA0 stays at TOP 255; no variable TOP.
 

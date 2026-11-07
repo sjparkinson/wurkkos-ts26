@@ -2,6 +2,16 @@
 
 `cargo xtask` has a UPDI programmer built in, the same one as [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21). It runs on macOS and Linux, and sets up the serial port with `stty`.
 
+## Only the plain adapter goes on this torch
+
+Only a non-high-voltage UPDI adapter ever goes on the TS26's pads. Adafruit's High Voltage UPDI Friend never does, and that includes trying to recover a torch that's stopped talking. There's no exception for a torch that's already dead: if UPDI's gone, the torch is gone.
+
+I lost the TS21 on 2026-11-06 after hand-holding the Friend on its pads. It then measured about 2.5 Ω between all three pads. I think 12 V or a slipped probe did it, and I can't prove either.
+
+The Friend puts a 12 V pulse on the UPDI line on every falling edge of RTS, which probably means every time a tool opens the port, and nothing turns that off. The chip's RESET pin is rated for that, but nobody knows what else sits on these pads. Keep it for a breakout. [bench-plan.md](bench-plan.md#the-high-voltage-updi-friends-12-v-pulse) has the detail.
+
+Both adapters are CH340s and show up as USB ID `1a86:7523`, with the same kind of port name, so nothing on the computer tells you which one you've plugged in. Look at the one in your hand, and keep the Friend unplugged and off the bench whenever the torch is open.
+
 ## What you need
 
 A serial UPDI adapter and some way to hold it on three tiny pads.
@@ -10,13 +20,17 @@ The easy option is a ready-made USB UPDI programmer. [JLHawaii808's kit](https:/
 
 The cheap option is a USB-serial adapter (CH340, CP2102, FT232) wired as a serial UPDI programmer, with TX and RX joined and that joined line going to the UPDI pad. [pymcuprog's README](https://github.com/microchip-pic-avr-tools/pymcuprog) suggests a series resistor of about 1 kΩ between TX and UPDI, and an adapter running at the same voltage as the MCU. The CH340 module in [pingle.org's guide](https://www.pingle.org/2022/08/07/flashing-a-3-pin-t1616-flashlight-with-new-firmware) worked wired straight through. Add pogo pins or a steady hand.
 
-Watch the pad spacing before you rely on a fixed probe. gchart's standard three-pad layout is `+ - R` at 1.27 mm pitch, and that's what most probes expect. Some Wurkkos and Sofirn boards use 2.54 mm instead (thefreeman ships loose leads for exactly that reason), and some put the pads in a different order. Loose pogo leads work whatever the layout. Use a short USB cable too; JLHawaii808 notes failures with 1 m ones.
+Watch the pad spacing before you rely on a fixed probe. gchart's standard three-pad layout is `+ - R` at 1.27 mm pitch, and that's what most probes expect. Some Wurkkos and Sofirn boards use 2.54 mm instead (thefreeman ships loose leads for exactly that reason), and some put the pads in a different order. The TS21's pads turned out to be about 1.75 mm apart, not the 1.27 mm I'd written down, and that's neither of those. So measure the pitch on your own board before trusting any probe. One that nearly fits sits on the edges of the pads, which is how it slips. Loose pogo leads work whatever the layout. Use a short USB cable too; JLHawaii808 notes failures with 1 m ones.
 
 ## The pads
 
 Where the TS26's pads are, which is which and their pitch are in [hardware.md](hardware.md#the-flashing-pads), with how sure anyone is about each. Check there before you buy a fixed probe.
 
 Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI.
+
+Measure the ohms between each pair of pads before the first contact and write them down, so you've got something to compare with if it stops talking. I don't know what a good TS26 reads. About 2.5 Ω between all three is what the dead TS21 read.
+
+If you can manage it, hold the probe with something that can't slip rather than your hand.
 
 ## Find the port
 
@@ -28,7 +42,7 @@ Run `ls /dev/cu.*` before and after plugging the adapter in. On macOS it's somet
 cargo xtask ping /dev/cu.usbserial-XXXX
 ```
 
-This reads the chip's System Information Block and changes nothing, not even a reset. You should see something like `found tinyAVR P:0D:1-3`. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
+This reads the chip's System Information Block and changes nothing, not even a reset. A real TS21 says `found tinyAVR P:0D:0-3`, so expect something like that. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
 
 ## Back up the factory firmware first
 
@@ -41,6 +55,20 @@ cargo xtask backup /dev/cu.usbserial-XXXX
 That puts the chip in programming mode, checks it's an ATtiny1616, and saves `backup/flash.hex` (all 16 KB), `backup/eeprom.hex` and `backup/fuses.hex`. The fuses are there for reference only. It refuses to run if `backup/flash.hex` already exists, so a second run can't overwrite your factory copy with this firmware.
 
 `backup/` is git-ignored. Copy it somewhere safe too.
+
+## The first flash is the `first-light` tag
+
+The first thing that goes on a torch is the `first-light` tag and nothing else. It's a 628-byte image that clicks on and off at one dim level. It has no watchdog, no sleep and no interrupts, so there's very little in it to hang, and a light that works shows the pads, the programmer, the boost enable and the PWM all do what this repo thinks they do.
+
+```sh
+git switch --detach first-light
+cargo xtask flash /dev/cu.usbserial-XXXX
+git switch -
+```
+
+The full firmware only goes on once that's proven on the light, which is stage 3 of [bench-plan.md](bench-plan.md#stage-3-first-light-on-the-light). The TS21 went dark straight after a flash that verified, of a firmware with far more going on at start-up, and a firmware hang wasn't ruled out. Starting small means a dark torch here has a short list of causes.
+
+`first-light` has no low-voltage protection and doesn't sleep, so don't leave a cell in it.
 
 ## Flash this firmware
 
@@ -57,6 +85,10 @@ That builds `target/wurkkos-ts26-0721.hex` and then
 5. resets the chip and turns UPDI off, so the new firmware starts
 
 If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again.
+
+Step 1 is the only check before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. Step 4 only says the bytes arrived, and says nothing about whether they run.
+
+If the light goes dark after a flash that verified, run `ping`. If it still talks, flash `first-light` again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
 
 ## Going back
 
@@ -76,15 +108,16 @@ Unlike the TS21, which runs a Sofirn SP36 build, the TS26 has a build of its own
 
 ## If it doesn't talk
 
-- "no reply from the chip" usually means poor contact or the wrong pad on UPDI. Press harder, or check the pads again. The tool already retries once with a UPDI double break.
-- "nothing echoed back" means the adapter isn't joining TX and RX, so it isn't a serial UPDI adapter (or the joining wire's come off).
+- "no reply from the chip" means the adapter heard itself and the chip said nothing, which usually means poor contact or the wrong pad on UPDI. It's also what you get with the probe in the air. Reseat the probe or check the pads again, and don't lean on it. The tool already retries once with a UPDI double break.
+- "nothing echoed back" with the probe in the air means the adapter isn't joining TX and RX, so it isn't a serial UPDI adapter (or the joining wire's come off).
+- "nothing echoed back" with the probe on the pads, from an adapter that says "no reply" in the air, is the bad one. Something's pulling the UPDI line down so hard the adapter can't hear its own bytes, which means the probe's on the ground pad or there's a short on the board. Better contact won't fix that. Take the probe off, check the pad order, and measure the ohms against the numbers you wrote down. That's a lesson from the dead TS21, and the Friend still stays off.
 - If a DIY adapter never works with TX and RX tied directly, add the 1 kΩ resistor.
 - thefreeman's older 3.3 V programmers had trouble with some lights, which is why the current one supplies 4.5 V. If yours is 3.3 V and flaky, that might be it.
 - The anduril.click [UPDI guide](https://anduril.click/drivers/updi.html) and the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942) cover more adapters and their quirks.
 
 ## How it works
 
-The programmer writes flash and EEPROM, and only those. That's all a TS26 needs, and it keeps fuses out of reach, since a bad fuse write can turn off UPDI for good.
+The programmer writes flash and EEPROM, and only those. That's all a TS26 needs, and it keeps fuses out of reach, since a bad fuse write can turn off UPDI, and the only way back from that is 12 V on the pads, which this torch never gets.
 
 `xtask/src/updi.rs` is the protocol, covering link set-up, the NVM programming key, reset, page-buffer writes through the NVM controller and reads in 256-byte blocks. The sequences follow Microchip's pymcuprog, and the registers come from the ATDF. `xtask/src/serial.rs` opens the port, configures it with `stty` (115200 baud, 8 data bits, even parity, 2 stop bits) and swallows the echo that a one-wire adapter sends back.
 

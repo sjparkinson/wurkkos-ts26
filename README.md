@@ -22,12 +22,16 @@ See [docs/toolchain.md](docs/toolchain.md) for how it builds and links.
 
 ## Flashing
 
-The TS26 has flashing pads for a UPDI programmer. Put a serial UPDI programmer on them and `cargo xtask` does the rest. Check it can see the chip, back up the factory firmware, then flash.
+The TS26 has flashing pads for a UPDI programmer. Put a plain serial UPDI programmer on them and `cargo xtask` does the rest. Never use a high-voltage one: I lost a TS21 after hand-holding one on its pads, and [docs/flashing.md](docs/flashing.md#only-the-plain-adapter-goes-on-this-torch) has what happened.
+
+Check it can see the chip, back up the factory firmware, then flash the `first-light` tag, a 628-byte image that clicks on and off and does nothing else. The full firmware only goes on once that's working on the light.
 
 ```sh
 cargo xtask ping /dev/cu.usbserial-XXXX
 cargo xtask backup /dev/cu.usbserial-XXXX
+git switch --detach first-light
 cargo xtask flash /dev/cu.usbserial-XXXX
+git switch -
 ```
 
-See [docs/flashing.md](docs/flashing.md) for programmers, the pads, restoring the backup and getting back to Anduril, and [docs/hardware.md](docs/hardware.md) for what's inside and how sure anyone is about it.
+See [docs/flashing.md](docs/flashing.md) for programmers, the pads, restoring the backup and getting back to Anduril, [docs/bench-plan.md](docs/bench-plan.md) for every check to make on a real light and in what order, and [docs/hardware.md](docs/hardware.md) for what's inside and how sure anyone is about it.

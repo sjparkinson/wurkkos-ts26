@@ -23,6 +23,8 @@ src/lib.rs        the no_std library: everything testable, nothing hardware
 src/button.rs     switch samples in, clicks and holds out (from the TS21)
 src/ui.rs         the state machine docs/ui.md describes
 src/torch.rs      one pass of the firmware loop: switch sample in, boost enable and PWM duty out
+src/watchdog.rs   which passes of the loop feed the watchdog, and the window that's sized for
+src/selftest.rs   what the checks at power-on found
 src/main.rs       the firmware loop (a stub on the host)
 src/regs.rs       register addresses and bit values, checked against the ATDF
 src/hw.rs         pins and register access (AVR only)
@@ -30,7 +32,7 @@ src/rt.rs         vector table and startup (AVR only)
 src/bin/link_probe.rs  a program with one static of each kind, so xtask can check link.x (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
 xtask/            hex, size and the UPDI programmer (ping, backup, flash, restore)
-docs/             hardware, flashing, toolchain, UI spec, roadmap
+docs/             hardware, flashing, bench plan, toolchain, UI spec, roadmap
 vendor/           Microchip's ATDF for the part (Apache-2.0)
 ```
 
@@ -44,7 +46,7 @@ Then add a row for it to the tests in `xtask/src/atdf.rs`, which parse the ATDF 
 
 The tests only cover what the ATDF can say: addresses, widths, masks and named values. Write order, timing and which flags set without their interrupt enabled are in the datasheet, so have someone (or the `register-checker` agent in `.claude/agents/`) read those against it. A wrong address compiles fine and does something to the hardware you didn't ask for.
 
-Never write fuses. Changing `SYSCFG0` can disable UPDI, and then the light needs a high-voltage programmer to recover.
+Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back takes a high-voltage programmer, which never goes on this torch ([docs/flashing.md](docs/flashing.md#only-the-plain-adapter-goes-on-this-torch)). So that's the end of the light.
 
 ## Unsafe
 
