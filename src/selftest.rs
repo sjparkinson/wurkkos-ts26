@@ -63,7 +63,7 @@ pub const fn hung(flags: u8) -> bool {
 }
 
 /// Which checks failed at power-on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Faults {
     /// Flash doesn't match the CRC `cargo xtask hex` put at its end, by
     /// CRCSCAN's sums.
@@ -75,6 +75,7 @@ pub struct Faults {
 }
 
 impl Faults {
+    /// Every check passed.
     pub const NONE: Self = Self {
         flash: false,
         fuses: false,
@@ -169,7 +170,6 @@ mod tests {
     #[test]
     fn only_a_fault_caps_the_light() {
         assert!(!Faults::NONE.any());
-        assert_eq!(Faults::default(), Faults::NONE);
         let flash = Faults {
             flash: true,
             ..Faults::NONE
