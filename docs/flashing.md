@@ -56,12 +56,12 @@ That puts the chip in programming mode, checks it's an ATtiny1616, and saves `ba
 
 `backup/` is git-ignored. Copy it somewhere safe too.
 
-## The first flash is the `first-light` tag
+## The first flash is `first-light`
 
-The first thing that goes on a torch is the `first-light` tag and nothing else. It's a 628-byte image that clicks on and off at one dim level. It has no watchdog, no sleep and no interrupts, so there's very little in it to hang, and a light that works shows the pads, the programmer, the boost enable and the PWM all do what this repo thinks they do.
+The first thing that goes on a torch is `first-light` and nothing else, the firmware as of commit `9d3b7dc`. It's a 628-byte image that clicks on and off at one dim level. It has no watchdog, no sleep and no interrupts, so there's very little in it to hang, and a light that works shows the pads, the programmer, the boost enable and the PWM all do what this repo thinks they do.
 
 ```sh
-git switch --detach first-light
+git switch --detach 9d3b7dc
 cargo xtask flash /dev/cu.usbserial-XXXX
 git switch -
 ```

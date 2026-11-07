@@ -2,11 +2,11 @@
 
 Every hardware check the roadmap is waiting on, in the order to do them, for a bench with the torch, a Fluke 107, [JLHawaii808's 4.5 V UPDI kit](https://jlhawaii808.com/products/updi-programmer-driver-reflashling-kit) for the torch, and the [spare chip kit](#the-spare-chip-kit): an Adafruit ATtiny1616 breakout, an Adafruit High Voltage UPDI Friend, a breadboard, jumpers, tactile switches and blue LEDs. It's the TS21's plan, rewritten for this board. Nothing here has run on a TS26 yet, so treat each expected result as a prediction. [flashing.md](flashing.md) has how to use the programmer.
 
-The order is the point of it. **The first flash on the torch is the `first-light` tag, and the full firmware only goes on after stage 3 has passed.** The TS21 went dark straight after a verified flash of a much bigger start-up, and I was left unable to say whether that was firmware or hardware. A 628-byte image that clicks on and off keeps those two apart.
+The order is the point of it. **The first flash on the torch is `first-light` (commit `9d3b7dc`), and the full firmware only goes on after stage 3 has passed.** The TS21 went dark straight after a verified flash of a much bigger start-up, and I was left unable to say whether that was firmware or hardware. A 628-byte image that clicks on and off keeps those two apart.
 
 Each check says what it needs:
 
-- **Tag**: the `first-light` tag.
+- **First light**: `first-light`, the firmware as of commit `9d3b7dc`.
 - **Main**: the full firmware on main.
 - **T1**, **T2**, **T3**, **T4**: a [test build](#test-builds).
 
@@ -103,11 +103,11 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | 0.1 | `cargo xtask ping <port>`, ten times | | `found tinyAVR` and the same string every time (a TS21 says `P:0D:0-3`). A first attempt that only works on the retry would be the pulse holding UPDI in reset | 1.7 |
 | 0.2 | `cargo xtask backup <port>`, then rename `backup/` to `backup-breakout/` | | `flash.hex`, `eeprom.hex`, `fuses.hex` | 1.8 |
 | 0.3 | Read `backup-breakout/fuses.hex` against `selftest::Fuses::ok`, as 1.9 | | Seesaw might not use the factory fuses. If it fails, the full firmware caps itself here for a good reason, so 0.11 can't work. Don't write the fuses | 1.9 |
-| 0.4 | Flash `first-light` as in [flashing.md](flashing.md#the-first-flash-is-the-first-light-tag) | Tag | Verify passes. `cargo xtask hex` on the tag says 628 bytes | 2.2 |
-| 0.5 | LEDs on. 1C on, 1C off, a few dozen times | Tag | Both LEDs follow the clicks | 3.2 |
-| 0.6 | LEDs off, light on. Meter on frequency on SCL, then DC volts | Tag | 19.6 kHz, which is 10 MHz / (2 × 255). A wrong clock is unmistakable. DC volts should be about 3.9% of VCC (duty 10 of 255), about 130 mV at 3.3 V | The 10 MHz clock and dual-slope PWM on silicon |
-| 0.7 | DC volts on PB2's pin, off, then on, then through a power cycle by the Friend | Tag | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
-| 0.8 | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | Tag | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
+| 0.4 | Flash `first-light` as in [flashing.md](flashing.md#the-first-flash-is-first-light) | First light | Verify passes. `cargo xtask hex` on that commit says 628 bytes | 2.2 |
+| 0.5 | LEDs on. 1C on, 1C off, a few dozen times | First light | Both LEDs follow the clicks | 3.2 |
+| 0.6 | LEDs off, light on. Meter on frequency on SCL, then DC volts | First light | 19.6 kHz, which is 10 MHz / (2 × 255). A wrong clock is unmistakable. DC volts should be about 3.9% of VCC (duty 10 of 255), about 130 mV at 3.3 V | The 10 MHz clock and dual-slope PWM on silicon |
+| 0.7 | DC volts on PB2's pin, off, then on, then through a power cycle by the Friend | First light | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
+| 0.8 | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | First light | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
 | 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port>` with `backup-breakout/` put back as `backup/`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
 | 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the PB2 LED never staying lit | 4.3 |
 | 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so go through the suspects in 6.1 here, where it costs nothing | 6.1 |
@@ -146,7 +146,7 @@ If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signa
 | # | Do | Expect | Closes |
 |---|---|---|---|
 | 2.1 | Look at the adapter in your hand. Cell out. Ohms between the pads again | The plain kit, and the same numbers as 1.6 | |
-| 2.2 | `git switch --detach first-light`, `cargo xtask hex`, `cargo xtask flash <port>`, `git switch -` | 628 bytes, and verify passes. A verify only shows the bytes arrived | "Ping, back up and flash", the batched UPDI frames, `PAGEWRITE` |
+| 2.2 | `git switch --detach 9d3b7dc`, `cargo xtask hex`, `cargo xtask flash <port>`, `git switch -` | 628 bytes, and verify passes. A verify only shows the bytes arrived | "Ping, back up and flash", the batched UPDI frames, `PAGEWRITE` |
 | 2.3 | If verify fails | Run it once more. If it fails again, suspect `PAGEWRITE`, then the batched frames in `write_page`, and stop there. Only the fake chip has seen either | |
 | 2.4 | `cargo xtask ping <port>`, then probe off | Same string as 1.7. A chip that talked before the flash and doesn't after it is the TS21 again, so stop and measure | |
 

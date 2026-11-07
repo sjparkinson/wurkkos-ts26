@@ -11,7 +11,7 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 - [x] Click on, click off, at one dim level through the boost converter
 - [x] The UPDI programmer in `xtask` (ping, backup, flash, restore), tested against a fake chip (from the TS21)
 - [ ] Find the flashing pads on a real TS26 and check their order with a multimeter
-- [ ] Ping, back up and flash a real TS26, with only the plain UPDI adapter, and the `first-light` tag first
+- [ ] Ping, back up and flash a real TS26, with only the plain UPDI adapter, and `first-light` (commit `9d3b7dc`) first
 - [ ] Check the boost enable and PWM sequencing on a real light: does it come on cleanly at duty 10, with no flash at turn-on?
 - [ ] Measure what PWM duty does to output on the MP3432, so the ramp has something to stand on
 
