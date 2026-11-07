@@ -76,19 +76,31 @@ The full firmware only goes on once that's proven on the light, which is stage 3
 cargo xtask flash /dev/cu.usbserial-XXXX
 ```
 
-That builds `target/wurkkos-ts26-0721.hex` and then
+That builds the firmware, refuses it if the simulator finds a mistake, and then
 
 1. puts the chip in programming mode and checks its signature (1E 94 21)
 2. chip-erases it, which wipes flash and, unless the EESAVE fuse is set (Microchip ships it unset), EEPROM
-3. writes the image a 64-byte page at a time, skipping blank pages (the erase already left them blank)
-4. reads it all back and compares
+3. writes the image a 64-byte page at a time, skipping blank pages (the erase already left them blank). The image is padded to all 16 KB with a CRC in the last two bytes, which the firmware checks at power-on, so the last page always gets written
+4. reads all 16 KB back and compares
 5. resets the chip and turns UPDI off, so the new firmware starts
 
 If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again.
 
-Step 1 is the only check before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. Step 4 only says the bytes arrived, and says nothing about whether they run.
+Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
-If the light goes dark after a flash that verified, run `ping`. If it still talks, flash `first-light` again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
+A flash doesn't power-cycle the chip, so take the probe off with the cell out and leave it a few seconds, so VCC really collapses, before putting the cell in. Otherwise what the old firmware left in the reset flags could look like a hang.
+
+If the light goes dark after a flash that verified, run `ping`. If it still talks, `cargo xtask peek /dev/cu.usbserial-XXXX` reads the running chip's registers and SRAM, which shows how far the firmware got. Then flash `first-light` again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
+
+## If it's capped at level 50
+
+The firmware quietly holds the light at level 50 if a check at power-on fails: flash doesn't match its CRC, the fuses aren't what it expects, or the watchdog reset the chip. It doesn't flash or tell you which, and it still works, so all you'll see is the ramp stopping low and turbo looking dim. None of the three has met a real TS26, so suspect the checks before the torch. In this order:
+
+1. **A watchdog reset.** Take the cell out, wait a few seconds, and put it back. That's the only one this clears, so if the cap's gone, something bit. It might be a real hang, or the reset flags left over from before a flash, and if it comes back after use, it's the firmware or the watchdog's window, which nobody's seen on a real chip.
+2. **The CRC.** A cap straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
+3. **The fuses.** Compare `backup/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a cap. A capped torch is a working torch.
+
+The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too.
 
 ## Going back
 
