@@ -103,9 +103,10 @@ mod tests {
     use crate::TICKS_PER_SECOND;
     use crate::button::RELEASE_TICKS;
     use crate::limits::FAULT_CEILING;
+    use crate::ramp::CEILING;
     use crate::testing::{Rig, examples, temperature_reading, voltage_reading};
     use crate::thermal;
-    use crate::ui::{CEIL, DEFAULT_LEVEL, FLOOR};
+    use crate::ui::{DEFAULT_LEVEL, FLOOR};
 
     const UI_MD: &str = include_str!("../docs/ui.md");
 
@@ -194,7 +195,7 @@ mod tests {
         let mut torch = Rig::default();
         click(&mut torch);
         run(&mut torch, true, 10 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), CEIL);
+        assert_eq!(torch.level(), CEILING);
         assert_eq!(torch.output(), ramp::output(ramp::CEILING));
     }
 
@@ -268,7 +269,7 @@ mod tests {
         run(&mut torch, false, 120 * TICKS_PER_SECOND);
         assert_eq!(torch.level(), thermal::Config::DEFAULT.floor);
         assert_eq!(torch.output(), ramp::output(torch.level()));
-        assert_eq!(torch.ui.output_level(), CEIL);
+        assert_eq!(torch.ui.output_level(), CEILING);
     }
 
     #[test]
@@ -291,7 +292,7 @@ mod tests {
             clicks(&mut torch, 2);
             run(&mut torch, false, RELEASE_TICKS + 1);
             assert_eq!(torch.level(), FAULT_CEILING);
-            assert_eq!(torch.ui.output_level(), CEIL);
+            assert_eq!(torch.ui.output_level(), CEILING);
         }
     }
 

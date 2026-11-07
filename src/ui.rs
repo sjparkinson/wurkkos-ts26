@@ -9,13 +9,11 @@ use crate::ramp::CEILING;
 /// only 24, and level 13 is the first at 36 or over. Unmeasured.
 pub const FLOOR: u8 = 13;
 
-/// The highest level, used for turbo, until [`CEILING`] comes up.
-pub const CEIL: u8 = CEILING;
-
 /// Where a fresh torch starts when you click it on: a duty of about 10 of 255.
 pub const DEFAULT_LEVEL: u8 = 52;
 
-const _: () = assert!(FLOOR >= 1 && FLOOR < DEFAULT_LEVEL && DEFAULT_LEVEL < CEIL);
+// The top of the UI's ramp, and turbo, is [`CEILING`].
+const _: () = assert!(FLOOR >= 1 && FLOOR < DEFAULT_LEVEL && DEFAULT_LEVEL < CEILING);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -36,11 +34,11 @@ pub enum Aux {
 #[derive(Clone, Debug)]
 pub struct Ui {
     mode: Mode,
-    level: u8,
-    /// The level to come back on at, from the last time it was switched off.
+    /// The level it's at while on, and the one to come back on at otherwise,
+    /// since [`Ui::off`] is the only way from on to off and leaves it be.
     /// RAM only: the torch sleeps rather than losing power, so this outlasts
     /// sleep and never needs EEPROM. A reset or a cell swap loses it.
-    memory: u8,
+    level: u8,
     /// The level to drop back to when leaving turbo.
     before_turbo: u8,
     /// Set when a hold switched the light on, so that the same hold doesn't
@@ -61,7 +59,6 @@ impl Ui {
         Self {
             mode: Mode::Off,
             level: DEFAULT_LEVEL,
-            memory: DEFAULT_LEVEL,
             before_turbo: DEFAULT_LEVEL,
             swallow_hold: false,
             momentary: false,
@@ -97,13 +94,13 @@ impl Ui {
                 self.momentary = false;
             }
 
-            (Mode::Off, Event::Click(1)) => self.turn_on(self.memory),
+            (Mode::Off, Event::Click(1)) => self.turn_on(self.level),
             (Mode::Off, Event::Click(2)) => {
                 // With turbo remembered, this would leave 2C nowhere to go.
-                if self.memory < CEIL {
-                    self.before_turbo = self.memory;
+                if self.level < CEILING {
+                    self.before_turbo = self.level;
                 }
-                self.turn_on(CEIL);
+                self.turn_on(CEILING);
             }
             (Mode::Off, Event::Click(4)) => self.mode = Mode::Lockout,
             // Only the hold's first tick, so a hold that's still going when
@@ -120,14 +117,14 @@ impl Ui {
             }
 
             (Mode::On, Event::Click(1)) => self.off(),
-            (Mode::On, Event::Click(2)) if self.level == CEIL => self.level = self.before_turbo,
+            (Mode::On, Event::Click(2)) if self.level == CEILING => self.level = self.before_turbo,
             (Mode::On, Event::Click(2)) => {
                 self.before_turbo = self.level;
-                self.level = CEIL;
+                self.level = CEILING;
             }
             (Mode::On, Event::Hold { .. }) if self.swallow_hold => {}
             (Mode::On, Event::Hold { clicks: 0, .. }) => {
-                self.level = self.level.saturating_add(1).min(CEIL);
+                self.level = self.level.saturating_add(1).min(CEILING);
             }
             (Mode::On, Event::Hold { clicks: 1, .. }) => {
                 self.level = self.level.saturating_sub(1).max(FLOOR);
@@ -152,10 +149,7 @@ impl Ui {
     /// off. A locked torch stays locked.
     pub fn off(&mut self) {
         match self.mode {
-            Mode::On => {
-                self.memory = self.level;
-                self.mode = Mode::Off;
-            }
+            Mode::On => self.mode = Mode::Off,
             Mode::Lockout => self.momentary = false,
             Mode::Off => {}
         }
@@ -229,7 +223,7 @@ mod tests {
         let mut ui = Ui::new();
         ui.handle(Event::Click(1));
         hold_for(&mut ui, 0, 500);
-        assert_eq!(ui.output_level(), CEIL);
+        assert_eq!(ui.output_level(), CEILING);
         hold_for(&mut ui, 1, 500);
         assert_eq!(ui.output_level(), FLOOR);
     }
@@ -239,7 +233,7 @@ mod tests {
         let mut ui = Ui::new();
         ui.handle(Event::Click(1));
         ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEIL);
+        assert_eq!(ui.output_level(), CEILING);
         ui.handle(Event::Click(2));
         assert_eq!(ui.output_level(), DEFAULT_LEVEL);
     }
@@ -248,7 +242,7 @@ mod tests {
     fn double_click_from_off_is_turbo() {
         let mut ui = Ui::new();
         ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEIL);
+        assert_eq!(ui.output_level(), CEILING);
         ui.handle(Event::Click(2));
         assert_eq!(ui.output_level(), DEFAULT_LEVEL);
     }
@@ -259,7 +253,7 @@ mod tests {
         ui.handle(Event::Click(2));
         ui.handle(Event::Click(1));
         ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEIL);
+        assert_eq!(ui.output_level(), CEILING);
         ui.handle(Event::Click(2));
         assert_eq!(ui.output_level(), DEFAULT_LEVEL);
     }
