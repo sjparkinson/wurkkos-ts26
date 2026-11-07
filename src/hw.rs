@@ -27,6 +27,15 @@ const PORTB_PINS: u8 = 6;
 const PORTC_OUTPUTS: u8 = AUX_PINS;
 const PORTC_PINS: u8 = 4;
 
+/// TCA0.CTRLB with the light off: dual-slope, PB0 left to PORT.
+const CTRLB_OFF: u8 = regs::TCA_WGMODE_DSBOTTOM;
+/// TCA0.CTRLB with the light on: the same, with WO0 driving PB0.
+const CTRLB_ON: u8 = regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM;
+
+// WO2's pad is PB2, so a CTRLB with CMP2EN would hand the boost enable to
+// the timer.
+const _: () = assert!(ENABLE == 2 && (CTRLB_OFF | CTRLB_ON) & regs::TCA_CMP2EN == 0);
+
 // The window `start_watchdog` sets is the one `ts26::watchdog` counts on.
 // WDT.CTRLA's fields count 8 << (n - 1) WDT clocks, and these are n = 3.
 const _: () = {
@@ -163,7 +172,7 @@ pub fn init() {
     write16(reg::TCA0_CMP0BUF, 0);
     // The light's off, so PB0 stays PORT's until `set_output` asks for a
     // level.
-    write(reg::TCA0_CTRLB, regs::TCA_WGMODE_DSBOTTOM);
+    write(reg::TCA0_CTRLB, CTRLB_OFF);
     write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);
 
     // ADC0 in single-conversion mode, four conversions accumulated. The cell
@@ -526,7 +535,7 @@ pub fn set_output(output: Output) {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
         without_interrupts(|| {
             write(reg::TCA0_INTCTRL, 0);
-            write(reg::TCA0_CTRLB, regs::TCA_WGMODE_DSBOTTOM);
+            write(reg::TCA0_CTRLB, CTRLB_OFF);
             write16(reg::TCA0_CMP0BUF, 0);
             write16(reg::TCA0_CMP0, 0);
             write(DSM_DUTY, 0);
@@ -545,10 +554,7 @@ pub fn set_output(output: Output) {
         write(DSM_FRACTION, fraction);
         if was_off {
             write16(reg::TCA0_CMP0BUF, u16::from(duty));
-            write(
-                reg::TCA0_CTRLB,
-                regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM,
-            );
+            write(reg::TCA0_CTRLB, CTRLB_ON);
             write(reg::TCA0_INTFLAGS, regs::TCA_OVF);
             write(reg::TCA0_INTCTRL, regs::TCA_OVF);
         }

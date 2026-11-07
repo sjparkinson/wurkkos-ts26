@@ -230,6 +230,9 @@ pub const TCA_ENABLE: u8 = 0x01;
 pub const TCA_CLKSEL_DIV1: u8 = 0x00;
 /// TCA0.CTRLB.CMP0EN (single mode).
 pub const TCA_CMP0EN: u8 = 0x10;
+/// TCA0.CTRLB.CMP2EN (single mode). WO2's pad is PB2, the boost enable, so
+/// src/hw.rs must never set it.
+pub const TCA_CMP2EN: u8 = 0x40;
 /// TCA0.CTRLB.WGMODE = DSBOTTOM (single mode).
 pub const TCA_WGMODE_DSBOTTOM: u8 = 0x07;
 /// TCA0.INTCTRL.OVF and TCA0.INTFLAGS.OVF (single mode).

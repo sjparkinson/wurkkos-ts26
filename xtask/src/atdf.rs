@@ -518,6 +518,7 @@ mod tests {
                 "TCA0.CTRLA.CLKSEL=DIV1",
             ),
             (regs::TCA_CMP0EN, ctrlb.mask("CMP0EN"), "TCA0.CTRLB.CMP0EN"),
+            (regs::TCA_CMP2EN, ctrlb.mask("CMP2EN"), "TCA0.CTRLB.CMP2EN"),
             (
                 regs::TCA_WGMODE_DSBOTTOM,
                 ctrlb.value("WGMODE", "DSBOTTOM"),
