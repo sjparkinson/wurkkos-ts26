@@ -19,6 +19,8 @@ use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
+use ts26::sensors::{Channel, Convert};
+use ts26::temp::Calibration;
 use ts26::ui::Aux;
 
 use crate::regs::{self, addr as reg};
@@ -314,14 +316,22 @@ fn adc_channel(muxpos: u8) {
     write(reg::ADC0_CTRLA, regs::ADC_ENABLE);
 }
 
-/// Starts a conversion, four accumulated, which takes 260 µs or so and carries
-/// on through idle. Going to rest turns the ADC off even if one's running, and
-/// the datasheet doesn't say what becomes of it, which is why the first
-/// reading after a rest gets thrown away.
+/// Starts a conversion, four accumulated, setting the ADC up for its channel
+/// first if asked. `sensors::Schedule` only asks when the channel changes, or
+/// after a rest. It takes 260 µs or so and carries on through idle. Going to
+/// rest turns the ADC off even if one's running, and the datasheet doesn't say
+/// what becomes of it, which is why the first reading after a rest gets thrown
+/// away.
 ///
 /// It never clears RESRDY. That works because [`adc_result`] runs every tick
 /// and reading the result clears it, so a stale one is never read twice.
-fn adc_convert() {
+pub fn adc_start(convert: Convert) {
+    if convert.setup {
+        adc_channel(match convert.channel {
+            Channel::Voltage => regs::ADC_MUXPOS_AIN1,
+            Channel::Temperature => regs::ADC_MUXPOS_TEMPSENSE,
+        });
+    }
     write(reg::ADC0_COMMAND, regs::ADC_STCONV);
 }
 
@@ -334,6 +344,14 @@ pub fn adc_result() -> Option<u16> {
     let lo = read(reg::ADC0_RES);
     let hi = read(reg::ADC0_RES + 1);
     Some(u16::from_le_bytes([lo, hi]))
+}
+
+/// The temperature sensor's factory calibration from the signature row.
+pub fn temperature_calibration() -> Calibration {
+    Calibration {
+        offset: read(reg::SIGROW_TEMPSENSE1) as i8,
+        gain: read(reg::SIGROW_TEMPSENSE0),
+    }
 }
 
 /// Starts the watchdog in window mode, 32 WDT clocks closed and 32 open. Until
