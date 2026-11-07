@@ -33,6 +33,16 @@ Things to decide or check once the port from the TS21 is finished. Each has what
 - **T3 hangs on purpose.** It's a throwaway build for the breakout only, so a real watchdog bite gets seen once. It's outside the firmware, and easy to drop.
 - **Breakout pins are a guess.** PB2 on TX and PC1-3 on pins 11-13 come from Arduino numbering, labelled likely.
 
+## Simulator and xtask
+
+- **`peek` isn't denied in `.claude/settings.json`.** It only reads, but it drives real hardware, so you'll probably want it next to `ping`, `backup`, `flash` and `restore`. I can't edit that file, and agents shouldn't.
+- **The simulator doesn't model chip resets.** So a watchdog bite is an error there, and the `Faults.hang` path and the panic handler never run on it. It doesn't model anything analogue either, or a real tick landing between `sei` and `sleep`.
+- **`flash`'s model check only reads the file name.** It catches a `-0614` hex, a rename defeats it, and it refuses `backup/flash.hex`, pointing you at `restore`. Stamping the model into the image would be the real fix.
+- **`backup` stays a fixed `backup/`.** The TS21 moved to a `<dir>` argument, which wasn't ported, so a second torch needs its `backup/` moved first.
+- **`sim.rs` keeps its own register table,** a partial copy of `src/regs.rs`, ATDF-checked, so the model doesn't move with the firmware. That bends the "every address lives in regs.rs" rule.
+- **The fake chip's SIB is a TS21 reading.** No TS26 has been read yet.
+- **The `.rs` files came in with `cp` and `sed`,** which `.claude/CLAUDE.md` says not to do, so the lint hook skipped them. Clippy and fmt both pass on the result.
+
 ## Housekeeping
 
 - **`main` is behind.** This session can't touch the shared checkout, so the work is on `worktree-ramp-contract`, and it needs one fast-forward at the end.
