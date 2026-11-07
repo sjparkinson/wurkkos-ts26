@@ -37,9 +37,11 @@ commands:
   hex                     build the firmware, run it on the simulator, write
                           target/wurkkos-ts26-0721.hex and print flash, RAM,
                           stack, loop and handler use
-  ping <port>             check the programmer can see the chip, change nothing
-  peek <port>             read the running chip's registers and SRAM, change
-                          nothing, to see how far the firmware got
+  ping <port>             check the programmer can see the chip, writing nothing,
+                          though expect it to reset as UPDI turns off
+  peek <port>             read the running chip's registers and SRAM, to see how
+                          far the firmware got; it writes nothing, and the same
+                          reset follows, so only the first run counts
   backup <port>           save the torch's flash, EEPROM and fuses into backup/
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
   restore <port>          put backup/flash.hex and backup/eeprom.hex back
@@ -235,8 +237,10 @@ fn ping(port: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads what the running firmware has left behind, without a reset or a
-/// write: UPDI reaches data space while the CPU runs. Only `hw::init` sets the
+/// Reads what the running firmware has left behind, without a write: UPDI
+/// reaches data space while the CPU runs. Turning UPDI off afterwards should
+/// reset the chip (DS §33.3.2.2.2), so a second read sees a fresh boot, not what
+/// the first one saw. Only `hw::init` sets the
 /// clock, the pin directions and the PIT, so those say whether it ran.
 /// VPORTB.OUT says whether the boost converter's on.
 fn peek(port: &str) -> Result<(), String> {

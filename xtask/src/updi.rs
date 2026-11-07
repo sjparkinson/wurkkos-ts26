@@ -275,7 +275,9 @@ impl<W: Wire> Programmer<W> {
         self.disconnect()
     }
 
-    /// Turns UPDI off without resetting, for when nothing was changed.
+    /// Turns UPDI off. The firmware sends no reset of its own here, but the
+    /// datasheet says writing UPDIDIS issues a system reset (§33.3.2.2.2), so
+    /// expect the chip to restart. Nobody's seen that on a real one yet.
     pub fn disconnect(mut self) -> Result<W> {
         self.stcs(CS_CTRLB, CTRLB_UPDIDIS | CTRLB_CCDETDIS)?;
         Ok(self.wire)
