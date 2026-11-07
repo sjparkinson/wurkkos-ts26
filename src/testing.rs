@@ -1,8 +1,22 @@
 //! Test doubles shared by the library's own tests and xtask's simulators, so
-//! there's one fake ADC and one way of turning a voltage or a temperature
-//! into a raw reading.
+//! there's one fake ADC, one way of turning a voltage or a temperature into a
+//! raw reading, and one reader of docs/ui.md's scripts.
 //!
 //! The firmware never sees it.
+//!
+//! # Scripts
+//!
+//! A script is Anduril's notation, a word at a time: `1C 2H:1.5s wait:1s`.
+//! `NC` is N quick clicks. `NH` is N - 1 clicks then a hold (so `2H` is
+//! click, hold), for a second unless it says otherwise (`1H:500ms`).
+//! `wait:2s` leaves the switch alone. Every click or hold is followed by
+//! enough of a pause for it to count, so `1C 1C` is two single clicks.
+//!
+//! Some words set the scene, taking no time. `cell:2.95V` is the cell from
+//! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to
+//! start). `fault` starts a torch whose power-on checks failed, so it has to
+//! come before anything that takes time. So does `flash:corrupt`, a byte of
+//! flash that doesn't match its CRC.
 
 use crate::battery;
 use crate::sensors::{Channel, Convert};
@@ -22,17 +36,44 @@ pub const CALIBRATION: Calibration = Calibration {
 /// The accumulated reading of AIN1 for a cell `battery::centivolts` reports
 /// as `cell`: the closest, saturating at four full-scale conversions.
 pub fn voltage_reading(cell: u16) -> u16 {
-    (0..=FULL_SCALE)
-        .min_by_key(|&raw| (battery::centivolts(raw).abs_diff(cell), raw))
-        .unwrap_or(0)
+    closest(cell, battery::centivolts)
 }
 
 /// The temperature sensor reading, four accumulated 10-bit conversions,
 /// closest to `kelvin` with [`CALIBRATION`].
 pub fn temperature_reading(kelvin: u16) -> u16 {
-    (0..=FULL_SCALE)
-        .min_by_key(|&raw| (CALIBRATION.sixteenths(raw).abs_diff(kelvin * 16), raw))
-        .unwrap_or(0)
+    closest(kelvin.saturating_mul(16), |raw| CALIBRATION.sixteenths(raw))
+}
+
+/// The smallest raw reading whose `read` is closest to `target`. `read` never
+/// goes down as the reading goes up, so a binary search finds it.
+fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
+    // The first reading that reads as at least `value`, or one past full
+    // scale if none does.
+    let first_at_least = |value: u16| {
+        let (mut low, mut high) = (0, FULL_SCALE + 1);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if read(mid) < value {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        low
+    };
+    let above = first_at_least(target);
+    if above == 0 {
+        return 0;
+    }
+    let below = read(above - 1);
+    if above > FULL_SCALE || target - below <= read(above) - target {
+        // Below wins ties, and a run of readings that read the same starts
+        // further down.
+        first_at_least(below)
+    } else {
+        above
+    }
 }
 
 /// An ADC that hands back a conversion's result a tick after it started, the
@@ -145,6 +186,34 @@ mod tests {
             let got = CALIBRATION.sixteenths(temperature_reading(kelvin));
             // A count of the sum is a little over two sixteenths.
             assert!(got.abs_diff(kelvin * 16) <= 2, "{kelvin} K reads as {got}");
+        }
+    }
+
+    /// The slow way: every raw reading, the closest winning and the smallest
+    /// winning a tie.
+    fn linear(target: u16, read: impl Fn(u16) -> u16) -> u16 {
+        (0..=FULL_SCALE)
+            .min_by_key(|&raw| (read(raw).abs_diff(target), raw))
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn the_binary_search_finds_what_the_linear_one_does() {
+        let top = battery::centivolts(FULL_SCALE);
+        for cell in 0..=top.saturating_add(10) {
+            assert_eq!(
+                voltage_reading(cell),
+                linear(cell, battery::centivolts),
+                "{cell} cV"
+            );
+        }
+        let sixteenths = |raw| CALIBRATION.sixteenths(raw);
+        for kelvin in 0..=sixteenths(FULL_SCALE) / 16 + 10 {
+            assert_eq!(
+                temperature_reading(kelvin),
+                linear(kelvin * 16, sixteenths),
+                "{kelvin} K"
+            );
         }
     }
 }
