@@ -7,6 +7,7 @@
 #![no_std]
 
 pub mod battery;
+pub mod board;
 pub mod button;
 pub mod gradual;
 pub mod limits;

@@ -1,23 +1,17 @@
 //! The TS26 driver's pins and the ATtiny1616 registers that drive them.
 //!
 //! No PAC: the handful of registers we touch are written out by hand in
-//! `src/regs.rs`, and xtask's tests check them against Microchip's ATDF.
-//! docs/hardware.md has the pin map and where it comes from.
-//!
-//! | Pin     | Job                                          |
-//! |---------|----------------------------------------------|
-//! | PA0     | UPDI, left alone                             |
-//! | PA1     | Battery divider (AIN1)                       |
-//! | PA5     | Side switch, active low, pulled up           |
-//! | PB0     | Main LED PWM, TCA0 WO0                       |
-//! | PB2     | Boost converter (MP3432) enable, high is on  |
-//! | PC1-PC3 | Aux LEDs, blue, green, red                   |
+//! `src/regs.rs`, and xtask's tests check them against Microchip's ATDF. The
+//! pin map is `ts26::board`'s.
 
 #![allow(unsafe_code)]
 
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
+use ts26::board::{
+    self, AUX_BLUE, AUX_GREEN, AUX_PINS, AUX_RED, BATTERY, ENABLE, PWM, SWITCH, UPDI,
+};
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
 use ts26::selftest::Fuses;
 use ts26::sensors::{Channel, Convert};
@@ -26,20 +20,11 @@ use ts26::ui::Aux;
 
 use crate::regs::{self, addr as reg};
 
-const UPDI: u8 = 0; // PA0
-const BATTERY: u8 = 1; // PA1
-const SWITCH: u8 = 5; // PA5
-const PWM: u8 = 0; // PB0
-const ENABLE: u8 = 2; // PB2
-const AUX_BLUE: u8 = 1; // PC1
-const AUX_GREEN: u8 = 2; // PC2
-const AUX_RED: u8 = 3; // PC3
-
 /// The PORTB pins we drive. PORTB has PB0 to PB5 on the 20-pin package.
 const PORTB_OUTPUTS: u8 = 1 << PWM | 1 << ENABLE;
 const PORTB_PINS: u8 = 6;
 /// The PORTC pins we drive. PORTC has PC0 to PC3 on the 20-pin package.
-const PORTC_OUTPUTS: u8 = 1 << AUX_BLUE | 1 << AUX_GREEN | 1 << AUX_RED;
+const PORTC_OUTPUTS: u8 = AUX_PINS;
 const PORTC_PINS: u8 = 4;
 
 // The window `start_watchdog` sets is the one `ts26::watchdog` counts on.
@@ -458,11 +443,7 @@ pub fn fuses() -> Fuses {
 /// outputs at the 0 in OUT, which holds them dark. That this is what Anduril's
 /// low aux setting does on this board is likely, and nobody's measured it here.
 pub fn set_aux(colour: Aux) {
-    let lit = match colour {
-        Aux::Off => 0,
-        Aux::Blue => 1 << AUX_BLUE,
-        Aux::Red => 1 << AUX_RED,
-    };
+    let lit = board::aux_pin(colour);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);
     for pin in [AUX_BLUE, AUX_GREEN, AUX_RED] {
         let ctrl = if lit & 1 << pin != 0 {

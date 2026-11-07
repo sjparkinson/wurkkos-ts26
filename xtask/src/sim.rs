@@ -90,10 +90,10 @@ use std::ops::Range;
 use std::thread;
 
 use ts26::TICKS_PER_SECOND;
+use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Example, Rig, Sample, Scene};
-use ts26::ui::Aux;
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
@@ -259,13 +259,15 @@ const FLASH_SIZE: usize = map::FLASH_SIZE;
 /// fixed pattern makes a byte that should have been written stand out.
 const JUNK: u8 = 0xA5;
 
-// The pins, from docs/hardware.md, as in src/hw.rs.
-const SWITCH: u8 = 1 << 5; // PA5, active low
-const ENABLE: u8 = 1 << 2; // PB2, the boost converter
-const SWITCH_PIN: usize = 5;
-const ENABLE_PIN: usize = 2;
+// The pins, from `ts26::board`, which src/hw.rs uses too.
+const SWITCH: u8 = 1 << board::SWITCH; // PA5, active low
+const ENABLE: u8 = 1 << board::ENABLE; // PB2, the boost converter
+const SWITCH_PIN: usize = board::SWITCH as usize;
+const ENABLE_PIN: usize = board::ENABLE as usize;
+const UPDI_PIN: usize = board::UPDI as usize;
+const BATTERY_PIN: usize = board::BATTERY as usize;
 /// PC1 to PC3: blue, green, red.
-const AUX: u8 = 0b1110;
+const AUX: u8 = board::AUX_PINS;
 
 /// Instructions startup may take before reaching `main`.
 const BOOT_BUDGET: u64 = 100_000;
@@ -483,15 +485,6 @@ fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
     in_step(sim, samples, report).map(drop)
 }
 
-/// The aux pins `aux` lights, as `Chip::aux` shows them.
-fn aux_pins(aux: Aux) -> u8 {
-    match aux {
-        Aux::Off => 0,
-        Aux::Blue => 0b001,
-        Aux::Red => 0b100,
-    }
-}
-
 /// Feeds the same switch samples to the firmware, from just after `main`, and
 /// to `ts26::torch`, and checks the pins show the library's output on every
 /// tick. Returns the level it ends at.
@@ -539,10 +532,9 @@ fn in_step(
         }
         rig.tick_in(sample.pressed, &sample.scene);
         sim.chip.shows(rig.torch.output()).map_err(at)?;
-        let want = aux_pins(rig.torch.aux());
-        if sim.chip.aux() != want {
+        if sim.chip.aux() != board::aux_pin(rig.torch.aux()) {
             return Err(at(format!(
-                "the aux pins are {:#05b}, but the library says {:?}",
+                "the aux pins are {:#06b}, but the library says {:?}",
                 sim.chip.aux(),
                 rig.torch.aux()
             )));
@@ -1142,7 +1134,7 @@ impl Chip {
         self.io[reg::VPORTB_OUT] & self.io[reg::VPORTB_DIR] & ENABLE != 0
     }
 
-    /// The aux pins that are lit, PC1 in bit 0. An output driven high is
+    /// The aux pins that are lit, as a PORTC mask. An output driven high is
     /// bright; an input with its pull-up on glows dimly; an output driven low
     /// is dark.
     fn aux(&self) -> u8 {
@@ -1151,7 +1143,7 @@ impl Chip {
             let on = self.io[reg::PORTC_PIN0CTRL + pin] & PORT_PULLUPEN != 0;
             bits | u8::from(on) << pin
         });
-        ((self.io[reg::VPORTC_OUT] & dir | pulled_up & !dir) & AUX) >> 1
+        (self.io[reg::VPORTC_OUT] & dir | pulled_up & !dir) & AUX
     }
 
     /// Refuses a chip `hw::init` left on the wrong clock or PWM. Writes of
@@ -1577,7 +1569,9 @@ impl Chip {
         if pull_up && a == reg::PORTB_PIN0CTRL + ENABLE_PIN {
             return Err("gives PB2 a pull-up, which could creep the boost converter on".into());
         }
-        if pull_up && (a == reg::PORTA_PIN0CTRL || a == reg::PORTA_PIN0CTRL + 1) {
+        if pull_up
+            && (a == reg::PORTA_PIN0CTRL + UPDI_PIN || a == reg::PORTA_PIN0CTRL + BATTERY_PIN)
+        {
             return Err(format!(
                 "writes {value:#04x} to {}: PA0 is UPDI and PA1 the battery divider, \
                  so neither gets a pull-up",
@@ -2163,6 +2157,7 @@ impl Bus for Chip {
 mod tests {
     use super::*;
     use crate::atdf::Atdf;
+    use ts26::ui::Aux;
 
     #[test]
     fn registers_match_the_atdf() {
@@ -2775,7 +2770,8 @@ mod tests {
         chip.write(reg::PORTC_PIN0CTRL as u16 + 3, PORT_PULLUPEN)
             .unwrap();
         assert_eq!(chip.aux(), 0, "an output driven low");
-        chip.write(reg::VPORTC_DIR as u16, AUX & !(1 << 3)).unwrap();
-        assert_eq!(chip.aux(), 0b100, "red");
+        chip.write(reg::VPORTC_DIR as u16, AUX & !(1 << board::AUX_RED))
+            .unwrap();
+        assert_eq!(chip.aux(), board::aux_pin(Aux::Red), "red");
     }
 }
