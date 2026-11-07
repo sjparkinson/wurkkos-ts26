@@ -231,7 +231,7 @@ None exist yet, and they should stay on a throwaway branch: they aren't the firm
 
 **T3, a hang on demand.** A build that stops feeding the watchdog when the switch has been held for ten seconds, so a real bite can be seen once. **Breakout only.** It's the only deliberate reset anywhere in this plan, and it isn't going near the torch: the real firmware doesn't do this at start-up, by choice, because of what happened to the TS21.
 
-**T4, power-down after a feed.** `src/main.rs` with `hw::wait_for_tick(torch.resting())`, dropping the `&& !fed`, and `REST_IDLE_TICKS` raised to match, or the simulator refuses it. It's the one test build that goes on the torch, after 0.15 passes, and only to find out if the idle in the real firmware can go. It has the real firmware's protection and nothing else changed.
+**T4, power-down after a feed.** `watchdog::Feeder::power_down` in `src/watchdog.rs` returning `resting` alone, dropping the `&& !self.fed`. The simulator checks the firmware against that same function, so it follows without a change. It's the one test build that goes on the torch, after 0.15 passes, and only to find out if the idle in the real firmware can go. It has the real firmware's protection and nothing else changed.
 
 ## What this kit can't do
 

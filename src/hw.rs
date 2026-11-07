@@ -219,7 +219,7 @@ const DSM_SUM: usize = reg::GPIO_GPIOR3;
 const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 
 /// Sets up the sleep that [`wait_for_tick`] goes on to do. `rest` is
-/// `Torch::resting`.
+/// `watchdog::Feeder::power_down`.
 ///
 /// Power-down stops TCA0 wherever it is, so it only happens with PB2 low. If
 /// the torch ever says it's resting with the boost converter on, this idles

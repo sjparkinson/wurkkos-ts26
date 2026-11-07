@@ -44,16 +44,13 @@ extern "C" fn main() -> ! {
     let mut torch = Torch::new(hw::temperature_calibration(), faults);
     let mut changes = Changes::new();
     let mut aux_changes = Changes::new();
+    // Beside the torch rather than in it, which costs 150 bytes less flash.
     let mut feeder = Feeder::new();
-    let mut fed = false;
 
     loop {
-        // Not straight after a feed: a `wdr` takes two or three WDT clocks to
-        // sync (DS40002204A section 19.3.6), and the datasheet doesn't say it
-        // gets there with the peripheral clock stopped. If it didn't, the
-        // watchdog would reset a resting torch. This costs an idle tick in
-        // three while resting.
-        hw::wait_for_tick(torch.resting() && !fed);
+        // Power-down or idle, by `Feeder::power_down`'s rule, which the
+        // simulator holds this loop to.
+        hw::wait_for_tick(feeder.power_down(torch.resting()));
         torch.tick(hw::switch_pressed(), hw::adc_result());
         if let Some(convert) = torch.convert() {
             hw::adc_start(convert);
@@ -65,8 +62,7 @@ extern "C" fn main() -> ! {
             hw::set_aux(aux);
         }
         // The only place the running torch feeds the watchdog.
-        fed = feeder.tick();
-        if fed {
+        if feeder.tick() {
             hw::feed_watchdog();
         }
     }

@@ -94,6 +94,7 @@ use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Example, Rig, Sample, Scene};
+use ts26::watchdog::Feeder;
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
@@ -453,10 +454,6 @@ fn run(
 /// minutes of a torch being clicked and held.
 const RANDOM_TICKS: usize = 20_000;
 
-/// Resting ticks in a row the firmware can stay in idle: the one after a
-/// watchdog feed, which `main` idles through so the `wdr` can sync.
-const REST_IDLE_TICKS: u32 = 1;
-
 /// Runs one of docs/ui.md's examples on the firmware and the library in step,
 /// then checks where the library ended up against the example.
 fn ui_example(sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
@@ -517,7 +514,7 @@ fn in_step(
     }
     let mut rig = Rig::new(power_on.faults());
     let mut was_resting = false;
-    let mut idled = 0;
+    let mut feeder = Feeder::new();
     for (tick, sample) in samples.enumerate() {
         let at = |e: String| format!("tick {tick}: {e}");
         sim.chip.world = World::from(sample.scene);
@@ -540,15 +537,20 @@ fn in_step(
             )));
         }
         was_resting = rig.torch.resting();
-        idled = if was_resting && !powered_down {
-            idled + 1
-        } else {
-            0
-        };
-        if idled > REST_IDLE_TICKS {
+        // `main`'s feeder, ticked at the end of each pass as it is there. The
+        // sleep that ended this pass was the firmware's answer to the state
+        // the pass left behind.
+        feeder.tick();
+        let power_down = feeder.power_down(was_resting);
+        if powered_down != power_down {
             return Err(at(format!(
-                "the library's been resting, but the firmware's gone {idled} ticks in a row \
-                 without powering down"
+                "the library says {}, but the firmware {}",
+                if power_down { "power down" } else { "idle" },
+                if powered_down {
+                    "powered down"
+                } else {
+                    "idled"
+                },
             )));
         }
     }
