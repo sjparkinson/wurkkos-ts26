@@ -19,8 +19,33 @@ const BAUD: u32 = 115_200;
 /// UPDI break needs.
 const BREAK_BAUD: u32 = 300;
 
+/// Silence has two causes that look the same from here, so it names both.
+const NOTHING_ECHOED: &str = "nothing echoed back. A serial UPDI adapter joins TX and RX, so \
+     every byte sent should come straight back. Either this adapter doesn't, or something's \
+     pulling the UPDI line down: the wrong pad, a short, or a damaged chip. Stop and check \
+     the wiring with a meter before trying again";
+
+/// What a line held low sounds like, when the adapter reports it at all.
+const LINE_HELD_LOW: &str = "every byte came back as 0, so something's pulling the UPDI line \
+     down: the wrong pad, a short, or a damaged chip. Stop and check the wiring with a meter \
+     before trying again";
+
 pub struct Port {
     file: File,
+}
+
+/// Compares what came back with what was sent. A byte sent as 0 proves nothing
+/// about the line, so only a send with something else in it can say it's low.
+fn check_echo(sent: &[u8], echo: &[u8]) -> io::Result<()> {
+    if echo == sent {
+        return Ok(());
+    }
+    if echo.iter().all(|&b| b == 0) {
+        return Err(io::Error::other(LINE_HELD_LOW));
+    }
+    Err(io::Error::other(
+        "the echo didn't match what was sent, so something else is on the line",
+    ))
 }
 
 impl Port {
@@ -71,18 +96,10 @@ impl Wire for Port {
         self.file.write_all(bytes)?;
         let mut echo = vec![0; bytes.len()];
         self.read_full(&mut echo).map_err(|e| match e.kind() {
-            io::ErrorKind::TimedOut => io::Error::other(
-                "nothing echoed back. A serial UPDI adapter joins TX and RX, so \
-                 every byte sent should come straight back; is this one?",
-            ),
+            io::ErrorKind::TimedOut => io::Error::other(NOTHING_ECHOED),
             _ => e,
         })?;
-        if echo != bytes {
-            return Err(io::Error::other(
-                "the echo didn't match what was sent, so something else is on the line",
-            ));
-        }
-        Ok(())
+        check_echo(bytes, &echo)
     }
 
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<()> {
@@ -96,5 +113,38 @@ impl Wire for Port {
         let mut echo = [0; 2];
         let _ = self.read_full(&mut echo);
         self.configure(BAUD)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_echo_passes() {
+        assert!(check_echo(&[0x55, 0xC0], &[0x55, 0xC0]).is_ok());
+        assert!(check_echo(&[0, 0], &[0, 0]).is_ok());
+    }
+
+    #[test]
+    fn an_echo_of_zeros_means_the_line_is_held_low() {
+        let err = check_echo(&[0x55, 0xC0], &[0, 0]).unwrap_err();
+        assert!(
+            err.to_string().contains("pulling the UPDI line down"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn any_other_echo_means_something_else_is_on_the_line() {
+        let err = check_echo(&[0x55, 0xC0], &[0x55, 0x00]).unwrap_err();
+        assert!(err.to_string().contains("something else"), "{err}");
+    }
+
+    #[test]
+    fn silence_keeps_its_old_words_and_names_a_pulled_down_line() {
+        assert!(NOTHING_ECHOED.starts_with("nothing echoed back"));
+        assert!(NOTHING_ECHOED.contains("adapter"));
+        assert!(NOTHING_ECHOED.contains("pulling the UPDI line down"));
     }
 }
