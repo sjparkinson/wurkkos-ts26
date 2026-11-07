@@ -10,7 +10,9 @@
 //! `NC` is N quick clicks. `NH` is N - 1 clicks then a hold (so `2H` is
 //! click, hold), for a second unless it says otherwise (`1H:500ms`).
 //! `wait:2s` leaves the switch alone. Every click or hold is followed by
-//! enough of a pause for it to count, so `1C 1C` is two single clicks.
+//! enough of a pause for it to count, so `1C 1C` is two single clicks,
+//! except a hold that's the script's last word: that one's never let go, so
+//! the script ends with the switch still down.
 //!
 //! Some words set the scene, taking no time. `cell:2.95V` is the cell from
 //! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to
@@ -410,11 +412,17 @@ pub struct Sample {
 
 /// The switch and the scene, one sample per tick, for a whole script.
 pub fn samples(actions: impl IntoIterator<Item = Action>) -> impl Iterator<Item = Sample> {
+    let mut actions = actions.into_iter().peekable();
+    let words = iter::from_fn(move || {
+        let action = actions.next()?;
+        Some((action, actions.peek().is_none()))
+    });
     let mut scene = Scene::NORMAL;
-    actions.into_iter().flat_map(move |action| {
+    words.flat_map(move |(action, last)| {
         let (quick, held, released) = match action {
             Action::Clicks(n) => (n, 0, SETTLE_TICKS),
-            Action::Hold { clicks, ticks } => (clicks, ticks, SETTLE_TICKS),
+            // The last word's hold is never let go.
+            Action::Hold { clicks, ticks } => (clicks, ticks, if last { 0 } else { SETTLE_TICKS }),
             Action::Wait(ticks) => (0, 0, ticks),
             Action::Cell(cell) => {
                 scene.cell = cell;
@@ -891,6 +899,24 @@ mod tests {
         assert_eq!(ticks("24ms"), Ok(2));
         assert_eq!(ticks("1s"), Ok(64));
         assert_eq!(ticks("0.25s"), Ok(16));
+    }
+
+    #[test]
+    fn a_script_that_ends_in_a_hold_ends_held() {
+        let played = |script: &'static [&'static str]| {
+            samples(parse(script.iter().copied()).map(Result::unwrap))
+        };
+        let held = |script| played(script).last().map(|sample| sample.pressed);
+        assert_eq!(held(&["1H"]), Some(true));
+        assert_eq!(held(&["2C", "1H:2s"]), Some(true));
+        assert_eq!(held(&["1H", "1C"]), Some(false));
+        assert_eq!(held(&["1H", "wait:1s"]), Some(false));
+        let ticks = |script| played(script).count();
+        assert_eq!(ticks(&["1H"]), usize::from(DEFAULT_HOLD_TICKS));
+        assert_eq!(
+            ticks(&["1H", "1H"]),
+            usize::from(2 * DEFAULT_HOLD_TICKS + SETTLE_TICKS)
+        );
     }
 
     #[test]

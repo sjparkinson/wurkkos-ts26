@@ -4,7 +4,7 @@ What every click and hold does. This is the spec. `src/ui.rs` implements it and 
 
 The notation is Anduril's. **1C** is one click, **2C** two quick clicks, **1H** press and hold, **2H** click then press and hold, and so on. A press becomes a hold after about 375 ms, and clicks count once the switch has been left alone for about 280 ms.
 
-Every row has an example: a script in that notation, starting from a torch that's just had its battery put in, and how the light should be after it (`off`, `on` or `level N`). A hold lasts a second unless it says otherwise (`1H:3s`), and `wait:1s` leaves the switch alone. `cargo test` runs the examples against the library, so a wrong one fails. Only Planned rows can leave it as `-`. The background table at the end is the exception, since it isn't clicks.
+Every row has an example: a script in that notation, starting from a torch that's just had its battery put in, and how the light should be after it (`off`, `on` or `level N`). A hold lasts a second unless it says otherwise (`1H:3s`), and `wait:1s` leaves the switch alone. A script that ends in a hold never lets go, so it shows the light while it's still held. `cargo test` runs the examples against the library, so a wrong one fails. Only Planned rows can leave it as `-`. The background table at the end is the exception, since it isn't clicks.
 
 ## Off
 
@@ -43,11 +43,10 @@ For pockets and bags.
 
 | Action | Does | Example | Status |
 |---|---|---|---|
-| 1H | The lowest level, for as long as you hold it | `4C 1H:2s` → off | Done |
+| 1H | The lowest level, for as long as you hold it | `4C 1H:2s` → level 13 | Done |
+| 1H, let go | Off again | `4C 1H:2s wait:1s` → off | Done |
 | 4C | Unlock, back to off | `4C 4C 1C` → level 52 | Done |
 | Anything else | Nothing | `4C 1C 2C 3C 2H:2s wait:1s` → off | Done |
-
-An example can only see the light once the script's over, so the 1H row shows it going out again. `lockout_lights_at_the_floor_only_while_held` in `src/torch.rs` checks it mid-hold.
 
 ## When something's wrong
 
@@ -60,7 +59,8 @@ These scripts have three more words. `cell:2.95V` is the cell's voltage from the
 | Low cell | Steps down | `cell:2.95V 2C wait:6s` → level 105 | Done |
 | Low cell, for long enough | Steps down, then off | `cell:2.95V 2C wait:60s` → off | Done |
 | Flat cell | Fades down the ramp, then off | `cell:2.80V 2C wait:10s` → off | Done |
-| Flat cell, 1C again | On again at the bottom, then off a second later | `cell:2.80V 2C wait:10s 1C wait:3s` → off | Done |
+| Flat cell, 1C again | On again at the very bottom | `cell:2.80V 2C wait:10s 1C` → level 1 | Done |
+| Flat cell, 1C again, a second later | Off again | `cell:2.80V 2C wait:10s 1C wait:1.5s` → off | Done |
 | Hot | Fades down, no further than level 50 | `heat:80C 2C wait:120s` → level 50 | Done |
 | Hot, at a level under 50 | Nothing | `heat:80C 1H:3s wait:120s` → level 13 | Done |
 | Hot, then cool | Back up to the level you asked for | `heat:80C 2C wait:120s heat:25C wait:120s` → level 120 | Done |

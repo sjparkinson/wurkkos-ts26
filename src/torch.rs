@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(torch.output(), Output::OFF);
     }
 
-    /// Lockout: 1H. A script can only see the light after the hold ends.
+    /// Lockout: 1H, to the tick it's let go.
     #[test]
     fn lockout_lights_at_the_floor_only_while_held() {
         let mut torch = Rig::default();
