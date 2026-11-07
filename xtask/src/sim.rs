@@ -88,6 +88,7 @@ use std::iter;
 use std::ops::Range;
 use std::thread;
 
+use ts26::limits::FAULT_CEILING;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::ui::Aux;
@@ -96,7 +97,7 @@ use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, RAM};
 use crate::simulate::{self, Sample};
-use crate::spec::{self, Example};
+use crate::spec::{self, Example, Expect};
 use crate::switching::RandomSwitching;
 use crate::updi::map;
 use crate::world::{CALIBRATION, FUSE_NAMES, Rig, World};
@@ -384,7 +385,14 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     startup_with_statics(&image, reset, &linked)
         .map_err(|e| format!("startup with statics: {e}"))?;
 
-    let examples = spec::examples(spec::UI_MD)?;
+    let mut examples = spec::examples(spec::UI_MD)?;
+    // docs/ui.md's `fault` is a bad fuse. This one's the firmware's CRC check
+    // failing, which otherwise never sees anything but a good image.
+    examples.push(Example {
+        row: "a flash that doesn't match its CRC".into(),
+        actions: simulate::parse(&["flash:corrupt", "2C"])?,
+        expect: Expect::Level(FAULT_CEILING),
+    });
     // Every example, then the random switching, each with and without
     // overflows landing mid-pass. Each is its own chip, so they run side by
     // side: the long ones take minutes of simulated time.
@@ -504,6 +512,16 @@ fn in_step(
     let mut samples = samples.into_iter().peekable();
     let power_on = samples.peek().map_or(World::NORMAL, |s| s.world);
     sim.chip.world = power_on;
+    if power_on.corrupt_flash {
+        // The checksum's high byte, which is never code, so the firmware
+        // still runs however big it gets.
+        let byte = sim
+            .chip
+            .flash
+            .get_mut(crc::CHECKSUM_AT)
+            .ok_or("can't corrupt flash: the image isn't padded to all of flash")?;
+        *byte ^= 0x01;
+    }
     sim.tick(false).map_err(|e| format!("hw::init: {e}"))?;
     sim.chip
         .clocked_as_modelled()

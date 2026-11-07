@@ -37,6 +37,9 @@ pub struct World {
     pub kelvin: u16,
     /// The fuse bytes.
     pub fuses: [u8; FUSE_BYTES],
+    /// Flash has a byte that doesn't match its CRC, as a half-finished flash
+    /// would leave it. The firmware checks once, so only the first tick's counts.
+    pub corrupt_flash: bool,
 }
 
 impl World {
@@ -45,6 +48,7 @@ impl World {
         cell: 380,
         kelvin: 298,
         fuses: FACTORY_FUSES,
+        corrupt_flash: false,
     };
 
     /// The raw reading a conversion on `channel` gives.
@@ -84,6 +88,7 @@ impl World {
         };
         Faults {
             fuses: !fuses.ok(),
+            flash: self.corrupt_flash,
             ..Faults::NONE
         }
     }

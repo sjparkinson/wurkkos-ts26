@@ -17,7 +17,8 @@
 //! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to start).
 //! `fault` starts a torch whose power-on checks failed, which on the simulated
 //! chip is a fuse that fails the read-back, so it has to come before anything
-//! that takes time.
+//! that takes time. So does `flash:corrupt`, a byte of flash that doesn't match
+//! its CRC.
 //!
 //! With no script it runs live in the terminal, in real time, with the keys
 //! in `HELP`. Terminals don't say when a key goes up, which a hold needs, so
@@ -58,6 +59,8 @@ pub enum Action {
     Cell(u16),
     /// The temperature from now on, in kelvin.
     Heat(u16),
+    /// A flash byte that doesn't match the CRC. Power-on only.
+    CorruptFlash,
     /// The power-on checks fail. Power-on only.
     Fault,
 }
@@ -76,6 +79,9 @@ impl FromStr for Action {
     fn from_str(word: &str) -> Result<Self, String> {
         if word == "fault" {
             return Ok(Self::Fault);
+        }
+        if word == "flash:corrupt" {
+            return Ok(Self::CorruptFlash);
         }
         if let Some(volts) = word.strip_prefix("cell:") {
             return centivolts(volts).map(Self::Cell);
@@ -130,7 +136,7 @@ pub fn parse(words: &[&str]) -> Result<Vec<Action>, String> {
         .iter()
         .map(|word| {
             let action: Action = word.parse().map_err(|e| format!("`{word}`: {e}"))?;
-            if action == Action::Fault && started {
+            if matches!(action, Action::Fault | Action::CorruptFlash) && started {
                 return Err(format!(
                     "`{word}`: the firmware only checks that at power-on, so it goes \
                      before anything that takes time"
@@ -207,6 +213,10 @@ pub fn samples(actions: &[Action]) -> Vec<Sample> {
             }
             Action::Heat(kelvin) => {
                 world.kelvin = kelvin;
+                continue;
+            }
+            Action::CorruptFlash => {
+                world.corrupt_flash = true;
                 continue;
             }
             Action::Fault => {
@@ -588,6 +598,14 @@ mod tests {
         assert!(parse(&["cell:3.1V", "fault", "1C"]).is_ok());
         let err = parse(&["wait:1s", "fault"]).unwrap_err();
         assert!(err.contains("power-on"), "{err}");
+    }
+
+    #[test]
+    fn corrupt_flash_goes_first_and_caps_the_light() {
+        assert_eq!(script("flash:corrupt 2C").level, 50);
+        let err = parse(&["wait:1s", "flash:corrupt"]).unwrap_err();
+        assert!(err.contains("power-on"), "{err}");
+        assert!("flash:fine".parse::<Action>().is_err());
     }
 
     #[test]
