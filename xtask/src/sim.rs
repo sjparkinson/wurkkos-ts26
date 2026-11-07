@@ -79,7 +79,8 @@
 //! 2. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
 //! 3. Twenty thousand ticks of random clicks and holds.
 //! 4. Both of those again with an overflow landing on every instruction the
-//!    main loop reaches (`Sim::land`).
+//!    main loop reaches (`Sim::land`), each as far as the first run kept
+//!    reaching new code, and a little past (`both_ways`).
 //!
 //! The last three drive `ts26::torch` alongside the firmware and check the
 //! pins show the library's output on every tick. `probe` separately runs
@@ -322,6 +323,9 @@ pub struct Report {
     /// Handlers that landed with a TCA0 16-bit access half done. The firmware
     /// holds interrupts off around those, so this should stay at 0.
     pub mid_access: u32,
+    /// The last tick the main loop reached an instruction for the first time
+    /// where `Sim::land` could put an overflow.
+    last_new: u32,
 }
 
 impl Report {
@@ -340,6 +344,7 @@ impl Report {
         self.handler_instructions = self.handler_instructions.max(sim.longest_handler);
         self.landed += sim.overflows_landed;
         self.mid_access += sim.mid_access;
+        self.last_new = self.last_new.max(sim.last_new);
     }
 }
 
@@ -395,15 +400,11 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     // Every example, then the random switching, each with and without
     // overflows landing mid-pass. Each is its own chip, so they run side by
     // side: the long ones take minutes of simulated time.
-    let runs = examples
-        .iter()
-        .map(Some)
-        .chain([None])
-        .flat_map(|example| [(example, false), (example, true)]);
+    let runs = examples.iter().map(Some).chain([None]);
     let power_on = &power_on;
     let reports: Vec<Result<Report, String>> = thread::scope(|scope| {
         let runs: Vec<_> = runs
-            .map(|(example, landing)| scope.spawn(move || run(power_on, example, landing)))
+            .map(|example| scope.spawn(move || both_ways(power_on, example)))
             .collect();
         runs.into_iter()
             .map(|run| run.join().unwrap_or_else(|_| Err("a run panicked".into())))
@@ -427,17 +428,38 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     Ok(report)
 }
 
+/// Ticks a run with overflows landing goes on for after the last tick the run
+/// without them reached new code, so whatever a late landing broke has time
+/// to show.
+const LANDING_MARGIN: u32 = 2 * TICKS_PER_SECOND as u32;
+
+/// An example, or the random switching with `None`, run as it is and then
+/// with overflows landing mid-pass. The second only lands on the first
+/// time each instruction's reached, so once the first run's reached all it
+/// will, the second has nothing left to land on, and the rest of it would
+/// repeat the first: it stops `LANDING_MARGIN` after.
+fn both_ways(
+    power_on: &impl Fn() -> Result<Sim, String>,
+    example: Option<&Example>,
+) -> Result<Report, String> {
+    let mut report = run(power_on, example, Landing::Watch)?;
+    let until = report.last_new + LANDING_MARGIN;
+    report.merge(&run(power_on, example, Landing::Until(until))?);
+    Ok(report)
+}
+
 /// One run on a fresh chip: an example from docs/ui.md, or the random switching
-/// with `None`. `landing` puts an overflow on every instruction it reaches
-/// (`Sim::land`), which is the race between the delta-sigma handler and the
-/// main loop.
+/// with `None`. `Landing::Until` puts an overflow on every instruction it
+/// reaches (`Sim::land`), which is the race between the delta-sigma handler
+/// and the main loop.
 fn run(
     power_on: &impl Fn() -> Result<Sim, String>,
     example: Option<&Example>,
-    landing: bool,
+    landing: Landing,
 ) -> Result<Report, String> {
     let mut sim = power_on()?;
-    sim.landings = landing.then(|| vec![false; FLASH_SIZE / 2]);
+    sim.landing = landing;
+    let landing = matches!(landing, Landing::Until(_));
     let mut report = Report::default();
     let result = match example {
         Some(example) => {
@@ -459,7 +481,11 @@ const RANDOM_TICKS: usize = 20_000;
 /// Runs one of docs/ui.md's examples on the firmware and the library in step,
 /// then checks where the library ended up against the example.
 fn ui_example(sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
-    let level = in_step(sim, testing::samples(example.actions()), report)?;
+    // Cut short, it never gets to the end. The level is the library's alone,
+    // so the run that did get there has checked it.
+    let Some(level) = in_step(sim, testing::samples(example.actions()), report)? else {
+        return Ok(());
+    };
     if example.expect.holds(level) {
         Ok(())
     } else {
@@ -486,12 +512,13 @@ fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
 
 /// Feeds the same switch samples to the firmware, from just after `main`, and
 /// to `ts26::torch`, and checks the pins show the library's output on every
-/// tick. Returns the level it ends at.
+/// tick. Returns the level it ends at, or `None` if `Landing::Until` cut it
+/// short.
 fn in_step(
     mut sim: Sim,
     samples: impl IntoIterator<Item = Sample>,
     report: &mut Report,
-) -> Result<u8, String> {
+) -> Result<Option<u8>, String> {
     // The firmware reads the fuses before its first tick, so the world it
     // powers up in is the first sample's.
     let mut samples = samples.into_iter().peekable();
@@ -517,14 +544,24 @@ fn in_step(
     let mut rig = Rig::new(power_on.faults());
     let mut was_resting = false;
     let mut feeder = Feeder::new();
+    let mut finished = true;
     for (tick, sample) in samples.enumerate() {
         let at = |e: String| format!("tick {tick}: {e}");
+        sim.tick_no = tick as u32;
+        let landing = match sim.landing {
+            Landing::Until(until) if sim.tick_no > until => {
+                finished = false;
+                break;
+            }
+            Landing::Until(_) => true,
+            Landing::Off | Landing::Watch => false,
+        };
         sim.chip.world = World::from(sample.scene);
         let power_downs = sim.chip.power_downs;
         let took = sim.tick(sample.pressed).map_err(at)?;
         // An overflow landed on purpose runs the handler on top of the pass,
         // which a real tick never sees that many of.
-        if sim.landings.is_none() {
+        if !landing {
             report.loop_instructions = report.loop_instructions.max(took);
         }
         let powered_down = sim.chip.power_downs > power_downs;
@@ -561,7 +598,7 @@ fn in_step(
         }
     }
     report.take(&sim);
-    Ok(rig.level())
+    Ok(finished.then(|| rig.level()))
 }
 
 /// What src/bin/link_probe.rs's `main` leaves in `LINK_PROBE_COPY`: its
@@ -750,13 +787,30 @@ struct Sim {
     handler_steps: u64,
     /// The most any TCA0 OVF handler has taken.
     longest_handler: u64,
-    /// Set to land overflows on purpose: a bit per word of flash, for the
-    /// instructions that have had one.
-    landings: Option<Vec<bool>>,
+    /// What `land` does.
+    landing: Landing,
+    /// A bit per word of flash, for the instructions `land` has seen.
+    reached: Vec<bool>,
+    /// The tick `in_step` is on.
+    tick_no: u32,
+    /// The last tick `land` saw an instruction for the first time.
+    last_new: u32,
     /// Overflows landed so far.
     overflows_landed: u32,
     /// Handlers so far that landed with a TCA0 16-bit access half done.
     mid_access: u32,
+}
+
+/// What `Sim::land` does the first time the main loop reaches an instruction
+/// where an overflow could land.
+#[derive(Clone, Copy)]
+enum Landing {
+    /// Nothing.
+    Off,
+    /// Notes the tick, in `Sim::last_new`.
+    Watch,
+    /// Lands an overflow there, until `in_step` stops after this tick.
+    Until(u32),
 }
 
 impl Sim {
@@ -779,7 +833,10 @@ impl Sim {
             landed: None,
             handler_steps: 0,
             longest_handler: 0,
-            landings: None,
+            landing: Landing::Off,
+            reached: vec![false; FLASH_SIZE / 2],
+            tick_no: 0,
+            last_new: 0,
             overflows_landed: 0,
             mid_access: 0,
         })
@@ -795,21 +852,27 @@ impl Sim {
     /// carry in CMP0BUF before BOTTOM takes it, which the real handler, once a
     /// cycle, can't. So neither the sum in `Chip::shows` nor the count of
     /// zero-duty cycles can hold across one, and both start again.
+    ///
+    /// `Landing::Watch` only notes when each instruction's first reached, so
+    /// `both_ways` knows how far a landing run has new code to land on.
     fn land(&mut self) {
-        let Some(visited) = &mut self.landings else {
+        if let Landing::Off = self.landing {
             return;
-        };
+        }
         let chip = &mut self.chip;
         let enabled = chip.enabled & 1 << VECTOR_TCA0_OVF != 0;
         if self.cpu.handling.is_some() || self.cpu.asleep || !enabled || chip.tca.ovf {
             return;
         }
-        if let Some(seen @ false) = visited.get_mut(self.cpu.pc as usize) {
+        if let Some(seen @ false) = self.reached.get_mut(self.cpu.pc as usize) {
             *seen = true;
-            chip.tca.ovf = true;
-            chip.tca.settled = 0;
-            chip.tca.zero_run = 0;
-            self.overflows_landed += 1;
+            self.last_new = self.tick_no;
+            if let Landing::Until(_) = self.landing {
+                chip.tca.ovf = true;
+                chip.tca.settled = 0;
+                chip.tca.zero_run = 0;
+                self.overflows_landed += 1;
+            }
         }
     }
 
