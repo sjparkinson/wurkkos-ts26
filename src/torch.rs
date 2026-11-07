@@ -103,118 +103,57 @@ mod tests {
     use crate::TICKS_PER_SECOND;
     use crate::button::RELEASE_TICKS;
     use crate::limits::FAULT_CEILING;
-    use crate::testing::{
-        Adc, CALIBRATION, Sample, Scene, parse, samples, temperature_reading, voltage_reading,
-    };
+    use crate::testing::{Rig, examples, temperature_reading, voltage_reading};
     use crate::thermal;
     use crate::ui::{CEIL, DEFAULT_LEVEL, FLOOR};
-    use core::ops::Deref;
 
     const UI_MD: &str = include_str!("../docs/ui.md");
-
-    /// A torch wired to a fake ADC, the way `src/main.rs` wires it to the real
-    /// one: a good cell at room temperature unless a test says otherwise.
-    struct Bench {
-        torch: Torch,
-        adc: Adc,
-    }
-
-    impl Bench {
-        fn new() -> Self {
-            Self::with(Faults::NONE)
-        }
-
-        fn with(faults: Faults) -> Self {
-            Self {
-                torch: Torch::new(CALIBRATION, faults),
-                adc: Adc::new(),
-            }
-        }
-
-        fn tick(&mut self, pressed: bool) -> Option<Event> {
-            let event = self.torch.tick(pressed, self.adc.result());
-            self.adc.start(self.torch.convert());
-            event
-        }
-
-        /// A tick with the ADC reading what `scene` says, not `adc`'s fields.
-        fn tick_in(&mut self, pressed: bool, scene: &Scene) {
-            self.torch.tick(pressed, self.adc.result());
-            let convert = self.torch.convert();
-            self.adc
-                .start_with(convert, |channel| scene.reading(channel));
-        }
-    }
-
-    impl Deref for Bench {
-        type Target = Torch;
-
-        fn deref(&self) -> &Torch {
-            &self.torch
-        }
-    }
 
     fn dim() -> Output {
         ramp::output(DEFAULT_LEVEL)
     }
 
-    fn run(torch: &mut Bench, pressed: bool, ticks: u16) {
+    fn run(torch: &mut Rig, pressed: bool, ticks: u16) {
         for _ in 0..ticks {
             torch.tick(pressed);
         }
     }
 
-    fn clicks(torch: &mut Bench, n: u8) {
+    fn clicks(torch: &mut Rig, n: u8) {
         for _ in 0..n {
             run(torch, true, 4);
             run(torch, false, 4);
         }
     }
 
-    fn click(torch: &mut Bench) {
+    fn click(torch: &mut Rig) {
         clicks(torch, 1);
         run(torch, false, RELEASE_TICKS + 1);
     }
 
-    /// Plays a docs/ui.md script the way `cargo xtask simulate` does, with
-    /// the same reader, so these rows hold there too, and returns the level
-    /// it ends at.
-    fn play(script: &str) -> u8 {
-        let actions = parse(script.split_whitespace()).map(|a| a.unwrap_or_else(|e| panic!("{e}")));
-        let mut samples = samples(actions).peekable();
-        let power_on = samples.peek().map_or(Scene::NORMAL, |s| s.scene);
-        let mut torch = Bench::with(power_on.faults());
-        for Sample { pressed, scene } in samples {
-            torch.tick_in(pressed, &scene);
-        }
-        torch.level()
-    }
-
+    /// Every row's example, played the way `cargo xtask simulate` and the
+    /// firmware's run in `cargo xtask hex` play it.
     #[test]
     fn every_example_in_docs_ui_md_holds() {
-        let mut checked = 0;
-        for row in UI_MD.lines().filter(|line| line.starts_with('|')) {
-            let Some(example) = row.split('|').find(|cell| cell.contains('→')) else {
-                continue;
-            };
-            let (script, expect) = example.split_once('→').unwrap();
-            let level = play(script.trim().trim_matches('`'));
-            match expect.trim() {
-                "off" => assert_eq!(level, 0, "{row}"),
-                "on" => assert!(level > 0, "{row}"),
-                other => {
-                    let want = other.strip_prefix("level ").unwrap();
-                    assert_eq!(level, want.parse::<u8>().unwrap(), "{row}");
-                }
-            }
-            checked += 1;
+        let mut found = false;
+        for example in examples(UI_MD) {
+            let example = example.unwrap_or_else(|e| panic!("docs/ui.md:{}: {e}", e.line));
+            let level = Rig::play(example.actions()).level();
+            assert!(
+                example.expect.holds(level),
+                "docs/ui.md:{}: {}: expected {:?}, but it ends at level {level}",
+                example.line,
+                example.row,
+                example.expect
+            );
+            found = true;
         }
-        assert!(checked >= 22, "only found {checked} examples");
+        assert!(found, "docs/ui.md has no examples");
     }
 
     #[test]
     fn starts_off() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         assert_eq!(torch.tick(false), None);
         assert_eq!(torch.level(), 0);
         assert_eq!(torch.output(), Output::OFF);
@@ -222,7 +161,7 @@ mod tests {
 
     #[test]
     fn a_click_turns_it_on_once_the_click_counts() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         run(&mut torch, true, 4);
         run(&mut torch, false, RELEASE_TICKS);
         assert_eq!(torch.output(), Output::OFF);
@@ -232,7 +171,7 @@ mod tests {
 
     #[test]
     fn a_second_click_turns_it_off() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         click(&mut torch);
         click(&mut torch);
         assert_eq!(torch.output(), Output::OFF);
@@ -241,7 +180,7 @@ mod tests {
     /// Lockout: 1H. A script can only see the light after the hold ends.
     #[test]
     fn lockout_lights_at_the_floor_only_while_held() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         clicks(&mut torch, 4);
         run(&mut torch, false, RELEASE_TICKS + 1);
         run(&mut torch, true, 2 * TICKS_PER_SECOND);
@@ -252,7 +191,7 @@ mod tests {
 
     #[test]
     fn the_ramp_never_asks_for_more_than_the_ceiling() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         click(&mut torch);
         run(&mut torch, true, 10 * TICKS_PER_SECOND);
         assert_eq!(torch.level(), CEIL);
@@ -261,7 +200,7 @@ mod tests {
 
     #[test]
     fn rests_only_with_the_light_off_and_no_click_counting() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         assert!(torch.resting());
         run(&mut torch, true, 4);
         assert!(!torch.resting(), "pressed");
@@ -275,7 +214,7 @@ mod tests {
 
     #[test]
     fn a_locked_torch_rests() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         clicks(&mut torch, 4);
         run(&mut torch, false, RELEASE_TICKS + 1);
         assert!(torch.resting());
@@ -283,7 +222,7 @@ mod tests {
 
     #[test]
     fn the_aux_leds_follow_the_ui() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         assert_eq!(torch.aux(), Aux::Blue);
         click(&mut torch);
         assert_eq!(torch.aux(), Aux::Off);
@@ -291,7 +230,7 @@ mod tests {
 
     #[test]
     fn a_flat_cell_turns_the_ui_off_and_it_keeps_the_level() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         click(&mut torch);
         torch.adc.voltage = voltage_reading(280);
         run(&mut torch, false, 10 * TICKS_PER_SECOND);
@@ -306,7 +245,7 @@ mod tests {
 
     #[test]
     fn the_pass_that_turns_the_light_off_has_already_rested() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         click(&mut torch);
         torch.adc.voltage = voltage_reading(280);
         while torch.level() != 0 {
@@ -322,7 +261,7 @@ mod tests {
 
     #[test]
     fn heat_lowers_the_light_and_leaves_the_ui_where_it_was() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         clicks(&mut torch, 2);
         run(&mut torch, false, RELEASE_TICKS + 1);
         torch.adc.temperature = temperature_reading(thermal::celsius(80));
@@ -348,7 +287,7 @@ mod tests {
                 ..Faults::NONE
             },
         ] {
-            let mut torch = Bench::with(faults);
+            let mut torch = Rig::new(faults);
             clicks(&mut torch, 2);
             run(&mut torch, false, RELEASE_TICKS + 1);
             assert_eq!(torch.level(), FAULT_CEILING);
@@ -358,7 +297,7 @@ mod tests {
 
     #[test]
     fn a_resting_torch_reads_nothing_and_a_press_starts_the_adc() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         run(&mut torch, false, 64);
         assert!(torch.resting());
         assert_eq!(torch.convert(), None);
@@ -369,7 +308,7 @@ mod tests {
 
     #[test]
     fn still_turns_off_after_hours_on() {
-        let mut torch = Bench::new();
+        let mut torch = Rig::default();
         click(&mut torch);
         // Past where button::Clicks' tick count saturates.
         for _ in 0..4 {

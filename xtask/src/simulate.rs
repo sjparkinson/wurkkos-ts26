@@ -24,35 +24,17 @@ use std::time::{Duration, Instant};
 use ts26::TICKS_PER_SECOND;
 use ts26::button::{Event, HOLD_TICKS};
 use ts26::ramp::{self, LEVELS};
-use ts26::testing::{self, clicks};
+use ts26::testing::{self, Rig, Scene, clicks};
 
 pub use ts26::testing::Action;
 
 use crate::terminal::{CTRL_C, Terminal};
-use crate::world::{Rig, World};
 
 /// Reads a script, word by word.
 pub fn parse(words: &[&str]) -> Result<Vec<Action>, String> {
     testing::parse(words.iter().copied())
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())
-}
-
-/// One tick of a script: the switch, and what the torch sees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Sample {
-    pub pressed: bool,
-    pub world: World,
-}
-
-/// The switch and the world, one sample per tick, for a whole script.
-pub fn samples(actions: &[Action]) -> Vec<Sample> {
-    testing::samples(actions.iter().copied())
-        .map(|sample| Sample {
-            pressed: sample.pressed,
-            world: World::from(sample.scene),
-        })
-        .collect()
 }
 
 /// What a script did to a fresh torch.
@@ -66,18 +48,17 @@ pub struct Run {
 
 /// Runs a script on a fresh torch.
 pub fn run(actions: &[Action]) -> Run {
-    let samples = samples(actions);
-    let mut rig = Rig::new(&samples.first().map_or(World::NORMAL, |s| s.world));
     let mut log = Log::default();
     let mut lines = Vec::new();
-    for (now, sample) in (0..).zip(&samples) {
-        let event = rig.tick(sample.pressed, &sample.world);
-        lines.extend(log.note(now, event, rig.level()));
-    }
+    let mut ticks = 0;
+    let rig = Rig::play_with(actions.iter().copied(), |rig, event| {
+        lines.extend(log.note(ticks, event, rig.level()));
+        ticks += 1;
+    });
     lines.extend(log.settle());
     Run {
         lines,
-        ticks: samples.len() as u32,
+        ticks,
         level: rig.level(),
     }
 }
@@ -326,7 +307,7 @@ impl Live {
     /// One 64 Hz tick, and a log line if it did something.
     fn tick(&mut self) -> Option<String> {
         self.pressed = self.queue.pop_front().unwrap_or(self.held);
-        let event = self.torch.tick(self.pressed, &World::NORMAL);
+        let event = self.torch.tick_in(self.pressed, &Scene::NORMAL);
         let lines = self.log.note(self.now, event, self.torch.level());
         self.now += 1;
         (!lines.is_empty()).then(|| lines.join("\n"))
@@ -347,7 +328,7 @@ impl Live {
             " {:>#7}  dsm {:>5}  switch {switch:<4}  aux {:?}",
             Level(level),
             output.dsm,
-            self.torch.torch.aux()
+            self.torch.aux()
         );
         let text: String = text.chars().take(width.saturating_sub(BAR + 1)).collect();
         format!(
@@ -396,14 +377,6 @@ mod tests {
         assert_eq!(script("flash:corrupt 2C").level, 50);
         let err = parse(&["wait:1s", "flash:corrupt"]).unwrap_err();
         assert!(err.contains("power-on"), "{err}");
-    }
-
-    #[test]
-    fn a_change_of_scene_takes_no_time_and_lasts() {
-        let samples = samples(&parse(&["wait:1s", "cell:2.95V", "wait:1s"]).unwrap());
-        assert_eq!(samples.len(), 128);
-        assert_eq!(samples[63].world.cell, 380);
-        assert_eq!(samples[64].world.cell, 295);
     }
 
     #[test]

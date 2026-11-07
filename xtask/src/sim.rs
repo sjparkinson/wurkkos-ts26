@@ -92,16 +92,16 @@ use std::thread;
 use ts26::limits::FAULT_CEILING;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
+use ts26::testing::{self, Example, Expect, Rig, Row, Sample, Scene};
 use ts26::ui::Aux;
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, RAM};
-use crate::simulate::{self, Sample};
-use crate::spec::{self, Example, Expect};
+use crate::spec;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
-use crate::world::{CALIBRATION, FUSE_NAMES, Rig, World};
+use crate::world::{CALIBRATION, FUSE_NAMES, World};
 
 /// The registers the chip models, as data-space addresses, and their bits.
 /// A second copy of some of src/regs.rs, kept here so the model doesn't move
@@ -390,8 +390,12 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     // docs/ui.md's `fault` is a bad fuse. This one's the firmware's CRC check
     // failing, which otherwise never sees anything but a good image.
     examples.push(Example {
-        row: "a flash that doesn't match its CRC".into(),
-        actions: simulate::parse(&["flash:corrupt", "2C"])?,
+        line: 0,
+        row: Row {
+            section: "sim.rs",
+            action: "a flash that doesn't match its CRC",
+        },
+        script: "flash:corrupt 2C",
         expect: Expect::Level(FAULT_CEILING),
     });
     // Every example, then the random switching, each with and without
@@ -465,8 +469,7 @@ const REST_IDLE_TICKS: u32 = 1;
 /// Runs one of docs/ui.md's examples on the firmware and the library in step,
 /// then checks where the library ended up against the example.
 fn ui_example(sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
-    let samples = simulate::samples(&example.actions);
-    let level = in_step(sim, samples, report)?;
+    let level = in_step(sim, testing::samples(example.actions()), report)?;
     if example.expect.holds(level) {
         Ok(())
     } else {
@@ -486,7 +489,7 @@ fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
         .take(RANDOM_TICKS)
         .map(|pressed| Sample {
             pressed,
-            world: World::NORMAL,
+            scene: Scene::NORMAL,
         });
     in_step(sim, samples, report).map(drop)
 }
@@ -511,9 +514,9 @@ fn in_step(
     // The firmware reads the fuses before its first tick, so the world it
     // powers up in is the first sample's.
     let mut samples = samples.into_iter().peekable();
-    let power_on = samples.peek().map_or(World::NORMAL, |s| s.world);
+    let power_on = World::from(samples.peek().map_or(Scene::NORMAL, |s| s.scene));
     sim.chip.world = power_on;
-    if power_on.corrupt_flash {
+    if power_on.scene.corrupt_flash {
         // The checksum's high byte, which is never code, so the firmware
         // still runs however big it gets.
         let byte = sim
@@ -530,12 +533,12 @@ fn in_step(
     if sim.chip.wdt_open() == 0 {
         return Err("hw::start_watchdog never turned the watchdog on".into());
     }
-    let mut rig = Rig::new(&power_on);
+    let mut rig = Rig::new(power_on.faults());
     let mut was_resting = false;
     let mut idled = 0;
     for (tick, sample) in samples.enumerate() {
         let at = |e: String| format!("tick {tick}: {e}");
-        sim.chip.world = sample.world;
+        sim.chip.world = World::from(sample.scene);
         let power_downs = sim.chip.power_downs;
         let took = sim.tick(sample.pressed).map_err(at)?;
         report.loop_instructions = report.loop_instructions.max(took);
@@ -545,7 +548,7 @@ fn in_step(
         if powered_down && was_resting {
             report.off_instructions = report.off_instructions.max(took);
         }
-        rig.tick(sample.pressed, &sample.world);
+        rig.tick_in(sample.pressed, &sample.scene);
         sim.chip.shows(rig.torch.output()).map_err(at)?;
         let want = aux_pins(rig.torch.aux());
         if sim.chip.aux() != want {
@@ -2501,7 +2504,7 @@ mod tests {
     #[test]
     fn fuses_read_back_and_never_take_a_write() {
         let mut chip = Chip::new(Vec::new());
-        let osccfg = map::FUSES + 2;
+        let osccfg = ts26::regs::addr::FUSE_OSCCFG as u16;
         assert_eq!(chip.read(osccfg), Ok(0x02));
         assert!(
             chip.write(osccfg, 0x01)

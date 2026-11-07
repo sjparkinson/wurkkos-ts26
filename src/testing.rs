@@ -1,6 +1,6 @@
 //! Test doubles shared by the library's own tests and xtask's simulators, so
-//! there's one fake ADC, one way of turning a voltage or a temperature into a
-//! raw reading, and one reader of docs/ui.md's scripts.
+//! there's one fake ADC, one torch wired to it, one way of turning a voltage
+//! or a temperature into a raw reading, and one reader of docs/ui.md.
 //!
 //! The firmware never sees it.
 //!
@@ -17,18 +17,36 @@
 //! start). `fault` starts a torch whose power-on checks failed, so it has to
 //! come before anything that takes time. So does `flash:corrupt`, a byte of
 //! flash that doesn't match its CRC.
+//!
+//! # docs/ui.md
+//!
+//! Every table with an Action column needs an Example column, and every row
+//! in it an example unless its Status is Planned: a script, then how the
+//! light should be on its last tick, starting from a torch that's just had
+//! its battery put in.
+//!
+//! ```text
+//! | Action | Does | Example         | Status |
+//! |--------|------|-----------------|--------|
+//! | 1C     | On   | `1C` → level 50 | Done   |
+//! ```
+//!
+//! [`examples`] reads them. `cargo test` plays each on [`Rig`], and
+//! `cargo xtask hex` plays each on the firmware too.
 
 use core::fmt;
 use core::iter;
-use core::str::FromStr;
+use core::ops::Deref;
+use core::str::{FromStr, Lines};
 
 use crate::TICKS_PER_SECOND;
 use crate::battery;
-use crate::button::{HOLD_TICKS, RELEASE_TICKS};
+use crate::button::{Event, HOLD_TICKS, RELEASE_TICKS};
 use crate::selftest::Faults;
 use crate::sensors::{Channel, Convert};
 use crate::temp::Calibration;
 use crate::thermal;
+use crate::torch::Torch;
 
 /// The most four accumulated 10-bit conversions can read.
 const FULL_SCALE: u16 = 4 * 1023;
@@ -432,9 +450,281 @@ fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
     iter::repeat_n(pressed, ticks.into())
 }
 
+/// The library's torch wired to an [`Adc`], the way `src/main.rs` wires it to
+/// the real one: the result of last tick's conversion in, this tick's
+/// conversion out.
+#[derive(Clone, Debug)]
+pub struct Rig {
+    pub torch: Torch,
+    /// What [`Rig::tick`] reads. [`Rig::tick_in`] reads a scene instead.
+    pub adc: Adc,
+}
+
+impl Default for Rig {
+    /// A torch whose power-on checks passed, with a good cell at room
+    /// temperature.
+    fn default() -> Self {
+        Self::new(Faults::NONE)
+    }
+}
+
+impl Rig {
+    /// A torch that's just had its cell put in, `faults` being what its
+    /// power-on checks found.
+    pub const fn new(faults: Faults) -> Self {
+        Self {
+            torch: Torch::new(CALIBRATION, faults),
+            adc: Adc::new(),
+        }
+    }
+
+    /// One tick, the ADC reading `adc`'s `voltage` and `temperature`.
+    pub fn tick(&mut self, pressed: bool) -> Option<Event> {
+        let event = self.torch.tick(pressed, self.adc.result());
+        self.adc.start(self.torch.convert());
+        event
+    }
+
+    /// One tick, the ADC reading what `scene` says.
+    pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
+        let event = self.torch.tick(pressed, self.adc.result());
+        self.adc
+            .start_with(self.torch.convert(), |channel| scene.reading(channel));
+        event
+    }
+
+    /// Plays a script on a fresh torch, whose power-on checks find what the
+    /// first tick's scene says.
+    pub fn play(actions: impl IntoIterator<Item = Action>) -> Self {
+        Self::play_with(actions, |_, _| {})
+    }
+
+    /// [`Rig::play`], calling `each` after every tick with the click or hold
+    /// it finished.
+    pub fn play_with(
+        actions: impl IntoIterator<Item = Action>,
+        mut each: impl FnMut(&Self, Option<Event>),
+    ) -> Self {
+        let mut samples = samples(actions).peekable();
+        let power_on = samples.peek().map_or(Scene::NORMAL, |s| s.scene);
+        let mut rig = Self::new(power_on.faults());
+        for Sample { pressed, scene } in samples {
+            let event = rig.tick_in(pressed, &scene);
+            each(&rig, event);
+        }
+        rig
+    }
+}
+
+impl Deref for Rig {
+    type Target = Torch;
+
+    fn deref(&self) -> &Torch {
+        &self.torch
+    }
+}
+
+/// How the light should be at the end of an example.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Expect {
+    Off,
+    /// At any level.
+    On,
+    Level(u8),
+}
+
+impl Expect {
+    pub fn holds(self, level: u8) -> bool {
+        match self {
+            Self::Off => level == 0,
+            Self::On => level > 0,
+            Self::Level(want) => level == want,
+        }
+    }
+}
+
+impl FromStr for Expect {
+    type Err = ();
+
+    /// `off`, `on` or `level 50`.
+    fn from_str(text: &str) -> Result<Self, ()> {
+        match text {
+            "off" => Ok(Self::Off),
+            "on" => Ok(Self::On),
+            _ => {
+                let level = text.strip_prefix("level ").ok_or(())?;
+                level.parse().map(Self::Level).map_err(drop)
+            }
+        }
+    }
+}
+
+/// Which row of docs/ui.md: its section and its Action (or When) cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row<'a> {
+    pub section: &'a str,
+    pub action: &'a str,
+}
+
+impl fmt::Display for Row<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.section, self.action)
+    }
+}
+
+/// A row's example: a script and how the light should be on its last tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Example<'a> {
+    /// The line it's on, counting from 1.
+    pub line: usize,
+    pub row: Row<'a>,
+    /// The script, which [`examples`] has already read once.
+    pub script: &'a str,
+    pub expect: Expect,
+}
+
+impl<'a> Example<'a> {
+    pub fn actions(&self) -> impl Iterator<Item = Action> + use<'a> {
+        parse(self.script.split_whitespace())
+            .map(|action| action.expect("examples read it when it found the row"))
+    }
+}
+
+/// A line of docs/ui.md that isn't what [`examples`] expects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpecError<'a> {
+    /// The line, counting from 1.
+    pub line: usize,
+    pub problem: Problem<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Problem<'a> {
+    /// A table with an Action column and no Example column.
+    NoExampleColumn,
+    /// A row that isn't Planned with no example.
+    NoExample(Row<'a>),
+    /// An example that isn't `` `script` → off ``, `on` or `level N`.
+    Shape(Row<'a>, &'a str),
+    /// A script with a word it can't read.
+    Script(Row<'a>, ScriptError<'a>),
+}
+
+impl fmt::Display for SpecError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.problem {
+            Problem::NoExampleColumn => f.write_str("this table of actions has no Example column"),
+            Problem::NoExample(row) => write!(f, "{row} has no example"),
+            Problem::Shape(row, example) => write!(
+                f,
+                "{row}: expected `script` → off, on or level N, not {example:?}"
+            ),
+            Problem::Script(row, error) => write!(f, "{row}: {error}"),
+        }
+    }
+}
+
+/// Every example in a UI spec written like docs/ui.md, in order, or where
+/// it isn't.
+pub fn examples(markdown: &str) -> Examples<'_> {
+    Examples {
+        lines: markdown.lines().enumerate(),
+        section: "",
+        header: None,
+    }
+}
+
+/// The iterator [`examples`] returns.
+#[derive(Clone, Debug)]
+pub struct Examples<'a> {
+    lines: iter::Enumerate<Lines<'a>>,
+    section: &'a str,
+    /// The header of the table being read, if any.
+    header: Option<&'a str>,
+}
+
+impl<'a> Iterator for Examples<'a> {
+    type Item = Result<Example<'a>, SpecError<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for (number, text) in self.lines.by_ref() {
+            let line = number + 1;
+            let fail = |problem| Some(Err(SpecError { line, problem }));
+            let Some(cells) = text.trim().strip_prefix('|') else {
+                self.header = None;
+                if let Some(heading) = text.strip_prefix("## ") {
+                    self.section = heading.trim();
+                }
+                continue;
+            };
+            let Some(header) = self.header else {
+                if has(cells, "Action") && !has(cells, "Example") {
+                    return fail(Problem::NoExampleColumn);
+                }
+                self.header = Some(cells);
+                continue;
+            };
+            if split(cells).all(|c| c.starts_with('-') || c.starts_with(':')) {
+                continue;
+            }
+            let cell = |name| {
+                let column = split(header).position(|c| c == name)?;
+                split(cells).nth(column)
+            };
+            let Some(example) = cell("Example") else {
+                continue;
+            };
+            let row = Row {
+                section: self.section,
+                action: cell("Action").or_else(|| cell("When")).unwrap_or("?"),
+            };
+            if example.is_empty() || example == "-" {
+                if cell("Status") == Some("Planned") {
+                    continue;
+                }
+                return fail(Problem::NoExample(row));
+            }
+            let Some((script, expect)) = read(example) else {
+                return fail(Problem::Shape(row, example));
+            };
+            if let Some(error) = parse(script.split_whitespace()).find_map(Result::err) {
+                return fail(Problem::Script(row, error));
+            }
+            return Some(Ok(Example {
+                line,
+                row,
+                script,
+                expect,
+            }));
+        }
+        None
+    }
+}
+
+/// A table row's cells, minus the `|` it starts with.
+fn split(cells: &str) -> impl Iterator<Item = &str> {
+    cells.trim_end_matches('|').split('|').map(str::trim)
+}
+
+fn has(cells: &str, name: &str) -> bool {
+    split(cells).any(|c| c == name)
+}
+
+/// `` `1C 2H` → off `` as the script and what to expect.
+fn read(example: &str) -> Option<(&str, Expect)> {
+    let (script, expect) = example.split_once('→')?;
+    let script = script.trim().strip_prefix('`')?.strip_suffix('`')?;
+    // At least one word.
+    script.split_whitespace().next()?;
+    Some((script, expect.trim().parse().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use std::string::ToString;
 
     fn convert(channel: Channel) -> Option<Convert> {
         Some(Convert {
@@ -649,5 +939,99 @@ mod tests {
                 ticks: 96
             })
         );
+    }
+
+    #[test]
+    fn a_rig_starts_off_and_plays_a_script() {
+        assert_eq!(Rig::default().level(), 0);
+        let script = parse(["1C"]).map(Result::unwrap);
+        assert_eq!(Rig::play(script).level(), crate::ui::DEFAULT_LEVEL);
+        let mut ticks = 0;
+        let mut clicks = 0;
+        Rig::play_with(parse(["2C", "wait:1s"]).map(Result::unwrap), |_, event| {
+            ticks += 1;
+            clicks += usize::from(event == Some(Event::Click(2)));
+        });
+        assert_eq!(clicks, 1);
+        assert_eq!(ticks, 2 * 8 + SETTLE_TICKS + TICKS_PER_SECOND);
+    }
+
+    #[test]
+    fn a_scripts_fault_is_a_power_on_fault() {
+        let rig = Rig::play(parse(["fault", "2C"]).map(Result::unwrap));
+        assert_eq!(rig.level(), crate::limits::FAULT_CEILING);
+    }
+
+    const SPEC: &str = "\
+## Off
+
+| Action | Does | Example | Status |
+|---|---|---|---|
+| 1C | On | `1C` → level 50 | Done |
+| 2C | Nothing | `2C 1H:2s` → off | Done |
+| 3C | Battery | - | Planned |
+
+## Background
+
+| What | Does | Status |
+|---|---|---|
+| Sleep | Sleeps | Planned |
+";
+
+    fn problem(spec: &str) -> Option<SpecError<'_>> {
+        examples(spec).find_map(Result::err)
+    }
+
+    #[test]
+    fn reads_examples_from_tables_with_an_example_column() {
+        let mut examples = examples(SPEC).map(Result::unwrap);
+        let first = examples.next().unwrap();
+        assert_eq!((first.line, first.row.to_string()), (5, "Off: 1C".into()));
+        assert!(first.actions().eq([Action::Clicks(1)]));
+        assert_eq!(first.expect, Expect::Level(50));
+        let second = examples.next().unwrap();
+        assert_eq!(second.row.to_string(), "Off: 2C");
+        assert_eq!(second.script, "2C 1H:2s");
+        assert_eq!(second.expect, Expect::Off);
+        assert_eq!(examples.next(), None);
+    }
+
+    #[test]
+    fn refuses_a_done_row_without_an_example() {
+        let spec = SPEC.replace("| 2C | Nothing | `2C 1H:2s` → off |", "| 2C | Nothing | |");
+        let error = problem(&spec).unwrap();
+        assert_eq!(error.line, 6);
+        assert_eq!(error.to_string(), "Off: 2C has no example");
+    }
+
+    #[test]
+    fn refuses_a_table_of_actions_without_examples() {
+        let spec = "| Action | Does | Status |\n|---|---|---|\n| 1C | On | Done |\n";
+        let error = problem(spec).unwrap();
+        assert_eq!((error.line, error.problem), (1, Problem::NoExampleColumn));
+    }
+
+    #[test]
+    fn refuses_examples_it_cant_read() {
+        for example in [
+            "1C → on",
+            "`1C` → bright",
+            "`1C` on",
+            "`` → on",
+            "`1C` → level fifty",
+        ] {
+            assert_eq!(read(example), None, "{example:?} read");
+        }
+        let spec = SPEC.replace("`1C` → level 50", "`1X` → on");
+        let error = problem(&spec).unwrap();
+        assert!(matches!(error.problem, Problem::Script(..)), "{error}");
+        assert!(error.to_string().starts_with("Off: 1C: `1X`: "), "{error}");
+    }
+
+    #[test]
+    fn checks_the_light() {
+        assert!(Expect::Off.holds(0) && !Expect::Off.holds(1));
+        assert!(Expect::On.holds(150) && !Expect::On.holds(0));
+        assert!(Expect::Level(50).holds(50) && !Expect::Level(50).holds(51));
     }
 }
