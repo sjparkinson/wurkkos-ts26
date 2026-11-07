@@ -9,6 +9,7 @@
 //! The opcodes come from Microchip's AVR Instruction Set Manual. Only the
 //! handful the checks look for are decoded.
 
+use crate::avr::is_two_words;
 use crate::elf::{DATA_SPACE, Elf, RAM, Segment};
 use crate::updi::map;
 
@@ -197,14 +198,15 @@ fn protected_writes(text: &[u8]) -> Result<usize, String> {
     Ok(found)
 }
 
-fn word(bytes: &[u8], at: usize) -> Option<u16> {
+/// The little-endian word at byte `at`, if there's one there.
+pub(crate) fn word(bytes: &[u8], at: usize) -> Option<u16> {
     let b = bytes.get(at..at + 2)?;
     Some(u16::from_le_bytes([b[0], b[1]]))
 }
 
 /// The byte address a `jmp` at `at` goes to. `jmp k` is
 /// 1001 010k kkkk 110k, then the low 16 bits of k, a word address.
-fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
+pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
     let (w0, w1) = (word(image, at)?, word(image, at + 2)?);
     if w0 & 0xFE0E != 0x940C {
         return None;
@@ -221,13 +223,6 @@ fn out_address(w: u16) -> Option<u16> {
 /// `st Z, Rr`: 1000 001r rrrr 0000.
 fn is_st_z(w: u16) -> bool {
     w & 0xFE0F == 0x8200
-}
-
-/// The four 32-bit instructions: `lds` 1001 000d dddd 0000, `sts`
-/// 1001 001d dddd 0000, `jmp` 1001 010k kkkk 110k and `call` 1001 010k
-/// kkkk 111k. Their second word is an address, so the walk skips it.
-fn is_two_words(w: u16) -> bool {
-    w & 0xFC0F == 0x9000 || w & 0xFE0C == 0x940C
 }
 
 #[cfg(test)]

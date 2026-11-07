@@ -94,9 +94,10 @@ use ts26::sensors::Channel;
 use ts26::testing::{self, Example, Rig, Sample, Scene};
 use ts26::ui::Aux;
 
-use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words};
+use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
+use crate::layout::{jmp_target, word};
 use crate::spec;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
@@ -708,25 +709,13 @@ fn patch_startup(
     Ok(())
 }
 
-fn ldi(r: u8, k: u8) -> u16 {
-    let (r, k) = (u16::from(r), u16::from(k));
-    0xE000 | (k & 0xF0) << 4 | (r - 16) << 4 | k & 0x0F
-}
-
-fn word(bytes: &[u8], at: usize) -> Option<u16> {
-    let b = bytes.get(at..at + 2)?;
-    Some(u16::from_le_bytes([b[0], b[1]]))
-}
-
 /// A bit for each vector whose slot in `image`'s table is a `jmp` to
 /// somewhere other than `unhandled` (a word address). layout.rs checks every
 /// slot is a `jmp`.
 fn handled(image: &[u8], unhandled: u32) -> u32 {
     (1..VECTORS).fold(0, |mask, v| {
         let at = v * VECTOR_WORDS as usize * 2;
-        let jmp = word(image, at).is_some_and(|w| w & 0xFE0E == 0x940C);
-        let target = word(image, at + 2).map(u32::from);
-        if jmp && target != Some(unhandled) {
+        if jmp_target(image, at).is_some_and(|target| target / 2 != unhandled) {
             mask | 1 << v
         } else {
             mask

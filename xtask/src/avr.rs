@@ -651,9 +651,17 @@ impl Cpu {
     }
 }
 
-/// `lds`, `sts`, `jmp` and `call` take a second word.
-pub fn is_two_words(w: u16) -> bool {
+/// The four 32-bit instructions: `lds` 1001 000d dddd 0000, `sts`
+/// 1001 001d dddd 0000, `jmp` 1001 010k kkkk 110k and `call` 1001 010k
+/// kkkk 111k. Their second word is an address, so a walk through code skips it.
+pub(crate) fn is_two_words(w: u16) -> bool {
     w & 0xFC0F == 0x9000 || w & 0xFE0C == 0x940C
+}
+
+/// `ldi rd, k`: 1110 kkkk dddd kkkk, for r16 to r31.
+pub(crate) fn ldi(d: u8, k: u8) -> u16 {
+    let (d, k) = (u16::from(d), u16::from(k));
+    0xE000 | (k & 0xF0) << 4 | (d - 16) << 4 | k & 0x0F
 }
 
 fn unknown(w: u16) -> String {
@@ -776,10 +784,6 @@ mod tests {
             cpu.step(&mut bus)?;
         }
         panic!("program didn't finish");
-    }
-
-    fn ldi(d: u16, k: u16) -> u16 {
-        0xE000 | (k & 0xF0) << 4 | (d - 16) << 4 | k & 0x0F
     }
 
     #[test]
@@ -1169,7 +1173,7 @@ mod tests {
 
     /// A handler that logs `bits` to FLAGS, clearing those interrupts.
     fn clears(bits: u8) -> Vec<u16> {
-        let mut body = vec![ldi(16, u16::from(bits))];
+        let mut body = vec![ldi(16, bits)];
         body.extend(LOG_R16);
         body.push(RETI);
         body
