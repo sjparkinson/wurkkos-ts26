@@ -418,9 +418,6 @@ pub fn take_reset_flags() -> u8 {
 ///
 /// SRC = FLASH is the only choice with BOOTEND and APPEND at 0, and PRIORITY
 /// the only mode. Writing ENABLE starts a scan even when it's already 1.
-// Nothing calls this until `cargo xtask hex` signs the image, or every image
-// would fail it.
-#[allow(dead_code)]
 pub fn flash_ok() -> bool {
     write(
         reg::CRCSCAN_CTRLB,

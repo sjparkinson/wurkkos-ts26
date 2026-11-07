@@ -32,8 +32,8 @@ extern "C" fn main() -> ! {
     // (src/selftest.rs).
     let faults = Faults {
         hang: selftest::hung(hw::take_reset_flags()),
+        flash: !hw::flash_ok(),
         fuses: !hw::fuses().ok(),
-        ..Faults::NONE
     };
 
     hw::init();
