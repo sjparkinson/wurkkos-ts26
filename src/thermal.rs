@@ -48,40 +48,18 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The temperature to hold the MCU at, in whole degrees Celsius. Anduril's
-/// figure for Wurkkos lights (`hw/wurkkos/anduril.h`). Unmeasured here: 1Lumen
-/// saw 52 °C on the head on one sample, and nobody knows what the MCU reads
-/// when the head's at that.
-const LIMIT: u8 = 50;
+/// The temperature to hold the MCU at, 50 °C, in kelvin. Anduril's figure for
+/// Wurkkos lights (`hw/wurkkos/anduril.h`). Unmeasured here: 1Lumen saw 52 °C
+/// on the head on one sample, and nobody knows what the MCU reads when the
+/// head's at that.
+pub const LIMIT: u16 = celsius(50);
 
 /// The lowest level thermal regulation steps down to. Anduril's level number,
 /// on our curve. Unmeasured: nobody knows that this level is cool enough to
 /// hold in still air, or what it draws.
-const FLOOR: u8 = 50;
+pub const FLOOR: u8 = 50;
 
 const _: () = assert!(FLOOR <= CEILING);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Config {
-    /// The temperature to hold the MCU at, in kelvin.
-    pub limit: u16,
-    /// The lowest level thermal regulation will step down to.
-    pub floor: u8,
-}
-
-impl Config {
-    /// [`LIMIT`] and [`FLOOR`].
-    pub const DEFAULT: Self = Self {
-        limit: celsius(LIMIT),
-        floor: FLOOR,
-    };
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
 
 /// Readings and the smoothed temperature are in sixteenths of a kelvin, which
 /// is what `temp::sixteenths` hands over.
@@ -118,6 +96,11 @@ const UP_EVERY: u8 = 4;
 /// 125 °C at most, so the top leaves some slack. In kelvin. Unmeasured.
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 233..=423;
 
+/// [`LIMIT`] in sixteenths, which fits an `i16` because it's plausible.
+const LIMIT_SIXTEENTHS: i16 = LIMIT as i16 * FRACTION;
+
+const _: () = assert!(LIMIT <= *PLAUSIBLE.end());
+
 /// Whether a reading in sixteenths of a kelvin could be real. Anything else
 /// is a broken sensor or a bad ADC setup.
 pub fn plausible(sixteenths: u16) -> bool {
@@ -134,7 +117,6 @@ const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as
 
 #[derive(Clone, Debug)]
 pub struct Thermal {
-    config: Config,
     /// Where the ceiling is heading.
     target: u8,
     ceiling: Gradual,
@@ -154,14 +136,13 @@ pub struct Thermal {
 
 impl Default for Thermal {
     fn default() -> Self {
-        Self::new(Config::DEFAULT)
+        Self::new()
     }
 }
 
 impl Thermal {
-    pub const fn new(config: Config) -> Self {
+    pub const fn new() -> Self {
         Self {
-            config,
             target: CEILING,
             ceiling: Gradual::new(CEILING, DOWN_EVERY, UP_EVERY),
             smooth: None,
@@ -178,11 +159,11 @@ impl Thermal {
         self.ceiling.level()
     }
 
-    /// Forgets everything but the config: no ceiling, and the next reading
-    /// starts the smoothing and the trend afresh. Call it when the light
-    /// turns on, since nothing's sampled while it's off.
+    /// Forgets everything: no ceiling, and the next reading starts the
+    /// smoothing and the trend afresh. Call it when the light turns on, since
+    /// nothing's sampled while it's off.
     pub fn reset(&mut self) {
-        *self = Self::new(self.config);
+        *self = Self::new();
     }
 
     /// One tick: moves the ceiling a step towards where it's heading and
@@ -234,9 +215,8 @@ impl Thermal {
         let trend = (smooth - oldest).clamp(-MAX_TREND, MAX_TREND);
         let predicted = smooth + trend * LOOKAHEAD;
 
-        let limit = self.config.limit.min(*PLAUSIBLE.end()) as i16 * FRACTION;
-        let over = predicted - limit;
-        if over > 0 && (trend >= 0 || smooth > limit + WINDOW) {
+        let over = predicted - LIMIT_SIXTEENTHS;
+        if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
             // Each step down costs `DOWN_PRESSURE`, so the rate follows how
             // far over the prediction is: a kelvin over steps once a second,
             // four over steps every reading, and a sixteenth over takes
@@ -278,16 +258,15 @@ impl Thermal {
     }
 
     fn step_down(&mut self, level: u8, steps: u8) {
-        let floor = self.config.floor;
         if level != 0 {
             // A ceiling above the light's level does nothing, so pull it
             // down to there first. Nothing visible changes, and the next
             // step down shows straight away.
-            let level = level.max(floor);
+            let level = level.max(FLOOR);
             self.ceiling.cap(level);
             self.target = self.target.min(level);
         }
-        self.target = self.target.saturating_sub(steps).max(floor);
+        self.target = self.target.saturating_sub(steps).max(FLOOR);
     }
 }
 
@@ -298,9 +277,6 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::ramp::{self, DSM_TOP};
-
-    const LIMIT: u16 = Config::DEFAULT.limit;
-    const FLOOR: u8 = Config::DEFAULT.floor;
 
     /// The light at whatever level the UI asks for, capped by thermal
     /// regulation, checking every tick that the cap never moves the output
@@ -484,9 +460,9 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_50_degrees_and_level_50() {
-        assert_eq!(Config::DEFAULT.limit, 323);
-        assert_eq!(Config::DEFAULT.floor, 50);
+    fn the_limit_is_50_degrees_and_the_floor_level_50() {
+        assert_eq!(LIMIT, 323);
+        assert_eq!(FLOOR, 50);
     }
 
     #[test]
@@ -771,17 +747,6 @@ mod tests {
         // bringing the ceiling down from the top.
         run.hold(LIMIT + 10, ui, 2);
         assert!(run.output < ui);
-    }
-
-    #[test]
-    fn a_reset_keeps_the_config() {
-        let config = Config {
-            limit: celsius(45),
-            floor: 100,
-        };
-        let mut thermal = Thermal::new(config);
-        thermal.reset();
-        assert_eq!(thermal.config, config);
     }
 
     #[test]

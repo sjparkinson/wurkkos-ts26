@@ -30,7 +30,7 @@ use crate::thermal::{self, Thermal};
 /// that, so this borrows the thermal floor's level, a few per cent of full
 /// duty on our curve. Unmeasured: bright enough to find your way out by,
 /// gentle on the cell as far as anyone can say without a meter on it.
-pub const FAULT_CEILING: u8 = 50;
+pub const FAULT_CEILING: u8 = thermal::FLOOR;
 
 const _: () = assert!(FAULT_CEILING <= CEILING);
 
@@ -80,7 +80,7 @@ impl Limits {
             protection: Protection::new(),
             battery: Gradual::new(CEILING, BATTERY_DOWN_EVERY, BATTERY_UP_EVERY),
             battery_target: CEILING,
-            thermal: Thermal::new(thermal::Config::DEFAULT),
+            thermal: Thermal::new(),
             on: false,
             level: 0,
             convert: None,
@@ -189,10 +189,8 @@ mod tests {
     use crate::ramp::LEVELS;
     use crate::sensors::CYCLE_TICKS;
     use crate::testing::{Adc, CALIBRATION, temperature_reading, voltage_reading};
+    use crate::thermal::{self, FLOOR};
     use std::vec::Vec;
-
-    /// Where thermal regulation stops.
-    const FLOOR: u8 = thermal::Config::DEFAULT.floor;
 
     /// Self-tests that found something.
     const FAILED: Faults = Faults {

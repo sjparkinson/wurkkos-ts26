@@ -267,7 +267,7 @@ mod tests {
         run(&mut torch, false, RELEASE_TICKS + 1);
         torch.adc.temperature = temperature_reading(thermal::celsius(80));
         run(&mut torch, false, 120 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), thermal::Config::DEFAULT.floor);
+        assert_eq!(torch.level(), thermal::FLOOR);
         assert_eq!(torch.output(), ramp::output(torch.level()));
         assert_eq!(torch.ui.output_level(), CEILING);
     }
