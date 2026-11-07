@@ -42,7 +42,7 @@ Run `ls /dev/cu.*` before and after plugging the adapter in. On macOS it's somet
 cargo xtask ping /dev/cu.usbserial-XXXX
 ```
 
-This reads the chip's System Information Block and changes nothing, not even a reset. A real TS21 says `found tinyAVR P:0D:0-3`, so expect something like that. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
+This reads the chip's System Information Block and writes no memory, but don't count on it leaving a running chip alone. `ping` finishes by setting UPDIDIS to turn UPDI off, and DS40002204A §33.3.2.2.2 says that's when "the UPDI will issue a System Reset". So expect the firmware to restart as `ping` ends, which loses the remembered level and clears a cap left by a watchdog reset. The datasheet doesn't say whether turning UPDI on disturbs running code (§33.3.2.1.1 doesn't mention a reset), and the reset in §33.3.2.1.3 is UPDI's own, from the 12 V pulse. Nobody's seen any of this on a real chip. Row 0.8 of [bench-plan.md](bench-plan.md#stage-0-the-breakout) finds out. A real TS21 says `found tinyAVR P:0D:0-3`, so expect something like that. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
 
 ## Back up the factory firmware first
 
@@ -90,7 +90,7 @@ Step 1 is the only check on the chip before the erase, and the signature only sa
 
 A flash doesn't power-cycle the chip, so take the probe off with the cell out and leave it a few seconds, so VCC really collapses, before putting the cell in. Otherwise what the old firmware left in the reset flags could look like a hang.
 
-If the light goes dark after a flash that verified, run `ping`. If it still talks, `cargo xtask peek /dev/cu.usbserial-XXXX` reads the running chip's registers and SRAM, which shows how far the firmware got. Then flash `first-light` again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
+If the light goes dark after a flash that verified, run `cargo xtask peek /dev/cu.usbserial-XXXX` before anything else. It reads the running chip's registers and SRAM, which shows how far the firmware got. It finishes the same way as `ping`, with what's most likely a reset, so only the first run shows what the firmware had been doing, and a `ping` before it would spoil that. If it talks, flash `first-light` again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
 
 ## If it's capped at level 50
 
@@ -100,7 +100,7 @@ The firmware quietly holds the light at level 50 if a check at power-on fails: f
 2. **The CRC.** A cap straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
 3. **The fuses.** Compare `backup/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a cap. A capped torch is a working torch.
 
-The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too.
+The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
 
 ## Going back
 
