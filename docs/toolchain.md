@@ -7,10 +7,10 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's 
 - rustc's built-in `avr-none` target with `-C target-cpu=attiny1616`.
 - A pinned nightly (`rust-toolchain.toml`), because `core` has to be rebuilt for AVR with `-Zbuild-std=core`, and inline assembly on AVR still needs `#![feature(asm_experimental_arch)]`.
 - Linked by the `rust-lld` that rustup ships, against this repo's own linker script (`link.x`) and startup code (`src/rt.rs`).
-- Registers written out by hand in `src/hw.rs`, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
-- The UPDI programmer lives in `xtask`, so rustup is the only thing to install.
+- Registers written out by hand in `src/regs.rs`, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
+- The UPDI programmer and the simulator live in `xtask`, so rustup is the only thing to install.
 
-`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, turns it into Intel HEX at `target/wurkkos-ts26-0721.hex` and reports flash and RAM use.
+`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, checks its layout, runs it on the simulator, pads the image to 16 KB with a CRC in the last two bytes, writes that as Intel HEX at `target/wurkkos-ts26-0721.hex`, and reports flash, RAM, stack and instruction counts. The simulator's a mistake-finder, not proof, and [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) has what it leaves out.
 
 ## Linking with rust-lld
 
@@ -45,7 +45,7 @@ If the link ever fails with an undefined `__*` symbol, this is why.
 
 ## Registers by hand
 
-[avr-device](https://github.com/Rahix/avr-device) has the ATtiny1614 and 1617 but not the 1616, and [avr-hal](https://github.com/Rahix/avr-hal) has no tinyAVR 1-series support. Using the 1617's PAC would probably work, since it's the same die, but this firmware touches a handful of registers. Writing them out by hand, each with a comment naming the register in the ATDF (`vendor/ATtiny1616.atdf`), is less code than the dependency.
+[avr-device](https://github.com/Rahix/avr-device) has the ATtiny1614 and 1617 but not the 1616, and [avr-hal](https://github.com/Rahix/avr-hal) has no tinyAVR 1-series support. Using the 1617's PAC would probably work, since it's the same die, but this firmware touches a limited set of registers. Writing them out by hand in `src/regs.rs`, each with a comment naming the register in the ATDF (`vendor/ATtiny1616.atdf`), is less code than the dependency. It's a module of the library, because `selftest` checks fuse fields with the same masks.
 
 ## Workarounds in use
 
@@ -54,6 +54,7 @@ Each has a comment where it lives. Remove it when a nightly makes it unnecessary
 | Where | What | Why |
 |---|---|---|
 | `src/main.rs` | `#![feature(asm_experimental_arch)]` | `asm!` and `global_asm!` on AVR aren't stable. |
+| `src/main.rs` | `#![feature(abi_avr_interrupt)]` | `extern "avr-interrupt"`, which the handlers in `src/hw.rs` use, isn't stable. |
 | `Cargo.toml` | `panic = "abort"` in both profiles | AVR can't unwind. |
 | Library code | No runtime `u32`/`u64` multiplication, and no `u16` division by a constant that isn't a power of two | There's no `__mulsi3` without libgcc. See above. |
 | `xtask` | Its own ELF-to-HEX conversion | The `rust-objcopy` in the toolchain directory is rustc's private copy and won't run on its own. `llvm-tools` has a working `llvm-objcopy`, but that's one more thing to install for every flash, and `xtask` needs to parse the ELF to program it anyway. |

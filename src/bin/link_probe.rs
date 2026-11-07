@@ -6,11 +6,11 @@
 //! `main` copies a const table (.rodata, read through the mapped-flash
 //! window) and a static with non-zero starting values (.data, which the
 //! startup code copies from flash) into a static that starts at zero (.bss),
-//! then stops in `link_probe_done`. There's no simulator to run it in this
-//! repo, so xtask only checks where the linker put each section
-//! (`layout::memory`) and that none of them came out empty
-//! (`probe_sections` in xtask/src/main.rs). `cargo xtask hex` builds this
-//! alongside the firmware; it's never flashed.
+//! then stops in `link_probe_done`. xtask checks where the linker put each
+//! section (`layout::memory`) and that none of them came out empty
+//! (`probe_sections` in xtask/src/main.rs), then runs it on the simulator from
+//! reset, with SRAM full of junk, and reads back what it copied (`sim::probe`).
+//! `cargo xtask hex` builds this alongside the firmware; it's never flashed.
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
