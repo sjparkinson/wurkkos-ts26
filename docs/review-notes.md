@@ -17,6 +17,9 @@ Things to decide or check once the port from the TS21 is finished. Each has what
 - **"Capped until the cell comes out" has gaps.** With no marker, the cap only lasts for the boot that sees the watchdog flag. A later reset clears it, and a jump to the reset vector doesn't count as a hang. I think that's a fair trade for simpler code.
 - **`selftest::hung` doesn't exempt a UPDI reset.** A watchdog bite just before a flash could cap fresh firmware at level 50 until the cell comes out. It's rare and easily cleared, so I'd leave it.
 
+- **The first boot might cap itself for no real reason.** Flashing over Anduril without a real power-on reset can leave the watchdog flag set. A cell bounce with the BOD off might do the same, and nobody's read this light's `BODCFG`. The cell-out step in docs/flashing.md covers the first case, as long as VCC really collapses.
+- **Three checks can cap a good torch at level 50.** `Fuses::ok` has never seen a real TS26's fuse bytes, the CRC has never been checked by real hardware, and neither has the watchdog's window. If a fresh flash won't go above level 50, suspect these before the torch. `cargo xtask backup` gives you the real fuses before the first flash.
+
 ## UI
 
 - **Lowest level is 13, not 5.** Our level 5 sits in the range reviewers saw flicker. It's one constant, `ui::FLOOR`, and unmeasured. The DSM 36 figure behind it came from a summary of Anduril's `anduril.h` and isn't in docs/hardware.md, so it needs a sourced check.
