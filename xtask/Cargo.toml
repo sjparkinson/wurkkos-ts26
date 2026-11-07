@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Build helpers for the TS26 firmware: hex, size, flash, backup."
+description = "Build helpers for the TS26 firmware: hex, size, flash, backup, simulate."
 publish = false
 edition.workspace = true
 authors.workspace = true
@@ -9,3 +9,6 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+ts26 = { path = "..", features = ["testing"] }

@@ -53,9 +53,9 @@ An example can only see the light once the script's over, so the 1H row shows it
 
 The light looks after the cell and itself whatever you've asked for. It never flashes to say so: it goes down gently, and the level you asked for comes back once it can.
 
-These scripts have three more words. `cell:2.95V` is the cell's voltage from there on, `heat:80C` the temperature, and `fault` starts a torch whose power-on checks failed. `cargo test` runs these against the library. Every threshold behind them is unmeasured on this light.
+These scripts have three more words. `cell:2.95V` is the cell's voltage from there on, `heat:80C` the temperature, and `fault` starts a torch whose power-on checks failed. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
 
-| When | Does | Scenario | Status |
+| When | Does | Example | Status |
 |---|---|---|---|
 | Low cell | Steps down | `cell:2.95V 2C wait:6s` → level 105 | Done |
 | Low cell, for long enough | Steps down, then off | `cell:2.95V 2C wait:60s` → off | Done |

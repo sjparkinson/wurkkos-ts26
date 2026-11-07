@@ -15,7 +15,7 @@ pub mod regs;
 pub mod selftest;
 pub mod sensors;
 pub mod temp;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod thermal;
 pub mod torch;

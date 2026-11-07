@@ -1,20 +1,25 @@
 //! `cargo xtask <command>`: the AVR build and the steps around it that cargo
 //! can't do.
 //!
-//! No dependencies. ELF reading, Intel HEX and the UPDI programmer are all
-//! small enough to do by hand, which saves needing avr-objcopy, avrdude or
-//! pymcuprog.
+//! No dependencies beyond the firmware's own library. ELF reading, Intel HEX,
+//! the UPDI programmer and the AVR simulator are all small enough to do by
+//! hand, which saves needing avr-objcopy, avrdude, pymcuprog or simavr.
 
 #[cfg(test)]
 mod atdf;
-#[cfg(test)]
 mod avr;
 mod crc;
 mod elf;
 mod ihex;
 mod layout;
 mod serial;
+mod sim;
+mod simulate;
+mod spec;
+mod switching;
+mod terminal;
 mod updi;
+mod world;
 
 use std::env;
 use std::fmt::Display;
@@ -29,12 +34,15 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  hex                     build the firmware, write target/wurkkos-ts26-0721.hex
-                          and print flash and RAM use
+  hex                     build the firmware, run it on the simulator, write
+                          target/wurkkos-ts26-0721.hex and print flash, RAM,
+                          stack, loop and handler use
   ping <port>             check the programmer can see the chip, change nothing
   backup <port>           save the torch's flash, EEPROM and fuses into backup/
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
   restore <port>          put backup/flash.hex and backup/eeprom.hex back
+  simulate [script...]    try src/ui.rs live in the terminal, or on a script
+                          such as `1C 2H:1.5s wait:1s 3C`
 
 <port> is the serial UPDI adapter, e.g. /dev/cu.usbserial-1410 on macOS
 or /dev/ttyUSB0 on Linux.
@@ -54,10 +62,12 @@ fn main() -> ExitCode {
         ["ping", port] => ping(port),
         ["backup", port] => backup(port),
         ["flash", port] => build()
-            .and_then(|elf| crc::sign(&elf.flash_image()))
+            .and_then(|(elf, _)| crc::sign(&elf.flash_image()))
             .and_then(|image| flash(port, &image)),
         ["flash", port, file] => read_hex(Path::new(file)).and_then(|image| flash(port, &image)),
         ["restore", port] => restore(port),
+        ["simulate"] => simulate::interactive(),
+        ["simulate", script @ ..] => simulate::script(script),
         _ => {
             eprint!("{USAGE}");
             return ExitCode::from(2);
@@ -82,8 +92,8 @@ fn root() -> PathBuf {
 }
 
 /// Builds the firmware and the link probe, and refuses either if the layout
-/// checks fail.
-fn build() -> Result<elf::Elf, String> {
+/// checks or the simulator fail.
+fn build() -> Result<(elf::Elf, sim::Report), String> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     run(Command::new(cargo).current_dir(root()).args([
         "build",
@@ -98,13 +108,15 @@ fn build() -> Result<elf::Elf, String> {
     let bytes = fs::read(&path).map_err(at(&path))?;
     let elf = elf::Elf::parse(&bytes).map_err(at(&path))?;
     layout::check(&elf).map_err(at(&path))?;
+    let report = sim::check(&elf).map_err(|e| format!("{}: simulator: {e}", path.display()))?;
 
     let probe = root().join(PROBE);
     let bytes = fs::read(&probe).map_err(at(&probe))?;
     let probe_elf = elf::Elf::parse(&bytes).map_err(at(&probe))?;
     probe_sections(&probe_elf).map_err(at(&probe))?;
     layout::memory(&probe_elf).map_err(at(&probe))?;
-    Ok(elf)
+    sim::probe(&probe_elf).map_err(|e| format!("{}: simulator: {e}", probe.display()))?;
+    Ok((elf, report))
 }
 
 /// The link probe is only worth checking if it really has something in
@@ -120,10 +132,10 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
 }
 
 /// Writes the image `flash` would: the firmware padded to all of flash with
-/// 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints flash and
-/// RAM use.
+/// 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints flash, RAM,
+/// stack, loop and handler use.
 fn hex() -> Result<(), String> {
-    let elf = build()?;
+    let (elf, sim) = build()?;
     let firmware = elf.flash_image();
     let image = crc::sign(&firmware)?;
     write(&root().join(HEX), &ihex::encode(&image))?;
@@ -137,6 +149,34 @@ fn hex() -> Result<(), String> {
         row("flash", flash, Some(map::FLASH_SIZE as u64), "bytes")
     );
     println!("{}", row("ram", ram, Some(ram_size), "bytes"));
+    println!("{}", row("stack", sim.stack.into(), None, "bytes"));
+    println!(
+        "{}",
+        row(
+            "loop",
+            sim.loop_instructions,
+            Some(sim.loop_budget),
+            "instructions per 64 Hz tick"
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "off",
+            sim.off_instructions,
+            Some(sim.loop_budget),
+            "instructions per 64 Hz tick"
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "dsm",
+            sim.handler_instructions,
+            Some(sim.handler_budget),
+            "instructions per PWM cycle"
+        )
+    );
     Ok(())
 }
 
