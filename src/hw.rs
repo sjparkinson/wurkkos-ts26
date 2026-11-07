@@ -348,7 +348,8 @@ pub fn adc_start(convert: Convert) {
 }
 
 /// The last conversion's result, if it's finished and not been read yet, from
-/// 0 to 4092. Reading it clears RESRDY.
+/// 0 to 4092. Reading the high byte is what clears RESRDY (errata
+/// DS80000886C 2.4.5), so both bytes always get read, low first for TEMP.
 pub fn adc_result() -> Option<u16> {
     if read(reg::ADC0_INTFLAGS) & regs::ADC_RESRDY == 0 {
         return None;
