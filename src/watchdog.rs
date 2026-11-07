@@ -28,10 +28,10 @@ use crate::TICKS_PER_SECOND;
 
 /// Cycles of the WDT's 1.024 kHz clock in one tick.
 pub const CLOCKS_PER_TICK: u16 = 1024 / TICKS_PER_SECOND;
-/// The closed window after each feed, in WDT clocks. `hw::init` sets
+/// The closed window after each feed, in WDT clocks. `hw::start_watchdog` sets
 /// `WDT.CTRLA.WINDOW` to match.
 pub const CLOSED_CLOCKS: u16 = 32;
-/// The open window after the closed one, in WDT clocks. `hw::init` sets
+/// The open window after the closed one, in WDT clocks. `hw::start_watchdog` sets
 /// `WDT.CTRLA.PERIOD` to match.
 pub const OPEN_CLOCKS: u16 = 32;
 /// How many ticks apart the feeds are.
@@ -39,7 +39,7 @@ pub const FEED_TICKS: u8 = 3;
 
 // A feed lands strictly inside the open window, and the first one comes
 // before the open window alone runs out, since the first tick arrives within
-// a tick of `hw::init` turning the WDT on. `wdr` takes two to three WDT clocks
+// a tick of `hw::start_watchdog` turning the WDT on. `wdr` takes two to three WDT clocks
 // to sync (§19.3.6), the same for every feed, so it shifts the windows without
 // changing the gap between feeds.
 const _: () = {
