@@ -35,10 +35,9 @@ pub struct Fuses {
 impl Fuses {
     /// Whether every field the firmware relies on is what it expects.
     ///
-    /// - `WDTCFG` is 0. A non-zero PERIOD starts the watchdog from the fuse
-    ///   and locks its settings (DS §19.3.3.3), so the firmware can't set it
-    ///   up. A WINDOW alone doesn't lock it, but nothing here expects one, so
-    ///   the whole byte has to be 0.
+    /// - `WDTCFG` is 0. A non-zero PERIOD starts the watchdog at boot, with
+    ///   LOCK set (DS §19.3.1), so the firmware can't set it up. The datasheet
+    ///   doesn't say what a WINDOW alone does, so the whole byte has to be 0.
     /// - `OSCCFG.FREQSEL` is 20 MHz and `OSCLOCK` clear. Every timing assumes
     ///   a calibrated 20 MHz divided by two, and OSCLOCK stops the calibration
     ///   loading (errata 2.2.1).
