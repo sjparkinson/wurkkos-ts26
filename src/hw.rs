@@ -19,6 +19,7 @@ use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
+use ts26::selftest::Fuses;
 use ts26::sensors::{Channel, Convert};
 use ts26::temp::Calibration;
 use ts26::ui::Aux;
@@ -40,6 +41,14 @@ const PORTB_PINS: u8 = 6;
 /// The PORTC pins we drive. PORTC has PC0 to PC3 on the 20-pin package.
 const PORTC_OUTPUTS: u8 = 1 << AUX_BLUE | 1 << AUX_GREEN | 1 << AUX_RED;
 const PORTC_PINS: u8 = 4;
+
+// The window `start_watchdog` sets is the one `ts26::watchdog` counts on.
+// WDT.CTRLA's fields count 8 << (n - 1) WDT clocks, and these are n = 3.
+const _: () = {
+    use ts26::watchdog::{CLOSED_CLOCKS, OPEN_CLOCKS};
+    assert!(8 << ((regs::WDT_WINDOW_32CLK >> 4) - 1) == CLOSED_CLOCKS);
+    assert!(8 << (regs::WDT_PERIOD_32CLK - 1) == OPEN_CLOCKS);
+};
 
 // Every peripheral (the ports, the timers, the clock controller) exposes
 // its settings as bytes at fixed addresses, in the same address space as
@@ -409,6 +418,9 @@ pub fn take_reset_flags() -> u8 {
 ///
 /// SRC = FLASH is the only choice with BOOTEND and APPEND at 0, and PRIORITY
 /// the only mode. Writing ENABLE starts a scan even when it's already 1.
+// Nothing calls this until `cargo xtask hex` signs the image, or every image
+// would fail it.
+#[allow(dead_code)]
 pub fn flash_ok() -> bool {
     write(
         reg::CRCSCAN_CTRLB,
@@ -427,6 +439,18 @@ pub fn flash_ok() -> bool {
     };
     while read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_BUSY != 0 {}
     read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_OK != 0
+}
+
+/// The fuse bytes `selftest::Fuses::ok` checks, read from data space. This
+/// only ever reads them.
+pub fn fuses() -> Fuses {
+    Fuses {
+        wdtcfg: read(reg::FUSE_WDTCFG),
+        osccfg: read(reg::FUSE_OSCCFG),
+        syscfg0: read(reg::FUSE_SYSCFG0),
+        append: read(reg::FUSE_APPEND),
+        bootend: read(reg::FUSE_BOOTEND),
+    }
 }
 
 /// Lights one aux channel, dimly, or none. Safe to call every tick.
