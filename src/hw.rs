@@ -18,7 +18,7 @@
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
-use ts26::ramp::{DSM_BITS, Output, PWM_TOP};
+use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
 
 use crate::regs::{self, addr as reg};
 
@@ -155,10 +155,9 @@ pub fn init() {
     // UPDATE.
     write16(reg::TCA0_PER, PWM_TOP);
     write16(reg::TCA0_CMP0BUF, 0);
-    write(
-        reg::TCA0_CTRLB,
-        regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM,
-    );
+    // The light's off, so PB0 stays PORT's until `set_output` asks for a
+    // level.
+    write(reg::TCA0_CTRLB, regs::TCA_WGMODE_DSBOTTOM);
     write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);
 
     // The RTC's periodic interrupt timer, off the internal 32.768 kHz
@@ -179,6 +178,18 @@ pub fn init() {
 /// which keeps the flag out of RAM and makes it one cycle to reach (AN2515C
 /// section 4.5).
 const TICK: u8 = 1 << 0;
+
+/// The whole steps of PWM duty for [`tca0_ovf`], 0 to 255. Like the tick, the
+/// delta-sigma's state lives in GPIORs: they're zero from reset, and this way
+/// the handler reads them in one cycle each, with nothing to save.
+const DSM_DUTY: usize = reg::GPIO_GPIOR1;
+/// The seven bits of `Output::dsm` below the duty.
+const DSM_FRACTION: usize = reg::GPIO_GPIOR2;
+/// What's piled up of the fraction so far. Only the handler changes it while
+/// the light's on.
+const DSM_SUM: usize = reg::GPIO_GPIOR3;
+/// The bits of `Output::dsm` that go in [`DSM_FRACTION`].
+const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 
 /// Sets up the sleep that [`wait_for_tick`] goes on to do. `rest` is
 /// `Torch::resting`.
@@ -255,16 +266,88 @@ pub fn switch_pressed() -> bool {
     read(reg::VPORTA_IN) & (1 << SWITCH) == 0
 }
 
+/// Runs `f` with interrupts held off, and puts SREG back after, so it's safe
+/// whether they were on or not.
+fn without_interrupts(f: impl FnOnce()) {
+    let sreg = read(reg::CPU_SREG);
+    // SAFETY: `cli` only clears SREG.I. With no `nomem`, it's also a compiler
+    // barrier, so nothing in `f` can move above it.
+    unsafe { asm!("cli", options(nostack)) };
+    f();
+    write(reg::CPU_SREG, sreg);
+}
+
+/// TCA0_OVF, vector 8: the bottom of a PWM cycle, 19,600 times a second, and
+/// the only thing that writes the compare while the light's on.
+///
+/// This is a first-order delta-sigma: the fraction piles up in [`DSM_SUM`],
+/// and each time it passes a whole step of duty, this cycle runs one step
+/// brighter and the step comes off the pile. Over 128 cycles the duty averages
+/// out to `dsm / 128`. Both bytes are under 128, so the sum fits in a `u8`,
+/// and a duty of 255 has no fraction (`ramp::DSM_TOP`), so it can't wrap.
+///
+/// It's about 50 cycles of the 510 in a PWM cycle, since 8-bit sums in I/O
+/// space need nothing from RAM. CMP0BUF lands at the next BOTTOM, a whole cycle
+/// on, so it doesn't matter how late this runs within that.
+///
+/// CMP0BUF shares TCA0's TEMP byte with every other 16-bit TCA0 register
+/// (DS40002204A section 8.5.6), and a write that's half done when this fires
+/// would go wrong. `set_output` is the only other thing that touches them, and
+/// it does that with this interrupt off and interrupts held off.
+#[unsafe(no_mangle)]
+pub extern "avr-interrupt" fn tca0_ovf() {
+    write(reg::TCA0_INTFLAGS, regs::TCA_OVF);
+    let sum = read(DSM_SUM).wrapping_add(read(DSM_FRACTION));
+    write(DSM_SUM, sum & FRACTION_MASK);
+    let duty = read(DSM_DUTY).wrapping_add(sum >> DSM_BITS);
+    write16(reg::TCA0_CMP0BUF, u16::from(duty));
+}
+
 /// Turning on sets the duty, then raises the enable. Turning off drops the
 /// enable, then zeroes the duty. The duty goes through CMP0BUF, so it lands
-/// at the bottom of the PWM cycle, up to 51 µs after the write.
+/// at the bottom of the PWM cycle, up to 51 µs after the write. That's well
+/// inside the 180 µs the boost converter takes to start switching.
+///
+/// A change of level with the light on only touches [`DSM_DUTY`] and
+/// [`DSM_FRACTION`]; [`tca0_ovf`] picks them up at the next BOTTOM. Interrupts
+/// are held off so it can't see one byte of the new level and one of the old.
+///
+/// PB0 only belongs to TCA0 while the light's on. The datasheet doesn't say
+/// what level a waveform output holds in power-down, with TCA0 stopped, so
+/// going off hands the pin back to PORT, whose OUT is 0. CMP0 gets a direct
+/// write too, so power-down can follow on this very pass, and the next turn-on
+/// starts dark whatever TCA0 was doing when it stopped.
 pub fn set_output(output: Output) {
-    let duty = output.dsm >> DSM_BITS;
-    if output.enable {
-        write16(reg::TCA0_CMP0BUF, duty);
-        write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);
-    } else {
+    if !output.enable {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
-        write16(reg::TCA0_CMP0BUF, duty);
+        without_interrupts(|| {
+            write(reg::TCA0_INTCTRL, 0);
+            write(reg::TCA0_CTRLB, regs::TCA_WGMODE_DSBOTTOM);
+            write16(reg::TCA0_CMP0BUF, 0);
+            write16(reg::TCA0_CMP0, 0);
+            write(DSM_DUTY, 0);
+            write(DSM_FRACTION, 0);
+            write(DSM_SUM, 0);
+        });
+        return;
     }
+
+    let dsm = output.dsm.min(DSM_TOP);
+    let duty = (dsm >> DSM_BITS) as u8;
+    let fraction = dsm as u8 & FRACTION_MASK;
+    let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;
+    without_interrupts(|| {
+        write(DSM_DUTY, duty);
+        write(DSM_FRACTION, fraction);
+        if was_off {
+            write16(reg::TCA0_CMP0BUF, u16::from(duty));
+            write(
+                reg::TCA0_CTRLB,
+                regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM,
+            );
+            write(reg::TCA0_INTFLAGS, regs::TCA_OVF);
+            write(reg::TCA0_INTCTRL, regs::TCA_OVF);
+        }
+    });
+    write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);
 }

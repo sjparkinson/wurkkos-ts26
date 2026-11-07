@@ -40,7 +40,8 @@ use crate::regs;
 const _: () = assert!(
     0 < regs::VECTOR_PORTA_PORT
         && regs::VECTOR_PORTA_PORT < regs::VECTOR_RTC_PIT
-        && regs::VECTOR_RTC_PIT < regs::VECTORS
+        && regs::VECTOR_RTC_PIT < regs::VECTOR_TCA0_OVF
+        && regs::VECTOR_TCA0_OVF < regs::VECTORS
 );
 
 // `global_asm!` drops raw assembly into the object file, outside any Rust
@@ -79,7 +80,11 @@ global_asm!(
     "  jmp __unhandled_interrupt",
     "  .endr",
     "  jmp {rtc_pit}",
-    "  .rept {after_pit}",
+    "  .rept {before_ovf}",
+    "  jmp __unhandled_interrupt",
+    "  .endr",
+    "  jmp {tca0_ovf}",
+    "  .rept {after_ovf}",
     "  jmp __unhandled_interrupt",
     "  .endr",
     "",
@@ -171,7 +176,9 @@ global_asm!(
     porta_port = sym crate::hw::porta_port,
     before_pit = const regs::VECTOR_RTC_PIT - regs::VECTOR_PORTA_PORT - 1,
     rtc_pit = sym crate::hw::rtc_pit,
-    after_pit = const regs::VECTORS - regs::VECTOR_RTC_PIT - 1,
+    before_ovf = const regs::VECTOR_TCA0_OVF - regs::VECTOR_RTC_PIT - 1,
+    tca0_ovf = sym crate::hw::tca0_ovf,
+    after_ovf = const regs::VECTORS - regs::VECTOR_TCA0_OVF - 1,
     // SREG's I/O address, small enough for `out` to reach.
     sreg = const regs::addr::CPU_SREG,
 );

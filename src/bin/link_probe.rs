@@ -31,6 +31,7 @@ mod rt;
 mod hw {
     pub extern "avr-interrupt" fn porta_port() {}
     pub extern "avr-interrupt" fn rtc_pit() {}
+    pub extern "avr-interrupt" fn tca0_ovf() {}
 }
 
 #[cfg(target_arch = "avr")]
