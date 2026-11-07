@@ -47,13 +47,15 @@ What Anduril does with PB0 ([hwdef.h](https://github.com/ToyKeeper/anduril/blob/
 
 Reviewers saw candle-like flicker at the lowest levels ([EDC Tips](https://www.edctips.com/552908/review-new-wurkkos-ts26-nice-enthusiast-flashlight-but-lacking-enthusiast-features/), and 1/150 to 5/150 in the [BLF 519A review](https://budgetlightforum.com/t/wurkkos-ts26-519a-now-with-better-leds/234755)), and a Redditor said it's "only present on some units" (secondhand). Anduril raised this light's default smooth floor to 5/150 "by request" ([dc10bdc0b](https://github.com/ToyKeeper/anduril/commit/dc10bdc0b)). Likely the driver struggling with very small currents. Unmeasured.
 
-This firmware's one level is a duty of 10 of 255, which is 1280 in Anduril's 15-bit units: well clear of the floor, so it should light steadily, and nowhere near turbo.
+This firmware's ramp is my own curve from that 20 up to 32640, with the UI working between levels 13 and 120. A fresh torch comes on at level 52, a duty of about 10 of 255, well clear of the floor. Level 13 is about 37 in those units, which should light but is close enough to the bottom that reviewers' flicker could show. Level 120 is about half of full duty. None of it's been measured.
 
 ### Turning on and off
 
 Anduril's `set_level_main` writes the compare value, enables the overflow interrupt, resets the counter if it's coming from off, then sets PB2 high, with no delay in between. `set_level_zero` disables the interrupt, zeroes the compare value and the counter, then clears PB2. Confirmed as Anduril's order, though not as the only safe one.
 
-This firmware turns on in the same order (duty, then PB2). It turns off the other way round, PB2 first, then the duty. Because `CMP0BUF` only lands at the next BOTTOM, the pin can run for up to one PWM period (about 51 µs) with the boost enabled at duty 0 on the way up, or with the old duty and the boost off on the way down. Both are dark, so I think that's harmless. Not checked on a real light.
+This firmware turns on in the same order (duty, then PB2). It turns off the other way round, PB2 first, then the duty. Because `CMP0BUF` only lands at the next BOTTOM, the pin can run for up to one PWM period (about 51 µs) with the boost enabled at duty 0 on the way up. That's inside the 180 µs the converter takes to start switching, so I think it's harmless. Not checked on a real light.
+
+PB0 only belongs to TCA0 while the light's on: `hw::set_output` sets CMP0EN as it turns on and clears it as it turns off, handing the pin to PORT, whose OUT is 0. The datasheet doesn't say what level a waveform output holds in power-down with TCA0 stopped, so nothing depends on it. Going off also writes CMP0 directly, so power-down can follow on the same pass. The datasheet doesn't say whether that clears the waveform output before BOTTOM, so PB0 could go high for up to one cycle at the next turn-on, also inside that 180 µs. That's my reasoning, not a measurement.
 
 From the MP3432 datasheet (Rev 1.0, confirmed for the chip): EN turns on at 1.23 V typical, switching starts 180 µs after EN, shutdown current is 2 µA at most, it needs 2.7 V on VIN to start (0.8 V once it's running), switches at 600 kHz, and is rated for 30 W average or 40 W peak from 3.3 V, with the peak switching current set by a resistor (10 A typical with 36 kΩ). The 2.7 V start-up is worth remembering against a 2.8 to 2.9 V cut-off. I don't know this board's ILIM resistor or output voltage.
 
@@ -71,7 +73,7 @@ So the effective ratio is 4.3 × 1024 / 1094, about 4.03, and the ADC tops out w
 
 Anduril's history has two stories for the resistors. Before [cbdcc1baf](https://github.com/ToyKeeper/anduril/commit/cbdcc1baf) (August 2026) the file said "Resistors are 330k and 100k" (4.3) alongside `ADC_44 4095 // raw value at 4.40V` (4.0). I'd trust the later slope, since it came from a measured sample ("calibrated for latest TS26 sample", 6babeefca) and agrees with the 4.4 V figure; the 330k/100k comment looks like a template from the prototypes. 100k and 33k would give 4.03, 300k and 100k 4.0. Nobody states the real values. Likely.
 
-Either way the source impedance at PA1 is tens of kilohms, which matters for the ADC's sample time. Not checked against the datasheet yet.
+Either way the source impedance at PA1 is tens of kilohms, which matters for the ADC's sample time. The ADC runs at 625 kHz and samples for 22 clocks, 35 µs, which the temperature sensor's 32 µs sets. With the worst of those stories, 77 kΩ plus the ADC's own 14 kΩ into 5 pF (DS40002204A table 36-25), settling to half a bit of 10 takes about 3.5 µs, so there's ten times what it needs. That's sums from the datasheet, and unmeasured.
 
 No TS26 reading has been compared with a multimeter in public, and Wurkkos's blog mentions "inaccurate battery readings" as a problem during development.
 
