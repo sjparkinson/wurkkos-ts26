@@ -244,20 +244,25 @@ fn ping(port: &str) -> Result<(), String> {
 /// the first one saw. Only `hw::init` sets the
 /// clock, the pin directions and the PIT, so those say whether it ran.
 /// VPORTB.OUT says whether the boost converter's on.
+///
+/// The addresses are the firmware's own, from src/regs.rs. src/regs.rs has no
+/// stack pointer, since the firmware never touches it, so that comes from the
+/// simulated CPU's.
 fn peek(port: &str) -> Result<(), String> {
+    use ts26::regs::addr;
     let registers = [
-        ("RSTCTRL.RSTFR", sim::reg::RSTCTRL_RSTFR),
-        ("CLKCTRL.MCLKCTRLB", sim::reg::CLKCTRL_MCLKCTRLB),
-        ("WDT.CTRLA", sim::reg::WDT_CTRLA),
+        ("RSTCTRL.RSTFR", addr::RSTCTRL_RSTFR),
+        ("CLKCTRL.MCLKCTRLB", addr::CLKCTRL_MCLKCTRLB),
+        ("WDT.CTRLA", addr::WDT_CTRLA),
         ("CPU.SPL", usize::from(avr::SPL)),
         ("CPU.SPH", usize::from(avr::SPH)),
-        ("CPU.SREG", usize::from(avr::SREG)),
-        ("VPORTB.DIR", sim::reg::VPORTB_DIR),
-        ("VPORTB.OUT", sim::reg::VPORTB_OUT),
-        ("VPORTC.DIR", sim::reg::VPORTC_DIR),
-        ("TCA0.CTRLA", sim::reg::TCA0_CTRLA),
-        ("TCA0.CTRLB", sim::reg::TCA0_CTRLB),
-        ("RTC.PITCTRLA", sim::reg::RTC_PITCTRLA),
+        ("CPU.SREG", addr::CPU_SREG),
+        ("VPORTB.DIR", addr::VPORTB_DIR),
+        ("VPORTB.OUT", addr::VPORTB_OUT),
+        ("VPORTC.DIR", addr::VPORTC_DIR),
+        ("TCA0.CTRLA", addr::TCA0_CTRLA),
+        ("TCA0.CTRLB", addr::TCA0_CTRLB),
+        ("RTC.PITCTRLA", addr::RTC_PITCTRLA),
     ];
 
     let mut p = connect(port)?;

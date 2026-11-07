@@ -106,7 +106,7 @@ use crate::world::{CALIBRATION, FUSE_NAMES, World};
 /// A second copy of some of src/regs.rs, kept here so the model doesn't move
 /// when the firmware does. `tests::registers_match_the_atdf` holds both to the
 /// same source.
-pub mod reg {
+mod reg {
     pub const CPU_CCP: usize = 0x0034;
     pub const RSTCTRL_RSTFR: usize = 0x0040;
     pub const VREF_CTRLA: usize = 0x00A0;
