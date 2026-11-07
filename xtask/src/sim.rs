@@ -303,7 +303,9 @@ const PIT_SYNC_READS: u8 = 2;
 pub struct Report {
     /// The most stack the firmware used, in bytes.
     pub stack: u16,
-    /// The most instructions one pass of the main loop took.
+    /// The most instructions one pass of the main loop took, from the runs
+    /// without overflows landed on purpose. Every pass still has to fit the
+    /// budget with them (`Sim::tick`).
     pub loop_instructions: u64,
     /// What that's measured against.
     pub loop_budget: u64,
@@ -520,7 +522,11 @@ fn in_step(
         sim.chip.world = World::from(sample.scene);
         let power_downs = sim.chip.power_downs;
         let took = sim.tick(sample.pressed).map_err(at)?;
-        report.loop_instructions = report.loop_instructions.max(took);
+        // An overflow landed on purpose runs the handler on top of the pass,
+        // which a real tick never sees that many of.
+        if sim.landings.is_none() {
+            report.loop_instructions = report.loop_instructions.max(took);
+        }
         let powered_down = sim.chip.power_downs > power_downs;
         // Only a pass that started off resting, which is what a torch that's
         // off spends every tick.
