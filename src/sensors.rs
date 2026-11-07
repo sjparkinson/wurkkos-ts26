@@ -63,14 +63,13 @@ pub enum Reading {
     Temperature(u16),
 }
 
-/// Ticks in a full round of both channels.
+/// Ticks in a full round of both channels, and so how many apart each
+/// channel's readings come.
 pub const CYCLE_TICKS: u8 = 16;
 /// Where the temperature's turn starts in the round.
 const TEMPERATURE_AT: u8 = CYCLE_TICKS / 2;
 
 const _: () = assert!(CYCLE_TICKS.is_power_of_two());
-const _: () = assert!(CYCLE_TICKS as u16 == crate::battery::SAMPLE_TICKS);
-const _: () = assert!(CYCLE_TICKS as u16 == crate::thermal::SAMPLE_TICKS);
 
 #[derive(Clone, Debug, Default)]
 pub struct Schedule {

@@ -37,6 +37,7 @@
 use crate::TICKS_PER_SECOND;
 use crate::limits::FAULT_CEILING;
 use crate::ramp::CEILING;
+use crate::sensors::CYCLE_TICKS;
 
 /// Anduril's `VOLTAGE_SLOPE` for this board, against its default of 1024,
 /// higher reading lower. Calibrated on one of ToyKeeper's samples, and
@@ -83,15 +84,10 @@ pub fn centivolts(reading: u16) -> u16 {
     (hi * HIGH + ((lo * LOW) >> 4) + 64) >> 7
 }
 
-/// How many ticks apart the voltage samples come. The ADC alternates between
-/// the voltage and the temperature sensor every 8 ticks, so each gets a fresh
-/// reading every 16.
-pub const SAMPLE_TICKS: u16 = 16;
+/// Voltage samples a second: four, one every [`CYCLE_TICKS`].
+pub const SAMPLES_PER_SECOND: u16 = TICKS_PER_SECOND / CYCLE_TICKS as u16;
 
-/// Voltage samples a second: four.
-pub const SAMPLES_PER_SECOND: u16 = TICKS_PER_SECOND / SAMPLE_TICKS;
-
-const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(SAMPLE_TICKS));
+const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(CYCLE_TICKS as u16));
 
 /// Below this many centivolts, held for [`STEP_SAMPLES`], the ceiling steps
 /// down. It's a tenth of a volt over [`OFF_BELOW`], so the light starts
@@ -181,7 +177,7 @@ pub enum Verdict {
 }
 
 /// Low-voltage protection: feed it each voltage sample (every
-/// [`SAMPLE_TICKS`] ticks) and it says how bright the torch may be.
+/// [`CYCLE_TICKS`] ticks) and it says how bright the torch may be.
 ///
 /// Samples go through a moving average (each one moves the filtered value an
 /// eighth of the way, a time constant of about two seconds at four samples a

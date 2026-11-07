@@ -1,6 +1,6 @@
 //! Thermal regulation: temperature readings in, a ceiling on the level out.
 //!
-//! Feed it a reading from `temp::sixteenths` every [`SAMPLE_TICKS`] ticks with
+//! Feed it a reading from `temp::sixteenths` every [`CYCLE_TICKS`] ticks with
 //! [`Thermal::sample`], call [`Thermal::tick`] every tick, and run the light
 //! at whichever is lower, the UI's level or the ceiling. The ceiling moves
 //! through a [`Gradual`], so a step-down is a fade of at most one level every
@@ -41,9 +41,7 @@
 
 use crate::gradual::Gradual;
 use crate::ramp::CEILING;
-
-/// How many ticks apart to take readings: four a second.
-pub const SAMPLE_TICKS: u16 = 16;
+use crate::sensors::CYCLE_TICKS;
 
 /// Kelvin, from whole degrees Celsius.
 pub const fn celsius(degrees: u8) -> u16 {
@@ -132,7 +130,7 @@ pub fn plausible(sixteenths: u16) -> bool {
 const JUMP: u16 = 6 * FRACTION as u16;
 const GLITCHES: u8 = 3;
 
-const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= SAMPLE_TICKS);
+const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
 
 #[derive(Clone, Debug)]
 pub struct Thermal {
@@ -194,7 +192,7 @@ impl Thermal {
     }
 
     /// One temperature reading in sixteenths of a kelvin, taken every
-    /// [`SAMPLE_TICKS`] ticks while the light's on, and the level it's at
+    /// [`CYCLE_TICKS`] ticks while the light's on, and the level it's at
     /// right now.
     pub fn sample(&mut self, reading: u16, level: u8) {
         let smooth = match self.smooth {
@@ -329,7 +327,7 @@ mod tests {
         /// The same for a reading in sixteenths of a kelvin.
         fn sample_fraction(&mut self, reading: u16, ui: u8) -> u8 {
             self.thermal.sample(reading, self.output);
-            for _ in 0..SAMPLE_TICKS {
+            for _ in 0..CYCLE_TICKS {
                 self.tick(ui);
             }
             self.output
@@ -458,7 +456,7 @@ mod tests {
             let off = noise.next(spread) * FRACTION;
             let reading = head.reading().saturating_add_signed(off);
             run.thermal.sample(reading, run.output);
-            for _ in 0..SAMPLE_TICKS {
+            for _ in 0..CYCLE_TICKS {
                 run.tick(ui);
                 head.tick(run.output);
             }

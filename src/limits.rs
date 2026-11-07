@@ -187,6 +187,7 @@ mod tests {
     use super::*;
     use crate::TICKS_PER_SECOND;
     use crate::ramp::LEVELS;
+    use crate::sensors::CYCLE_TICKS;
     use crate::testing::{Adc, CALIBRATION, temperature_reading, voltage_reading};
     use std::vec::Vec;
 
@@ -362,7 +363,7 @@ mod tests {
             .collect();
         let bottom = lit.iter().take_while(|&&l| l == 1).count();
         let hold = usize::from(battery::HOLD_SAMPLES);
-        let sample = usize::from(battery::SAMPLE_TICKS);
+        let sample = usize::from(CYCLE_TICKS);
         assert!(
             (hold - 1) * sample <= bottom && bottom <= (hold + 1) * sample,
             "{bottom} ticks at level 1"
@@ -373,7 +374,7 @@ mod tests {
     #[test]
     fn a_voltage_reading_on_the_tick_it_turns_on_counts() {
         // Voltage readings come due on the third tick of each round of 16.
-        let sample = usize::from(battery::SAMPLE_TICKS);
+        let sample = usize::from(CYCLE_TICKS);
         let mut run = Run::new();
         run.adc.voltage = voltage_reading(280);
         let on_at = 4 * sample + 2;
