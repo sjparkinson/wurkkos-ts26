@@ -19,6 +19,7 @@ use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
+use ts26::ui::Aux;
 
 use crate::regs::{self, addr as reg};
 
@@ -331,6 +332,30 @@ pub fn adc_result() -> Option<u16> {
     let lo = read(reg::ADC0_RES);
     let hi = read(reg::ADC0_RES + 1);
     Some(u16::from_le_bytes([lo, hi]))
+}
+
+/// Lights one aux channel, dimly, or none. Safe to call every tick.
+///
+/// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up: the
+/// lit channel is an input with its pull-up on, and the trickle through the
+/// pull-up is the low setting, like the TS21's button LED. The others are
+/// outputs at the 0 in OUT, which holds them dark. That this is what Anduril's
+/// low aux setting does on this board is likely, and nobody's measured it here.
+pub fn set_aux(colour: Aux) {
+    let lit = match colour {
+        Aux::Off => 0,
+        Aux::Blue => 1 << AUX_BLUE,
+        Aux::Red => 1 << AUX_RED,
+    };
+    write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);
+    for pin in [AUX_BLUE, AUX_GREEN, AUX_RED] {
+        let ctrl = if lit & 1 << pin != 0 {
+            regs::PORT_PULLUPEN
+        } else {
+            0
+        };
+        write(reg::PORTC_PIN0CTRL + usize::from(pin), ctrl);
+    }
 }
 
 pub fn switch_pressed() -> bool {

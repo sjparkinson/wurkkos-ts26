@@ -37,6 +37,7 @@ extern "C" fn main() -> ! {
         if let Some(output) = changes.update(torch.output()) {
             hw::set_output(output);
         }
+        hw::set_aux(torch.aux());
     }
 }
 
