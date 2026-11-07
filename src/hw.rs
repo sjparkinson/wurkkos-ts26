@@ -162,21 +162,93 @@ pub fn init() {
     write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);
 
     // The RTC's periodic interrupt timer, off the internal 32.768 kHz
-    // oscillator (RTC.CLKSEL's reset value) divided by 512: 64 Hz.
+    // oscillator (RTC.CLKSEL's reset value) divided by 512: 64 Hz, with its
+    // interrupt on, in the datasheet's order (section 23.5.1). RTC.CTRLA
+    // stays at its reset value: any write to it stretches the PIT's period,
+    // and clearing RTCEN stops the PIT (errata DS80000886C 2.6.1 and 2.6.2).
+    write(reg::RTC_PITINTCTRL, regs::RTC_PI);
     while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}
     write(reg::RTC_PITCTRLA, regs::RTC_PERIOD_CYC512 | regs::RTC_PITEN);
+    // The first sleep can be power-down, and the datasheet doesn't say this
+    // write finishes syncing with the peripheral clock stopped. If it didn't,
+    // there'd be no ticks, so see it through.
+    while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}
 }
 
-/// Spins until the next 64 Hz tick.
+/// The bit in GPIOR0 that [`rtc_pit`] sets each tick. GPIORs sit in I/O space,
+/// which keeps the flag out of RAM and makes it one cycle to reach (AN2515C
+/// section 4.5).
+const TICK: u8 = 1 << 0;
+
+/// Sets up the sleep that [`wait_for_tick`] goes on to do. `rest` is
+/// `Torch::resting`.
 ///
-/// The flag goes up whether or not the interrupt is enabled, so for now
-/// this busy-waits with the CPU awake. Sleeping between ticks (and properly
-/// when off) is on the roadmap. Until then the MCU alone draws about 3 mA
-/// (DS40002204A table 36-4), a 5,000 mAh cell in a couple of months, plus
-/// whatever the regulator takes, which nobody's measured.
-pub fn wait_for_tick() {
-    while read(reg::RTC_PITINTFLAGS) & regs::RTC_PI == 0 {}
+/// Power-down stops TCA0 wherever it is, so it only happens with PB2 low. If
+/// the torch ever says it's resting with the boost converter on, this idles
+/// instead: the light stays as it was, and the loop keeps running, so the
+/// protection does too.
+///
+/// Otherwise it's idle, which stops only the CPU and flash, so TCA0 keeps the
+/// PWM going. Standby would stop TCA0, which has no RUNSTDBY (section
+/// 11.3.2.1).
+///
+/// SEN has to stay set in both: with it clear, `sleep` does nothing.
+fn prepare_sleep(rest: bool) {
+    let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {
+        regs::SLPCTRL_SMODE_PDOWN
+    } else {
+        regs::SLPCTRL_SMODE_IDLE
+    };
+    write(reg::SLPCTRL_CTRLA, mode | regs::SLPCTRL_SEN);
+}
+
+/// Sleeps until the next 64 Hz tick, in power-down if `rest` allows it. The
+/// PIT carries on in there (section 23.8 and the errata's table 3-3), so the
+/// loop runs every tick, on or off, and that's how it sees the switch.
+///
+/// The PIT interrupt sets [`TICK`]; this checks and clears it with interrupts
+/// off, so a tick can't land between the check and the clear. If it isn't set
+/// yet, `sei` and `sleep` go back to back (AN2515C section 4.5): the
+/// instruction after `sei` always runs before a pending interrupt, so a tick
+/// that arrived after the check wakes the `sleep` at once rather than being
+/// slept through. Anything else that wakes it goes round again.
+///
+/// Always true. On the TS21 false means a deadline ran out first, and this
+/// board has no deadline, so a dead 32 kHz oscillator stops the loop here.
+pub fn wait_for_tick(rest: bool) -> bool {
+    prepare_sleep(rest);
+    loop {
+        // SAFETY: `cli` only clears SREG.I. With no `nomem`, it's also a
+        // compiler barrier, so the GPIOR0 read can't move above it.
+        unsafe { asm!("cli", options(nostack)) };
+        if read(reg::GPIO_GPIOR0) & TICK != 0 {
+            write(reg::GPIO_GPIOR0, 0);
+            // SAFETY: `sei` only sets SREG.I.
+            unsafe { asm!("sei", options(nostack)) };
+            return true;
+        }
+        // SAFETY: sets SREG.I and sleeps until an interrupt, whose handler
+        // returns here. The handler saves what it touches.
+        unsafe { asm!("sei", "sleep", options(nostack)) };
+    }
+}
+
+/// RTC_PIT, vector 7: the 64 Hz tick. It clears the PIT's flag and sets
+/// [`TICK`], and that's all, since the loop only reads or clears that with
+/// interrupts off.
+#[unsafe(no_mangle)]
+pub extern "avr-interrupt" fn rtc_pit() {
     write(reg::RTC_PITINTFLAGS, regs::RTC_PI);
+    write(reg::GPIO_GPIOR0, TICK);
+}
+
+/// PORTA_PORT, vector 3: the switch moved. The loop samples the pin every
+/// tick, so all this has to do is clear the flag, or the interrupt would fire
+/// again the moment it returned. It wakes the chip, and the `sleep` in
+/// [`wait_for_tick`] takes it back down until the tick.
+#[unsafe(no_mangle)]
+pub extern "avr-interrupt" fn porta_port() {
+    write(reg::VPORTA_INTFLAGS, 1 << SWITCH);
 }
 
 pub fn switch_pressed() -> bool {

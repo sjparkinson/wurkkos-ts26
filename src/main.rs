@@ -6,6 +6,7 @@
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
+#![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 
 #[cfg(target_arch = "avr")]
 mod hw;
@@ -29,7 +30,7 @@ extern "C" fn main() -> ! {
     let mut changes = Changes::new();
 
     loop {
-        hw::wait_for_tick();
+        hw::wait_for_tick(torch.resting());
         torch.tick(hw::switch_pressed(), None);
         if let Some(output) = changes.update(torch.output()) {
             hw::set_output(output);
