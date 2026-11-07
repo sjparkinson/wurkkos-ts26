@@ -89,6 +89,7 @@ use std::iter;
 use std::ops::Range;
 use std::thread;
 
+use ts26::TICKS_PER_SECOND;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Example, Rig, Sample, Scene};
@@ -269,7 +270,8 @@ const AUX: u8 = 0b1110;
 /// Instructions startup may take before reaching `main`.
 const BOOT_BUDGET: u64 = 100_000;
 /// CPU cycles in a 64 Hz tick at 10 MHz.
-const TICK_CYCLES: u64 = 10_000_000 / 64;
+const TICK_CYCLES: u64 = CLK_PER as u64 / TICKS_PER_SECOND as u64;
+const _: () = assert!(TICK_CYCLES * TICKS_PER_SECOND as u64 == CLK_PER as u64);
 /// Instructions one pass of the main loop may take, handlers included. No
 /// AVRxt instruction takes more than 4 cycles, so this many always fit.
 const TICK_BUDGET: u64 = TICK_CYCLES / 4;
