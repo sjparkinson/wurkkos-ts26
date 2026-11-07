@@ -44,7 +44,7 @@ src/sensors.rs    which ADC conversion is due on which tick
 src/gradual.rs    fading a ceiling a level at a time
 src/watchdog.rs   which passes of the loop feed the watchdog, and the window that's sized for
 src/selftest.rs   what the checks at power-on found
-src/testing.rs    a fake ADC and readings, shared by the tests and the simulator
+src/testing.rs    a fake ADC, readings and the docs/ui.md script reader, shared by the tests and the simulator
 src/regs.rs       register addresses and bit values, checked against the ATDF
 src/main.rs       the firmware loop (a stub on the host)
 src/hw.rs         pins, register access and the interrupt handlers (AVR only)

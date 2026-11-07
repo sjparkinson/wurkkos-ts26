@@ -103,7 +103,9 @@ mod tests {
     use crate::TICKS_PER_SECOND;
     use crate::button::RELEASE_TICKS;
     use crate::limits::FAULT_CEILING;
-    use crate::testing::{Adc, CALIBRATION, temperature_reading, voltage_reading};
+    use crate::testing::{
+        Adc, CALIBRATION, Sample, Scene, parse, samples, temperature_reading, voltage_reading,
+    };
     use crate::thermal;
     use crate::ui::{CEIL, DEFAULT_LEVEL, FLOOR};
     use core::ops::Deref;
@@ -133,6 +135,14 @@ mod tests {
             let event = self.torch.tick(pressed, self.adc.result());
             self.adc.start(self.torch.convert());
             event
+        }
+
+        /// A tick with the ADC reading what `scene` says, not `adc`'s fields.
+        fn tick_in(&mut self, pressed: bool, scene: &Scene) {
+            self.torch.tick(pressed, self.adc.result());
+            let convert = self.torch.convert();
+            self.adc
+                .start_with(convert, |channel| scene.reading(channel));
         }
     }
 
@@ -166,53 +176,16 @@ mod tests {
         run(torch, false, RELEASE_TICKS + 1);
     }
 
-    /// `2s` or `500ms` in ticks.
-    fn duration(text: &str) -> u16 {
-        let number = |digits: &str| digits.parse::<u16>().unwrap();
-        match text.strip_suffix("ms") {
-            Some(ms) => number(ms) * TICKS_PER_SECOND / 1000,
-            None => number(text.strip_suffix('s').unwrap()) * TICKS_PER_SECOND,
-        }
-    }
-
-    /// Plays a docs/ui.md script with the timings `cargo xtask simulate` uses,
-    /// so these rows hold there too, and returns the level it ends at.
+    /// Plays a docs/ui.md script the way `cargo xtask simulate` does, with
+    /// the same reader, so these rows hold there too, and returns the level
+    /// it ends at.
     fn play(script: &str) -> u8 {
-        let mut torch = Bench::new();
-        for word in script.split_whitespace() {
-            if word == "fault" {
-                torch = Bench::with(Faults {
-                    fuses: true,
-                    ..Faults::NONE
-                });
-                continue;
-            }
-            if let Some(volts) = word.strip_prefix("cell:") {
-                let centivolts = volts.strip_suffix('V').unwrap().replace('.', "");
-                torch.adc.voltage = voltage_reading(centivolts.parse().unwrap());
-                continue;
-            }
-            if let Some(degrees) = word.strip_prefix("heat:") {
-                let degrees = degrees.strip_suffix('C').unwrap().parse().unwrap();
-                torch.adc.temperature = temperature_reading(thermal::celsius(degrees));
-                continue;
-            }
-            if let Some(time) = word.strip_prefix("wait:") {
-                run(&mut torch, false, duration(time));
-                continue;
-            }
-            let (word, time) = word.split_once(':').unwrap_or((word, "1s"));
-            let (count, kind) = word.split_at(word.len() - 1);
-            let count: u8 = count.parse().unwrap();
-            match kind {
-                "C" => clicks(&mut torch, count),
-                "H" => {
-                    clicks(&mut torch, count - 1);
-                    run(&mut torch, true, duration(time));
-                }
-                _ => panic!("can't read {word}"),
-            }
-            run(&mut torch, false, RELEASE_TICKS + 1);
+        let actions = parse(script.split_whitespace()).map(|a| a.unwrap_or_else(|e| panic!("{e}")));
+        let mut samples = samples(actions).peekable();
+        let power_on = samples.peek().map_or(Scene::NORMAL, |s| s.scene);
+        let mut torch = Bench::with(power_on.faults());
+        for Sample { pressed, scene } in samples {
+            torch.tick_in(pressed, &scene);
         }
         torch.level()
     }

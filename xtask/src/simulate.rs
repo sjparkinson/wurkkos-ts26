@@ -8,17 +8,9 @@
 //! cargo xtask simulate 1C 2H:1.5s wait:1s 3C
 //! ```
 //!
-//! `NC` is N quick clicks. `NH` is N - 1 clicks then a hold (so `2H` is
-//! click, hold), for a second unless it says otherwise (`1H:500ms`).
-//! `wait:2s` leaves the switch alone. Every click or hold is followed by
-//! enough of a pause for it to count, so `1C 1C` is two single clicks.
-//!
-//! Three words set the scene, taking no time. `cell:2.95V` is the cell from
-//! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to start).
-//! `fault` starts a torch whose power-on checks failed, which on the simulated
-//! chip is a fuse that fails the read-back, so it has to come before anything
-//! that takes time. So does `flash:corrupt`, a byte of flash that doesn't match
-//! its CRC.
+//! `ts26::testing` reads the script, the same reader the library's tests of
+//! docs/ui.md use, and says what each word means. On the simulated chip,
+//! `fault` is a fuse that fails the read-back.
 //!
 //! With no script it runs live in the terminal, in real time, with the keys
 //! in `HELP`. Terminals don't say when a key goes up, which a hold needs, so
@@ -26,166 +18,24 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::str::FromStr;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ts26::TICKS_PER_SECOND;
-use ts26::button::{Event, HOLD_TICKS, RELEASE_TICKS};
+use ts26::button::{Event, HOLD_TICKS};
 use ts26::ramp::{self, LEVELS};
+use ts26::testing::{self, clicks};
+
+pub use ts26::testing::Action;
 
 use crate::terminal::{CTRL_C, Terminal};
 use crate::world::{Rig, World};
 
-/// How long a scripted click holds the switch down (about 60 ms).
-const PRESS_TICKS: u16 = 4;
-/// The pause after each scripted click, well inside `RELEASE_TICKS`.
-const GAP_TICKS: u16 = 4;
-/// Released samples after a click or hold before the next action: enough
-/// for `button::Clicks` to send the click (see its `RELEASE_TICKS` check).
-const SETTLE_TICKS: u16 = RELEASE_TICKS + 1;
-/// A hold with no duration lasts a second.
-const DEFAULT_HOLD_TICKS: u16 = TICKS_PER_SECOND;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action {
-    /// This many quick clicks.
-    Clicks(u8),
-    /// `clicks` quick clicks, then the switch held down for `ticks`.
-    Hold { clicks: u8, ticks: u16 },
-    /// The switch left alone for this many ticks.
-    Wait(u16),
-    /// The cell from now on, in centivolts.
-    Cell(u16),
-    /// The temperature from now on, in kelvin.
-    Heat(u16),
-    /// A flash byte that doesn't match the CRC. Power-on only.
-    CorruptFlash,
-    /// The power-on checks fail. Power-on only.
-    Fault,
-}
-
-impl Action {
-    /// Whether it takes time, rather than setting the scene.
-    fn takes_time(self) -> bool {
-        matches!(self, Self::Clicks(_) | Self::Hold { .. } | Self::Wait(_))
-    }
-}
-
-impl FromStr for Action {
-    type Err = String;
-
-    /// `3C`, `2H`, `1H:500ms`, `wait:2s`, `cell:2.95V`, `heat:80C` or `fault`.
-    fn from_str(word: &str) -> Result<Self, String> {
-        if word == "fault" {
-            return Ok(Self::Fault);
-        }
-        if word == "flash:corrupt" {
-            return Ok(Self::CorruptFlash);
-        }
-        if let Some(volts) = word.strip_prefix("cell:") {
-            return centivolts(volts).map(Self::Cell);
-        }
-        if let Some(celsius) = word.strip_prefix("heat:") {
-            let bad = || format!("expected a temperature like 80C, not `{celsius}`");
-            let degrees: u8 = celsius
-                .strip_suffix('C')
-                .ok_or_else(bad)?
-                .parse()
-                .map_err(|_| bad())?;
-            return Ok(Self::Heat(ts26::thermal::celsius(degrees)));
-        }
-        if let Some(duration) = word.strip_prefix("wait:") {
-            return Ok(Self::Wait(ticks(duration)?));
-        }
-        let (head, duration) = match word.split_once(':') {
-            Some((head, duration)) => (head, Some(duration)),
-            None => (word, None),
-        };
-        let split = head.len().saturating_sub(1);
-        let (count, kind) = head.split_at(split);
-        let count: u8 = match count.parse() {
-            Ok(n) if n > 0 => n,
-            _ => return Err("expected a count of 1 or more, like 1C, 2H or wait:1s".into()),
-        };
-        match (kind, duration) {
-            ("C" | "c", None) => Ok(Self::Clicks(count)),
-            ("C" | "c", Some(_)) => Err("clicks don't take a duration; holds do (1H:2s)".into()),
-            ("H" | "h", duration) => {
-                let ticks = duration.map_or(Ok(DEFAULT_HOLD_TICKS), ticks)?;
-                if ticks <= HOLD_TICKS {
-                    return Err(format!(
-                        "that's a click; a hold needs longer than {} ms",
-                        u32::from(HOLD_TICKS) * 1000 / u32::from(TICKS_PER_SECOND)
-                    ));
-                }
-                Ok(Self::Hold {
-                    clicks: count - 1,
-                    ticks,
-                })
-            }
-            _ => Err("expected C (clicks), H (hold) or wait:".into()),
-        }
-    }
-}
-
-/// Parses a script, word by word.
+/// Reads a script, word by word.
 pub fn parse(words: &[&str]) -> Result<Vec<Action>, String> {
-    let mut started = false;
-    words
-        .iter()
-        .map(|word| {
-            let action: Action = word.parse().map_err(|e| format!("`{word}`: {e}"))?;
-            if matches!(action, Action::Fault | Action::CorruptFlash) && started {
-                return Err(format!(
-                    "`{word}`: the firmware only checks that at power-on, so it goes \
-                     before anything that takes time"
-                ));
-            }
-            started |= action.takes_time();
-            Ok(action)
-        })
-        .collect()
-}
-
-/// Centivolts from `2.95V`.
-fn centivolts(volts: &str) -> Result<u16, String> {
-    let bad = || format!("expected a voltage like 2.95V, not `{volts}`");
-    let number = volts.strip_suffix('V').ok_or_else(bad)?;
-    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
-    if fraction.len() > 2 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(bad());
-    }
-    let whole: u16 = whole.parse().map_err(|_| bad())?;
-    let fraction: u16 = format!("{fraction:0<2}").parse().map_err(|_| bad())?;
-    whole
-        .checked_mul(100)
-        .and_then(|cv| cv.checked_add(fraction))
-        .ok_or_else(bad)
-}
-
-/// Ticks from `500ms`, `2s` or `1.5s`, rounded to the nearest tick.
-fn ticks(duration: &str) -> Result<u16, String> {
-    let bad = || format!("expected a duration like 500ms, 2s or 1.5s, not `{duration}`");
-    let ms: u32 = if let Some(ms) = duration.strip_suffix("ms") {
-        ms.parse().map_err(|_| bad())?
-    } else if let Some(s) = duration.strip_suffix('s') {
-        let (whole, fraction) = s.split_once('.').unwrap_or((s, ""));
-        if fraction.len() > 3 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(bad());
-        }
-        let whole: u32 = whole.parse().map_err(|_| bad())?;
-        let fraction: u32 = format!("{fraction:0<3}").parse().map_err(|_| bad())?;
-        whole.checked_mul(1000).ok_or_else(bad)? + fraction
-    } else {
-        return Err(bad());
-    };
-    let ticks = (u64::from(ms) * u64::from(TICKS_PER_SECOND) + 500) / 1000;
-    match u16::try_from(ticks) {
-        Ok(0) => Err(format!("{duration} is shorter than a tick")),
-        Ok(ticks) => Ok(ticks),
-        Err(_) => Err(format!("{duration} is too long")),
-    }
+    testing::parse(words.iter().copied())
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// One tick of a script: the switch, and what the torch sees.
@@ -197,45 +47,12 @@ pub struct Sample {
 
 /// The switch and the world, one sample per tick, for a whole script.
 pub fn samples(actions: &[Action]) -> Vec<Sample> {
-    let mut out = Vec::new();
-    let mut world = World::NORMAL;
-    for &action in actions {
-        let pressed: Vec<bool> = match action {
-            Action::Clicks(n) => clicks(n).chain(span(false, SETTLE_TICKS)).collect(),
-            Action::Hold { clicks: n, ticks } => clicks(n)
-                .chain(span(true, ticks))
-                .chain(span(false, SETTLE_TICKS))
-                .collect(),
-            Action::Wait(ticks) => span(false, ticks).collect(),
-            Action::Cell(cell) => {
-                world.cell = cell;
-                continue;
-            }
-            Action::Heat(kelvin) => {
-                world.kelvin = kelvin;
-                continue;
-            }
-            Action::CorruptFlash => {
-                world.corrupt_flash = true;
-                continue;
-            }
-            Action::Fault => {
-                world = world.with_bad_fuse();
-                continue;
-            }
-        };
-        out.extend(pressed.into_iter().map(|pressed| Sample { pressed, world }));
-    }
-    out
-}
-
-/// `n` quick clicks, each a press then a short gap.
-fn clicks(n: u8) -> impl Iterator<Item = bool> {
-    (0..n).flat_map(|_| span(true, PRESS_TICKS).chain(span(false, GAP_TICKS)))
-}
-
-fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
-    std::iter::repeat_n(pressed, ticks.into())
+    testing::samples(actions.iter().copied())
+        .map(|sample| Sample {
+            pressed: sample.pressed,
+            world: World::from(sample.scene),
+        })
+        .collect()
 }
 
 /// What a script did to a fresh torch.
@@ -558,46 +375,20 @@ mod tests {
     }
 
     #[test]
-    fn parses_clicks_holds_and_waits() {
-        let words: Vec<_> = "1C 3c 1H 2H:500ms wait:1.5s wait:2s"
-            .split_whitespace()
-            .collect();
+    fn says_which_word_it_cant_read_and_why() {
         assert_eq!(
-            parse(&words),
+            parse(&["1C", "2H:1.5s", "wait:1s"]),
             Ok(vec![
                 Action::Clicks(1),
-                Action::Clicks(3),
-                Action::Hold {
-                    clicks: 0,
-                    ticks: 64
-                },
                 Action::Hold {
                     clicks: 1,
-                    ticks: 32
+                    ticks: 96
                 },
-                Action::Wait(96),
-                Action::Wait(128),
+                Action::Wait(64),
             ])
         );
-    }
-
-    #[test]
-    fn parses_the_words_that_set_the_scene() {
-        let words = ["cell:2.95V", "heat:80C", "fault"];
-        assert_eq!(
-            parse(&words),
-            Ok(vec![Action::Cell(295), Action::Heat(353), Action::Fault])
-        );
-        for bad in ["cell:3", "cell:2.955V", "heat:80", "heat:hotC", "heat:999C"] {
-            assert!(bad.parse::<Action>().is_err(), "{bad:?} parsed");
-        }
-    }
-
-    #[test]
-    fn a_fault_only_goes_before_anything_that_takes_time() {
-        assert!(parse(&["cell:3.1V", "fault", "1C"]).is_ok());
-        let err = parse(&["wait:1s", "fault"]).unwrap_err();
-        assert!(err.contains("power-on"), "{err}");
+        let err = parse(&["1C", "cell:3"]).unwrap_err();
+        assert!(err.starts_with("`cell:3`: expected a voltage"), "{err}");
     }
 
     #[test]
@@ -605,7 +396,6 @@ mod tests {
         assert_eq!(script("flash:corrupt 2C").level, 50);
         let err = parse(&["wait:1s", "flash:corrupt"]).unwrap_err();
         assert!(err.contains("power-on"), "{err}");
-        assert!("flash:fine".parse::<Action>().is_err());
     }
 
     #[test]
@@ -620,36 +410,6 @@ mod tests {
     fn a_flat_cell_turns_it_off_and_a_fault_caps_it() {
         assert_eq!(script("cell:2.80V 2C wait:10s").level, 0);
         assert_eq!(script("fault 2C").level, 50);
-    }
-
-    #[test]
-    fn rejects_what_it_cant_read() {
-        for word in [
-            "0C",
-            "C",
-            "1X",
-            "",
-            "1C:1s",
-            "1H:fast",
-            "1H:1.2345s",
-            "1H:100ms",
-            "wait:0ms",
-            "wait:2",
-            "wait:1.-5s",
-            "wait:9999s",
-            "256C",
-        ] {
-            assert!(word.parse::<Action>().is_err(), "{word:?} parsed");
-        }
-    }
-
-    #[test]
-    fn rounds_durations_to_the_nearest_tick() {
-        assert_eq!(ticks("8ms"), Ok(1));
-        assert_eq!(ticks("15ms"), Ok(1));
-        assert_eq!(ticks("24ms"), Ok(2));
-        assert_eq!(ticks("1s"), Ok(64));
-        assert_eq!(ticks("0.25s"), Ok(16));
     }
 
     #[test]

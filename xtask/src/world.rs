@@ -6,7 +6,7 @@ use ts26::button::Event;
 use ts26::regs::addr as reg;
 use ts26::selftest::{Faults, Fuses};
 use ts26::sensors::Channel;
-use ts26::testing::{Adc, temperature_reading, voltage_reading};
+use ts26::testing::{Adc, Scene, temperature_reading, voltage_reading};
 use ts26::torch::Torch;
 
 use crate::updi::map;
@@ -94,6 +94,23 @@ impl World {
     }
 }
 
+impl From<Scene> for World {
+    /// The world a script's scene describes, `fault` being a bad fuse.
+    fn from(scene: Scene) -> Self {
+        let world = Self {
+            cell: scene.cell,
+            kelvin: scene.kelvin,
+            corrupt_flash: scene.corrupt_flash,
+            ..Self::NORMAL
+        };
+        if scene.fault {
+            world.with_bad_fuse()
+        } else {
+            world
+        }
+    }
+}
+
 /// The library's torch with an ADC that answers from a [`World`], the way the
 /// firmware's loop drives it: the result of last tick's conversion in, this
 /// tick's conversion out. A conversion measures the world as it was when it
@@ -145,6 +162,20 @@ mod tests {
     fn factory_fuses_pass_and_a_bad_one_is_a_fault() {
         assert_eq!(World::NORMAL.faults(), Faults::NONE);
         assert!(World::NORMAL.with_bad_fuse().faults().fuses);
+    }
+
+    #[test]
+    fn a_scripts_scene_is_the_same_world_and_finds_the_same_faults() {
+        assert_eq!(World::from(Scene::NORMAL), World::NORMAL);
+        let scene = Scene {
+            cell: 295,
+            kelvin: 353,
+            fault: true,
+            corrupt_flash: true,
+        };
+        let world = World::from(scene);
+        assert_eq!((world.cell, world.kelvin), (295, 353));
+        assert_eq!(world.faults(), scene.faults());
     }
 
     #[test]
