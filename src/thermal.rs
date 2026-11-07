@@ -115,16 +115,69 @@ const GLITCHES: u8 = 3;
 
 const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
 
+/// For wrapping an index into the history, a power of two long.
+const HISTORY_MASK: u8 = HISTORY as u8 - 1;
+
+const _: () = assert!(HISTORY.is_power_of_two() && HISTORY <= u8::MAX as usize);
+
+/// The smoothed temperature, in sixteenths of a kelvin, and the last
+/// [`HISTORY`] samples of it.
+#[derive(Clone, Debug)]
+struct Smoothed {
+    now: i16,
+    history: [i16; HISTORY],
+    /// Where the oldest sample is in `history`.
+    next: u8,
+    /// The last reading that wasn't a glitch.
+    last: u16,
+}
+
+impl Smoothed {
+    /// Starts `slot` afresh from `reading`, as if it had always been there.
+    /// Only for plausible readings, which keep it well inside an `i16`.
+    ///
+    /// The history's filled in once it's in place. Built whole, it goes
+    /// through a copy on the stack, and that pulls in `memcpy`, which is
+    /// bigger than the `memset` this costs.
+    fn start(slot: &mut Option<Self>, reading: u16) -> &mut Self {
+        let now = reading as i16;
+        let smoothed = slot.insert(Self {
+            now,
+            history: [0; HISTORY],
+            next: 0,
+            last: reading,
+        });
+        smoothed.history = [now; HISTORY];
+        smoothed
+    }
+
+    /// An eighth of the way to `reading`, but always at least a sixteenth,
+    /// so a steady reading is reached exactly.
+    fn follow(&mut self, reading: u16) {
+        let difference = reading as i16 - self.now;
+        self.now += match difference / 8 {
+            0 => difference.signum(),
+            step => step,
+        };
+    }
+
+    /// Records the smoothed temperature, and returns how far it's moved
+    /// over the history.
+    fn trend(&mut self) -> i16 {
+        let next = &mut self.history[usize::from(self.next & HISTORY_MASK)];
+        let oldest = core::mem::replace(next, self.now);
+        self.next = self.next.wrapping_add(1) & HISTORY_MASK;
+        self.now - oldest
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Thermal {
     ceiling: Ceiling,
-    /// Smoothed temperature in sixteenths of a kelvin, or `None` before the
-    /// first good reading.
-    smooth: Option<i16>,
-    /// The last reading that wasn't a glitch.
-    last: u16,
-    history: [i16; HISTORY],
-    next: u8,
+    /// `None` before the first good reading. Only the tag needs writing to
+    /// start afresh, so neither building a `Thermal` nor a reset clears the
+    /// history.
+    smoothed: Option<Smoothed>,
     /// Glitches in a row.
     rejected: u8,
     /// Error summed over readings: positive pushes the ceiling down,
@@ -142,10 +195,7 @@ impl Thermal {
     pub const fn new() -> Self {
         Self {
             ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
-            smooth: None,
-            last: 0,
-            history: [0; HISTORY],
-            next: 0,
+            smoothed: None,
             rejected: 0,
             pressure: 0,
         }
@@ -173,26 +223,18 @@ impl Thermal {
     /// [`CYCLE_TICKS`] ticks while the light's on, and the level it's at
     /// right now.
     pub fn sample(&mut self, reading: u16, level: u8) {
-        let smooth = match self.smooth {
-            _ if !plausible(reading) => {
-                self.rejected = self.rejected.saturating_add(1);
-                if self.rejected > GLITCHES {
-                    // The sensor's broken. Assume the worst.
-                    self.step_down(level, MAX_STEP_DOWN);
-                }
-                return;
+        if !plausible(reading) {
+            self.rejected = self.rejected.saturating_add(1);
+            if self.rejected > GLITCHES {
+                // The sensor's broken. Assume the worst.
+                self.step_down(level, MAX_STEP_DOWN);
             }
-            Some(smooth) if reading.abs_diff(self.last) <= JUMP => {
-                self.rejected = 0;
-                self.last = reading;
-                // An eighth of the way there, but always at least a
-                // sixteenth, so a steady reading is reached exactly.
-                let difference = reading as i16 - smooth;
-                let step = match difference / 8 {
-                    0 => difference.signum(),
-                    step => step,
-                };
-                smooth + step
+            return;
+        }
+        let smoothed = match &mut self.smoothed {
+            Some(smoothed) if reading.abs_diff(smoothed.last) <= JUMP => {
+                smoothed.follow(reading);
+                smoothed
             }
             Some(_) if self.rejected < GLITCHES => {
                 self.rejected += 1;
@@ -200,16 +242,12 @@ impl Thermal {
             }
             // The first reading, or a jump that's lasted long enough to be
             // real.
-            _ => self.start(reading),
+            slot => Smoothed::start(slot, reading),
         };
-        self.smooth = Some(smooth);
-
-        let oldest = core::mem::replace(&mut self.history[usize::from(self.next)], smooth);
-        self.next = match self.next + 1 {
-            next if usize::from(next) == HISTORY => 0,
-            next => next,
-        };
-        let trend = (smooth - oldest).clamp(-MAX_TREND, MAX_TREND);
+        self.rejected = 0;
+        smoothed.last = reading;
+        let smooth = smoothed.now;
+        let trend = smoothed.trend().clamp(-MAX_TREND, MAX_TREND);
         let predicted = smooth + trend * LOOKAHEAD;
 
         let over = predicted - LIMIT_SIXTEENTHS;
@@ -244,16 +282,6 @@ impl Thermal {
         // for if it turns.
     }
 
-    /// Starts smoothing over from `reading`, as if it had always been there.
-    /// Only for plausible readings, which keep it well inside an `i16`.
-    fn start(&mut self, reading: u16) -> i16 {
-        let smooth = reading as i16;
-        self.history = [smooth; HISTORY];
-        self.last = reading;
-        self.rejected = 0;
-        smooth
-    }
-
     /// Steps the ceiling down, never under [`FLOOR`], counting from the
     /// light's level if that's lower, so the first step shows straight away.
     fn step_down(&mut self, level: u8, steps: u8) {
@@ -261,8 +289,8 @@ impl Thermal {
             0 => self.ceiling.target(),
             level => self.ceiling.target().min(level.max(FLOOR)),
         };
-        self.ceiling
-            .set(from.saturating_sub(steps).max(FLOOR), level);
+        let target = from.saturating_sub(steps).max(FLOOR);
+        self.ceiling.set(target, level);
     }
 }
 
@@ -591,7 +619,7 @@ mod tests {
         for _ in 0..8 {
             thermal.sample(reading, CEILING);
         }
-        assert_eq!(thermal.smooth, Some(reading as i16));
+        assert_eq!(thermal.smoothed.map(|s| s.now), Some(reading as i16));
     }
 
     #[test]
@@ -616,9 +644,9 @@ mod tests {
         let mut trends = std::vec::Vec::new();
         for step in 0..64 {
             thermal.sample(start + step, CEILING);
-            let smooth = thermal.smooth.unwrap();
-            let oldest = thermal.history[usize::from(thermal.next)];
-            trends.push(smooth - oldest);
+            let smoothed = thermal.smoothed.as_ref().unwrap();
+            let oldest = smoothed.history[usize::from(smoothed.next)];
+            trends.push(smoothed.now - oldest);
         }
         let settled = &trends[32..];
         assert!(
