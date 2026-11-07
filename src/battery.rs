@@ -35,6 +35,7 @@
 //! this module stops the cell being run into the ground.
 
 use crate::TICKS_PER_SECOND;
+use crate::gradual::Ceiling;
 use crate::limits::FAULT_CEILING;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
@@ -167,17 +168,27 @@ pub fn plausible(centivolts: u16) -> bool {
 /// the worst. The fourth in a row, a second's worth, acts. Unmeasured.
 const GLITCHES: u8 = 3;
 
+/// Ticks per level as the ceiling fades down, and back up. Down is a level a
+/// tick, quicker than thermal's, since the cell's already under its threshold
+/// by the time it steps: 15 levels takes a quarter of a second, and a drop of
+/// 30 under half. Unmeasured.
+const DOWN_EVERY: u8 = 1;
+const UP_EVERY: u8 = 4;
+
 /// The low-voltage verdict for one sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// Run no higher than this level. [`CEILING`] means no limit.
+    /// The ceiling's heading for this level, [`CEILING`] meaning no limit.
+    /// [`Protection::ceiling`] is where it's got to.
     Ceiling(u8),
     /// Turn off now. The cell's flat.
     Off,
 }
 
 /// Low-voltage protection: feed it each voltage sample (every
-/// [`CYCLE_TICKS`] ticks) and it says how bright the torch may be.
+/// [`CYCLE_TICKS`] ticks), call [`Protection::tick`] every tick, and
+/// [`Protection::ceiling`] says how bright the torch may be. The ceiling
+/// fades rather than jumps, like thermal's.
 ///
 /// Samples go through a moving average (each one moves the filtered value an
 /// eighth of the way, a time constant of about two seconds at four samples a
@@ -217,7 +228,7 @@ pub struct Protection {
     high_samples: u16,
     /// Implausible samples in a row.
     implausible: u8,
-    ceiling: u8,
+    ceiling: Ceiling,
     /// Ticks of rest since the last sample, up to [`FORGET_TICKS`].
     rested: u16,
 }
@@ -236,9 +247,20 @@ impl Protection {
             flat_samples: 0,
             high_samples: 0,
             implausible: 0,
-            ceiling: CEILING,
+            ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
             rested: 0,
         }
+    }
+
+    /// The ceiling right now.
+    pub fn ceiling(&self) -> u8 {
+        self.ceiling.level()
+    }
+
+    /// One tick: moves the ceiling a step towards where it's heading and
+    /// returns it.
+    pub fn tick(&mut self) -> u8 {
+        self.ceiling.tick()
     }
 
     /// One tick with nothing measuring the cell. The holds start again, as
@@ -265,14 +287,25 @@ impl Protection {
     /// One voltage sample: `centivolts` from [`centivolts`] and the level the
     /// torch is at (`0` for off).
     pub fn sample(&mut self, centivolts: u16, level: u8) -> Verdict {
+        let verdict = self.judge(centivolts, level);
+        if let Verdict::Ceiling(target) = verdict {
+            self.ceiling.set(target, level);
+        }
+        verdict
+    }
+
+    /// The verdict on a sample, and where the ceiling should head for, which
+    /// [`Protection::sample`] sends it to.
+    fn judge(&mut self, centivolts: u16, level: u8) -> Verdict {
         self.rested = 0;
+        let mut ceiling = self.ceiling.target();
         if !plausible(centivolts) {
             self.high_samples = 0;
             self.implausible = self.implausible.saturating_add(1);
             if self.implausible > GLITCHES {
-                self.ceiling = self.ceiling.min(FAULT_CEILING);
+                ceiling = ceiling.min(FAULT_CEILING);
             }
-            return Verdict::Ceiling(self.ceiling);
+            return Verdict::Ceiling(ceiling);
         }
         self.implausible = 0;
         let voltage = self.filter(centivolts);
@@ -281,7 +314,7 @@ impl Protection {
             self.high_samples += 1;
             if self.high_samples >= RECOVER_SAMPLES {
                 self.high_samples = 0;
-                self.ceiling = self.ceiling.saturating_add(STEP).min(CEILING);
+                ceiling = ceiling.saturating_add(STEP).min(CEILING);
             }
         } else {
             self.high_samples = 0;
@@ -289,7 +322,7 @@ impl Protection {
 
         if level == 0 {
             (self.low_samples, self.flat_samples) = (0, 0);
-            return Verdict::Ceiling(self.ceiling);
+            return Verdict::Ceiling(ceiling);
         }
         self.low_samples = match voltage < STEP_DOWN_BELOW {
             true => self.low_samples + 1,
@@ -298,7 +331,7 @@ impl Protection {
         self.flat_samples = match voltage < OFF_BELOW {
             // Still fading down to the ceiling, so the cell's still under
             // the heavier load. Wait till it's there and judge it on that.
-            true if level > self.ceiling => 0,
+            true if level > ceiling => 0,
             true => self.flat_samples + 1,
             false => 0,
         };
@@ -308,15 +341,15 @@ impl Protection {
         } else if self.low_samples >= STEP_SAMPLES {
             STEP
         } else {
-            return Verdict::Ceiling(self.ceiling);
+            return Verdict::Ceiling(ceiling);
         };
         (self.low_samples, self.flat_samples) = (0, 0);
-        let from = self.ceiling.min(level);
+        // Only a cell under 3 V gets here, so it can't have recovered.
+        let from = ceiling.min(level);
         if from == 1 {
             return Verdict::Off;
         }
-        self.ceiling = from.saturating_sub(drop).max(1);
-        Verdict::Ceiling(self.ceiling)
+        Verdict::Ceiling(from.saturating_sub(drop).max(1))
     }
 
     /// Folds a sample into the moving average and returns the result in

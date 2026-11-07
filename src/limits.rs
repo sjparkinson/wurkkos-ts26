@@ -4,8 +4,9 @@
 //! Each tick this runs the ADC's [`Schedule`], hands each reading to
 //! low-voltage protection (`battery::Protection`) or thermal regulation
 //! (`thermal::Thermal`), and runs the light at the lowest of the UI's level,
-//! the thermal ceiling and the battery ceiling. Both ceilings fade through a
-//! [`Gradual`], so a step-down never jumps. A flat cell turns the UI off.
+//! the thermal ceiling and the battery ceiling. Both ceilings fade
+//! (`gradual::Ceiling`), so a step-down never jumps. A flat cell turns the UI
+//! off.
 //!
 //! Garbage readings fail safe. Each side has its own idea of a reading that
 //! can't be real (`battery::plausible`, `thermal::plausible`), lets a few
@@ -17,7 +18,6 @@
 //! long as the cell's in.
 
 use crate::battery::{self, Protection, Verdict};
-use crate::gradual::Gradual;
 use crate::ramp::CEILING;
 use crate::selftest::Faults;
 use crate::sensors::{Convert, Reading, Schedule};
@@ -34,13 +34,6 @@ pub const FAULT_CEILING: u8 = thermal::FLOOR;
 
 const _: () = assert!(FAULT_CEILING <= CEILING);
 
-/// Ticks per level as the battery ceiling fades down, and back up. Down is a
-/// level a tick, quicker than thermal's, since the cell's already under its
-/// threshold by the time it steps: 15 levels takes a quarter of a second,
-/// and a drop of 30 under half. Unmeasured.
-const BATTERY_DOWN_EVERY: u8 = 1;
-const BATTERY_UP_EVERY: u8 = 4;
-
 /// One tick's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Step {
@@ -55,9 +48,6 @@ pub struct Limits {
     schedule: Schedule,
     calibration: Calibration,
     protection: Protection,
-    /// The battery ceiling and where it's fading to.
-    battery: Gradual,
-    battery_target: u8,
     thermal: Thermal,
     /// Whether the UI was on last tick.
     on: bool,
@@ -78,8 +68,6 @@ impl Limits {
             schedule: Schedule::new(),
             calibration,
             protection: Protection::new(),
-            battery: Gradual::new(CEILING, BATTERY_DOWN_EVERY, BATTERY_UP_EVERY),
-            battery_target: CEILING,
             thermal: Thermal::new(),
             on: false,
             level: 0,
@@ -101,7 +89,7 @@ impl Limits {
 
     /// The battery and thermal ceilings right now.
     pub fn ceilings(&self) -> (u8, u8) {
-        (self.battery.level(), self.thermal.ceiling())
+        (self.protection.ceiling(), self.thermal.ceiling())
     }
 
     /// A tick in place of [`Limits::tick`] while the torch rests: the light's
@@ -131,7 +119,9 @@ impl Limits {
         // tick it turns on.
         let ui = ui.min(self.cap);
         let level = match on {
-            true => ui.min(self.thermal.ceiling()).min(self.battery.level()),
+            true => ui
+                .min(self.thermal.ceiling())
+                .min(self.protection.ceiling()),
             false => 0,
         };
 
@@ -141,10 +131,7 @@ impl Limits {
         match reading {
             Some(Reading::Voltage(raw)) => {
                 let centivolts = battery::centivolts(raw);
-                match self.protection.sample(centivolts, level) {
-                    Verdict::Off => off = true,
-                    Verdict::Ceiling(ceiling) => self.battery_ceiling(ceiling, level),
-                }
+                off = self.protection.sample(centivolts, level) == Verdict::Off;
             }
             Some(Reading::Temperature(raw)) => {
                 let sixteenths = self.calibration.sixteenths(raw);
@@ -156,7 +143,7 @@ impl Limits {
         }
 
         let thermal = self.thermal.tick();
-        let battery = self.battery.tick(self.battery_target);
+        let battery = self.protection.tick();
         self.level = if on && !off {
             ui.min(thermal).min(battery)
         } else {
@@ -166,17 +153,6 @@ impl Limits {
             level: self.level,
             off,
         }
-    }
-
-    /// A new battery ceiling, with the light at `level`. Like thermal's, a
-    /// ceiling above the light's level does nothing, so it's pulled down to
-    /// the level first, out of sight, and the fade shows from its first
-    /// step.
-    fn battery_ceiling(&mut self, ceiling: u8, level: u8) {
-        if ceiling < self.battery.level() {
-            self.battery.cap(level.max(ceiling));
-        }
-        self.battery_target = ceiling;
     }
 }
 

@@ -2,9 +2,9 @@
 //!
 //! Feed it a reading from `temp::sixteenths` every [`CYCLE_TICKS`] ticks with
 //! [`Thermal::sample`], call [`Thermal::tick`] every tick, and run the light
-//! at whichever is lower, the UI's level or the ceiling. The ceiling moves
-//! through a [`Gradual`], so a step-down is a fade of at most one level every
-//! other tick, never a jump.
+//! at whichever is lower, the UI's level or the ceiling. The ceiling's a
+//! [`Ceiling`], so a step-down is a fade of at most one level every other
+//! tick, never a jump.
 //!
 //! The approach follows the one Anduril describes in `fsm/adc.c` and
 //! `ui/anduril/ramp-mode.c` (facts only, it's GPL-3.0):
@@ -39,7 +39,7 @@
 //! them to change once one's been run up to temperature. That's why
 //! `ramp::CEILING` holds the light back in the meantime.
 
-use crate::gradual::Gradual;
+use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
 
@@ -117,9 +117,7 @@ const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as
 
 #[derive(Clone, Debug)]
 pub struct Thermal {
-    /// Where the ceiling is heading.
-    target: u8,
-    ceiling: Gradual,
+    ceiling: Ceiling,
     /// Smoothed temperature in sixteenths of a kelvin, or `None` before the
     /// first good reading.
     smooth: Option<i16>,
@@ -143,8 +141,7 @@ impl Default for Thermal {
 impl Thermal {
     pub const fn new() -> Self {
         Self {
-            target: CEILING,
-            ceiling: Gradual::new(CEILING, DOWN_EVERY, UP_EVERY),
+            ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
             smooth: None,
             last: 0,
             history: [0; HISTORY],
@@ -169,7 +166,7 @@ impl Thermal {
     /// One tick: moves the ceiling a step towards where it's heading and
     /// returns it.
     pub fn tick(&mut self) -> u8 {
-        self.ceiling.tick(self.target)
+        self.ceiling.tick()
     }
 
     /// One temperature reading in sixteenths of a kelvin, taken every
@@ -235,7 +232,7 @@ impl Thermal {
             let pressure = self.pressure.min(0).saturating_add(over + WINDOW);
             if pressure <= -UP_PRESSURE {
                 self.pressure = (pressure + UP_PRESSURE).max(1 - UP_PRESSURE);
-                self.target = (self.target + 1).min(CEILING);
+                self.ceiling.raise();
             } else {
                 self.pressure = pressure;
             }
@@ -257,16 +254,15 @@ impl Thermal {
         smooth
     }
 
+    /// Steps the ceiling down, never under [`FLOOR`], counting from the
+    /// light's level if that's lower, so the first step shows straight away.
     fn step_down(&mut self, level: u8, steps: u8) {
-        if level != 0 {
-            // A ceiling above the light's level does nothing, so pull it
-            // down to there first. Nothing visible changes, and the next
-            // step down shows straight away.
-            let level = level.max(FLOOR);
-            self.ceiling.cap(level);
-            self.target = self.target.min(level);
-        }
-        self.target = self.target.saturating_sub(steps).max(FLOOR);
+        let from = match level {
+            0 => self.ceiling.target(),
+            level => self.ceiling.target().min(level.max(FLOOR)),
+        };
+        self.ceiling
+            .set(from.saturating_sub(steps).max(FLOOR), level);
     }
 }
 
