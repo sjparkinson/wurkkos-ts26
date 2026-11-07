@@ -71,6 +71,7 @@ fn main() -> ExitCode {
             .and_then(|image| flash(port, &image)),
         ["flash", port, file] => this_boards_hex(Path::new(file))
             .and_then(|()| read_hex(Path::new(file)))
+            .and_then(|image| signed(&image).map(|()| image))
             .and_then(|image| flash(port, &image)),
         ["restore", port] => restore(port),
         ["simulate"] => simulate::interactive(),
@@ -305,6 +306,33 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
     ))
 }
 
+/// Checks a file's image against the CRC our firmware checks at every power-on,
+/// since one that doesn't match would flash and verify cleanly, then cap itself
+/// at level 50 with nothing to say why. `cargo xtask hex` always writes all
+/// 16 KB, so a full image that doesn't check is refused. A shorter one isn't
+/// ours, or wasn't signed: Anduril's hex is like that and needs no CRC, so it
+/// gets a warning and goes ahead. Not for `restore`, since a factory backup has
+/// no CRC of ours.
+fn signed(image: &[u8]) -> Result<(), String> {
+    if image.len() < map::FLASH_SIZE {
+        eprintln!(
+            "warning: the image isn't the full {} bytes with a CRC, so it isn't a signed build \
+             of this firmware. That's right for Anduril; if it's ours, it'll cap itself at \
+             level 50 on every boot, so flash the file `cargo xtask hex` writes instead",
+            map::FLASH_SIZE
+        );
+        return Ok(());
+    }
+    if crc::crc16(image.iter().copied()) != 0 {
+        return Err(
+            "the image's CRC doesn't check, so the firmware would cap itself at level 50 on \
+             every boot. Flash the file `cargo xtask hex` writes"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn backup(port: &str) -> Result<(), String> {
     let dir = root().join("backup");
     let flash_path = dir.join("flash.hex");
@@ -417,7 +445,23 @@ fn run(command: &mut Command) -> Result<(), String> {
 mod tests {
     use std::path::Path;
 
-    use super::{commas, row, runs, this_boards_hex};
+    use super::{commas, crc, ihex, row, runs, signed, this_boards_hex};
+
+    #[test]
+    fn flash_takes_only_a_signed_image() {
+        let image = crc::sign(&[0x12, 0x34, 0x56]).unwrap();
+        let round_trip = ihex::decode(&ihex::encode(&image)).unwrap();
+        assert!(signed(&round_trip).is_ok());
+
+        let mut broken = image.clone();
+        broken[1] ^= 1;
+        assert!(signed(&broken).is_err());
+    }
+
+    #[test]
+    fn flash_still_takes_a_short_image_such_as_anduril() {
+        assert!(signed(&[0x12, 0x34, 0x56]).is_ok());
+    }
 
     #[test]
     fn runs_show_where_a_pattern_stops() {
