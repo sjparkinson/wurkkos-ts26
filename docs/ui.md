@@ -49,18 +49,36 @@ For pockets and bags.
 
 An example can only see the light once the script's over, so the 1H row shows it going out again. `lockout_lights_at_the_floor_only_while_held` in `src/torch.rs` checks it mid-hold.
 
+## When something's wrong
+
+The light looks after the cell and itself whatever you've asked for. It never flashes to say so: it goes down gently, and the level you asked for comes back once it can.
+
+These scripts have three more words. `cell:2.95V` is the cell's voltage from there on, `heat:80C` the temperature, and `fault` starts a torch whose power-on checks failed. `cargo test` runs these against the library. Every threshold behind them is unmeasured on this light.
+
+| When | Does | Scenario | Status |
+|---|---|---|---|
+| Low cell | Steps down | `cell:2.95V 2C wait:6s` → level 105 | Done |
+| Low cell, for long enough | Steps down, then off | `cell:2.95V 2C wait:60s` → off | Done |
+| Flat cell | Fades down the ramp, then off | `cell:2.80V 2C wait:10s` → off | Done |
+| Flat cell, 1C again | On again at the bottom, then off a second later | `cell:2.80V 2C wait:10s 1C wait:3s` → off | Done |
+| Hot | Fades down, no further than level 50 | `heat:80C 2C wait:120s` → level 50 | Done |
+| Hot, at a level under 50 | Nothing | `heat:80C 1H:3s wait:120s` → level 13 | Done |
+| Hot, then cool | Back up to the level you asked for | `heat:80C 2C wait:120s heat:25C wait:120s` → level 120 | Done |
+| A failed check at power-on | Holds the light at level 50 until the cell comes out | `fault 2C` → level 50 | Done |
+| A failed check, at a lower level | Nothing | `fault 1H:3s` → level 13 | Done |
+
+A failed check is flash that doesn't match its checksum, a fuse that isn't what the firmware expects, or the watchdog having reset the chip. The light still works, since one that won't come on tells you nothing.
+
 ## Always on, in the background
 
 | What | Does | Status |
 |---|---|---|
-| Aux LEDs | Dim and steady: blue when off, red in lockout, out while the main LED's lit. They never flash. The library decides this, and nothing drives the pins yet | Planned |
-| Sleep when off | Powers down and wakes on the switch | Planned |
-| Low-voltage protection | Steps down, then off, on a low cell | Planned |
-| Thermal regulation | Steps down when hot | Planned |
+| Aux LEDs | Dim and steady: blue when off, red in lockout, out while the main LED's lit. They never flash | Done |
+| Sleep when off | Powers down, and looks at the switch 64 times a second | Done |
 
 The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware.
 
-Until those are in, this isn't firmware to carry. See the [roadmap](roadmap.md).
+None of this has met a real light yet, so this isn't firmware to carry. See the [roadmap](roadmap.md).
 
 ## Differences from Anduril
 

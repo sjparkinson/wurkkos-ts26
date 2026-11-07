@@ -24,16 +24,20 @@ mod rt;
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
+    use ts26::selftest::Faults;
     use ts26::torch::{Changes, Torch};
 
     hw::init();
 
-    let mut torch = Torch::new();
+    let mut torch = Torch::new(hw::temperature_calibration(), Faults::NONE);
     let mut changes = Changes::new();
 
     loop {
         hw::wait_for_tick(torch.resting());
-        torch.tick(hw::switch_pressed(), None);
+        torch.tick(hw::switch_pressed(), hw::adc_result());
+        if let Some(convert) = torch.convert() {
+            hw::adc_start(convert);
+        }
         if let Some(output) = changes.update(torch.output()) {
             hw::set_output(output);
         }

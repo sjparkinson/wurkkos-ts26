@@ -19,6 +19,7 @@
 use crate::battery::{self, Protection, Verdict};
 use crate::gradual::Gradual;
 use crate::ramp::CEILING;
+use crate::selftest::Faults;
 use crate::sensors::{Convert, Reading, Schedule};
 use crate::temp::Calibration;
 use crate::thermal::{self, Thermal};
@@ -69,10 +70,10 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// `calibration` is the chip's own, from the signature row. `refused`
-    /// says the power-on self-tests found a fault, which holds the light at
+    /// `calibration` is the chip's own, from the signature row. `faults` is
+    /// what the power-on self-tests found, and any fault holds the light at
     /// [`FAULT_CEILING`] for as long as this lives.
-    pub const fn new(calibration: Calibration, refused: bool) -> Self {
+    pub const fn new(calibration: Calibration, faults: Faults) -> Self {
         Self {
             schedule: Schedule::new(),
             calibration,
@@ -83,7 +84,7 @@ impl Limits {
             on: false,
             level: 0,
             convert: None,
-            cap: if refused { FAULT_CEILING } else { CEILING },
+            cap: if faults.any() { FAULT_CEILING } else { CEILING },
         }
     }
 
@@ -192,6 +193,12 @@ mod tests {
     /// Where thermal regulation stops.
     const FLOOR: u8 = thermal::Config::DEFAULT.floor;
 
+    /// Self-tests that found something.
+    const FAILED: Faults = Faults {
+        hang: true,
+        ..Faults::NONE
+    };
+
     /// Limits and a fake ADC, a tick at a time, checking the output never
     /// jumps by more than a level while the UI holds steady.
     struct Run {
@@ -205,13 +212,13 @@ mod tests {
 
     impl Run {
         fn new() -> Self {
-            Self::with(false)
+            Self::with(Faults::NONE)
         }
 
-        /// After power-on self-tests that failed, or didn't.
-        fn with(refused: bool) -> Self {
+        /// After power-on self-tests that found `faults`.
+        fn with(faults: Faults) -> Self {
             Self {
-                limits: Limits::new(CALIBRATION, refused),
+                limits: Limits::new(CALIBRATION, faults),
                 adc: Adc::new(),
                 ui: 0,
                 uis: Vec::new(),
@@ -424,7 +431,7 @@ mod tests {
 
     #[test]
     fn no_result_at_all_is_garbage_too() {
-        let mut limits = Limits::new(CALIBRATION, false);
+        let mut limits = Limits::new(CALIBRATION, Faults::NONE);
         for _ in 0..30 * TICKS_PER_SECOND {
             limits.tick(CEILING, None);
         }
@@ -529,7 +536,7 @@ mod tests {
 
     #[test]
     fn a_failed_self_test_holds_the_fault_ceiling_for_good() {
-        let mut run = Run::with(true);
+        let mut run = Run::with(FAILED);
         run.secs(3);
         run.ui = LEVELS;
         assert_eq!(run.secs(600), FAULT_CEILING);
@@ -545,7 +552,7 @@ mod tests {
 
     #[test]
     fn a_failed_self_test_leaves_lower_levels_alone() {
-        let mut run = Run::with(true);
+        let mut run = Run::with(FAILED);
         run.secs(3);
         for ui in [1, 30, FAULT_CEILING] {
             run.ui = ui;
@@ -555,7 +562,7 @@ mod tests {
 
     #[test]
     fn a_failed_self_test_still_lets_the_battery_turn_it_off() {
-        let mut run = Run::with(true);
+        let mut run = Run::with(FAILED);
         run.adc.voltage = voltage_reading(280);
         run.ui = LEVELS;
         run.secs(10);
@@ -565,7 +572,7 @@ mod tests {
 
     #[test]
     fn a_failed_self_test_shows_nothing_from_off() {
-        let mut run = Run::with(true);
+        let mut run = Run::with(FAILED);
         assert_eq!(run.secs(10), 0);
         assert!(run.levels.iter().all(|&l| l == 0));
     }
