@@ -334,6 +334,81 @@ pub fn adc_result() -> Option<u16> {
     Some(u16::from_le_bytes([lo, hi]))
 }
 
+/// Starts the watchdog in window mode, 32 WDT clocks closed and 32 open. Until
+/// the first feed there's no closed window, only the 32-clock timeout, and the
+/// first pass of the loop feeds it.
+///
+/// It waits for the write to sync, so that feed can't land while it's still
+/// syncing. The WDT shares its oscillator with the PIT, so if that's dead
+/// these waits never end, and neither would the loop: the light's off at this
+/// point, so that's where it stays. It keeps counting in every sleep mode,
+/// which is fine, since the PIT does too and the loop runs every tick, on or
+/// off. Never set WDT.STATUS.LOCK, and never touch the WDTCFG fuse.
+pub fn start_watchdog() {
+    while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}
+    protected_write(
+        reg::WDT_CTRLA,
+        regs::WDT_WINDOW_32CLK | regs::WDT_PERIOD_32CLK,
+    );
+    while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}
+}
+
+/// Tells the watchdog the loop is still running. `main` calls this at the end
+/// of a pass, after the output's been written, when `watchdog::Feeder` says
+/// so. Too early or too late and the chip resets.
+pub fn feed_watchdog() {
+    // SAFETY: `wdr` only resets the watchdog's counter. It touches no memory
+    // and no flags. No `nomem`, so the compiler can't move it above the
+    // output's volatile stores.
+    unsafe { asm!("wdr", options(nostack, preserves_flags)) }
+}
+
+/// What caused this reset, from `RSTCTRL.RSTFR`, leaving it clear for the
+/// next one. The flags are sticky: writing 1 clears any of them, and a
+/// power-on reset clears them all but PORF (section 12.5.1). No other reset
+/// does, so this has to run on every boot before anything could reset the
+/// chip.
+pub fn take_reset_flags() -> u8 {
+    let flags = read(reg::RSTCTRL_RSTFR);
+    write(reg::RSTCTRL_RSTFR, flags);
+    flags
+}
+
+/// Has CRCSCAN check all of flash against the CRC `cargo xtask hex` puts in
+/// its last two bytes, and says whether it matched. Run it before turning
+/// anything on: the scan stalls the CPU until it's done, 8,192 words at
+/// three clocks each, about 7 ms at the reset clock of 20 MHz / 6.
+///
+/// STATUS.OK reads 1 from reset, before any scan, and the scan only starts
+/// three cycles after ENABLE while the CPU carries on (section 27.3.1). So
+/// `nop`s go between the write and the first read, or a read could see the
+/// reset value and pass a flash that's wrong. Three would do if the three
+/// cycles count from the end of the `sts`; the datasheet doesn't say, so
+/// there's a fourth. Then it waits for BUSY to clear, which it should
+/// already have done, since the CPU was stalled.
+///
+/// SRC = FLASH is the only choice with BOOTEND and APPEND at 0, and PRIORITY
+/// the only mode. Writing ENABLE starts a scan even when it's already 1.
+pub fn flash_ok() -> bool {
+    write(
+        reg::CRCSCAN_CTRLB,
+        regs::CRCSCAN_SRC_FLASH | regs::CRCSCAN_MODE_PRIORITY,
+    );
+    write(reg::CRCSCAN_CTRLA, regs::CRCSCAN_ENABLE);
+    // SAFETY: four `nop`s, which touch nothing.
+    unsafe {
+        asm!(
+            "nop",
+            "nop",
+            "nop",
+            "nop",
+            options(nostack, preserves_flags)
+        )
+    };
+    while read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_BUSY != 0 {}
+    read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_OK != 0
+}
+
 /// Lights one aux channel, dimly, or none. Safe to call every tick.
 ///
 /// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up: the
