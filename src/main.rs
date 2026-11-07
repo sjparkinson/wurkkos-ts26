@@ -8,7 +8,9 @@
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 
+// The ADC and the self-tests' reads wait on src/sensors.rs and src/selftest.rs.
 #[cfg(target_arch = "avr")]
+#[allow(dead_code)]
 mod hw;
 // hw.rs and rt.rs need some of regs.rs's constants, not all of them.
 #[cfg(target_arch = "avr")]

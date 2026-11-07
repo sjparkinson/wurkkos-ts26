@@ -7,11 +7,11 @@
 //! | Pin     | Job                                          |
 //! |---------|----------------------------------------------|
 //! | PA0     | UPDI, left alone                             |
-//! | PA1     | Battery divider (AIN1), not read yet         |
+//! | PA1     | Battery divider (AIN1)                       |
 //! | PA5     | Side switch, active low, pulled up           |
 //! | PB0     | Main LED PWM, TCA0 WO0                       |
 //! | PB2     | Boost converter (MP3432) enable, high is on  |
-//! | PC1-PC3 | Aux LEDs, blue, green, red, held low for now |
+//! | PC1-PC3 | Aux LEDs, blue, green, red                   |
 
 #![allow(unsafe_code)]
 
@@ -160,6 +160,36 @@ pub fn init() {
     write(reg::TCA0_CTRLB, regs::TCA_WGMODE_DSBOTTOM);
     write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);
 
+    // ADC0 in single-conversion mode, four conversions accumulated. The cell
+    // and the temperature sensor both read against the 1.1 V reference with
+    // the same timing, so only MUXPOS changes between them (`adc_channel`).
+    // Turning it and the reference on waits for that too.
+    //
+    // The ATDF says CALIB resets to 50% duty, the datasheet says 25%, and 25%
+    // is what it wants at ADC clocks of 1.5 MHz and under (section 30.5.17),
+    // so say so.
+    write(reg::ADC0_CALIB, regs::ADC_DUTYCYC_DUTY25);
+    write(reg::ADC0_CTRLB, regs::ADC_SAMPNUM_ACC4);
+    // 10 MHz / 16 is 625 kHz, inside the 200 kHz to 1.5 MHz the datasheet
+    // wants for 10 bits (table 36-26). REFSEL stays INTREF, and SAMPCAP is
+    // the smaller sample capacitor, for references of 1 V and up.
+    write(
+        reg::ADC0_CTRLC,
+        regs::ADC_SAMPCAP | regs::ADC_REFSEL_INTREF | regs::ADC_PRESC_DIV16,
+    );
+    // 32 ADC clocks, 51 µs, over the 32 µs the temperature sensor needs
+    // (section 30.3.2.6). This leaves SAMPDLY and ASDV at 0, which SAMPLEN
+    // needs (errata DS80000886C 2.4.1).
+    write(reg::ADC0_CTRLD, regs::ADC_INITDLY_DLY32);
+    // 22 ADC clocks of sampling, 35 µs. The temperature sensor needs 32 µs,
+    // and that sets this. PA1 is the other limit: the divider is 25 to 77 kΩ
+    // depending on which story about its resistors is true (docs/hardware.md),
+    // plus the ADC's own 14 kΩ, into 5 pF (table 36-25). At worst that's a
+    // time constant of 0.46 µs, and settling to half a bit of 10 takes under
+    // eight of those, 3.5 µs. The default two clocks would be 3.2 µs, so this
+    // has ten times what it needs, where the default wouldn't.
+    write(reg::ADC0_SAMPCTRL, regs::ADC_SAMPLEN_32US);
+
     // The RTC's periodic interrupt timer, off the internal 32.768 kHz
     // oscillator (RTC.CLKSEL's reset value) divided by 512: 64 Hz, with its
     // interrupt on, in the datasheet's order (section 23.5.1). RTC.CTRLA
@@ -199,13 +229,20 @@ const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 /// instead: the light stays as it was, and the loop keeps running, so the
 /// protection does too.
 ///
+/// It also turns the ADC and its forced reference off. The datasheet gives no
+/// current for either left on in power-down, and Anduril's
+/// `sleep_until_eswitch_pressed` does the same. [`adc_channel`] turns them
+/// back on.
+///
 /// Otherwise it's idle, which stops only the CPU and flash, so TCA0 keeps the
-/// PWM going. Standby would stop TCA0, which has no RUNSTDBY (section
-/// 11.3.2.1).
+/// PWM going and the ADC keeps converting. Standby would stop TCA0, which has
+/// no RUNSTDBY (section 11.3.2.1).
 ///
 /// SEN has to stay set in both: with it clear, `sleep` does nothing.
 fn prepare_sleep(rest: bool) {
     let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {
+        write(reg::ADC0_CTRLA, 0);
+        write(reg::VREF_CTRLB, 0);
         regs::SLPCTRL_SMODE_PDOWN
     } else {
         regs::SLPCTRL_SMODE_IDLE
@@ -260,6 +297,40 @@ pub extern "avr-interrupt" fn rtc_pit() {
 #[unsafe(no_mangle)]
 pub extern "avr-interrupt" fn porta_port() {
     write(reg::VPORTA_INTFLAGS, 1 << SWITCH);
+}
+
+/// Points the ADC at `muxpos`, turning it and the 1.1 V reference on if a rest
+/// turned them off.
+///
+/// The reference is forced on, rather than left to start when each single
+/// conversion asks for it. The datasheet doesn't say how long a request lasts,
+/// and a reference caught starting up reads wrong. Nothing else uses VREF, so
+/// DAC0REFSEL's bits can stay zero.
+fn adc_channel(muxpos: u8) {
+    write(reg::VREF_CTRLB, regs::VREF_ADC0REFEN);
+    write(reg::VREF_CTRLA, regs::VREF_ADC0REFSEL_1V1);
+    write(reg::ADC0_MUXPOS, muxpos);
+    write(reg::ADC0_CTRLA, regs::ADC_ENABLE);
+}
+
+/// Starts a conversion, four accumulated, which takes 260 µs or so and carries
+/// on through idle.
+///
+/// It never clears RESRDY. That works because [`adc_result`] runs every tick
+/// and reading the result clears it, so a stale one is never read twice.
+fn adc_convert() {
+    write(reg::ADC0_COMMAND, regs::ADC_STCONV);
+}
+
+/// The last conversion's result, if it's finished and not been read yet, from
+/// 0 to 4092. Reading it clears RESRDY.
+pub fn adc_result() -> Option<u16> {
+    if read(reg::ADC0_INTFLAGS) & regs::ADC_RESRDY == 0 {
+        return None;
+    }
+    let lo = read(reg::ADC0_RES);
+    let hi = read(reg::ADC0_RES + 1);
+    Some(u16::from_le_bytes([lo, hi]))
 }
 
 pub fn switch_pressed() -> bool {
