@@ -26,7 +26,9 @@ extern "C" fn main() -> ! {
     use ts26::torch::{Changes, Torch};
     use ts26::watchdog::Feeder;
 
-    // What this reset means comes first, so the flags are clear before
+    // PB2 floats from reset until it's an output, so that's first of all.
+    hw::hold_enable_low();
+    // What this reset means comes next, so the flags are clear before
     // anything can reset the chip again. The checks come before anything's
     // turned on. A failure doesn't stop the torch, it quietly caps the light
     // (src/selftest.rs).

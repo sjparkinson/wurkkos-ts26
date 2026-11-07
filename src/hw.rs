@@ -107,6 +107,15 @@ fn protected_write(addr: usize, value: u8) {
     }
 }
 
+/// Drives PB0 and PB2 low, the boost converter off. `main` calls this before
+/// anything else, since PB2 is a high-impedance input from reset until it's
+/// an output, and the CRC scan in [`flash_ok`] stalls the CPU for about 7 ms
+/// before [`init`] runs. OUT is still zero from reset, so making the pins
+/// outputs is all it takes. [`init`] writes the same again.
+pub fn hold_enable_low() {
+    write(reg::VPORTB_DIR, PORTB_OUTPUTS);
+}
+
 pub fn init() {
     // 20 MHz oscillator (the factory OSCCFG fuse) divided by 2. 10 MHz is
     // specified down to 2.7 V of VCC. VCC here comes from a regulator, not
