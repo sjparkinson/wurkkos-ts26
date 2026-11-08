@@ -35,12 +35,13 @@
 
 use std::ops::Range;
 
+use ts26::regs::addr;
+
 /// CPU.SPL, CPU.SPH and CPU.SREG. The CPU keeps these itself rather than
-/// passing them to the bus. The firmware never names SP, so these live here
-/// and this file's tests check them against the ATDF.
-pub const SPL: u16 = 0x003D;
-pub const SPH: u16 = 0x003E;
-pub const SREG: u16 = 0x003F;
+/// passing them to the bus.
+pub const SPL: u16 = addr::CPU_SPL as u16;
+pub const SPH: u16 = addr::CPU_SPH as u16;
+pub const SREG: u16 = addr::CPU_SREG as u16;
 
 // SREG bits.
 const C: u8 = 0;
@@ -671,17 +672,7 @@ fn unknown(w: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atdf::Atdf;
     use crate::elf::SRAM as RAM;
-
-    #[test]
-    fn stack_pointer_and_status_addresses_match_the_atdf() {
-        let atdf = Atdf::load();
-        for (addr, name) in [(SPL, "SPL"), (SPH, "SPH"), (SREG, "SREG")] {
-            let register = atdf.register("CPU", None, name);
-            assert_eq!(u32::from(addr), register.address, "{name}");
-        }
-    }
 
     /// A data address the test programs' handlers write to: each write is
     /// logged, and clears those bits of `pending`, like an INTFLAGS.

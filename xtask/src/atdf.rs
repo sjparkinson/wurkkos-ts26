@@ -364,147 +364,6 @@ pub fn generate(xml: &str) -> String {
 }
 
 #[cfg(test)]
-pub use query::Atdf;
-
-/// Lookups for the simulator's and the UPDI programmer's tests, which still
-/// check their own copies of some constants against the ATDF.
-#[cfg(test)]
-mod query {
-    use super::{Element, num, parse};
-
-    /// The vendored ATtiny1616 ATDF.
-    pub struct Atdf {
-        root: Element,
-    }
-
-    /// A memory segment from the device's address spaces.
-    pub struct Segment {
-        pub start: u32,
-        pub size: u32,
-        pub page: Option<u32>,
-    }
-
-    /// A register on one peripheral instance, at its data-space address.
-    pub struct Register<'a> {
-        pub address: u32,
-        pub size: u32,
-        element: &'a Element,
-        module: &'a Element,
-        label: String,
-    }
-
-    impl Atdf {
-        pub fn load() -> Atdf {
-            Atdf {
-                root: parse(&super::tests::atdf()),
-            }
-        }
-
-        fn file(&self) -> &Element {
-            self.root.child("avr-tools-device-file")
-        }
-
-        fn device(&self) -> &Element {
-            self.file().child("devices").child("device")
-        }
-
-        pub fn segment(&self, name: &str) -> Segment {
-            let segment = self
-                .device()
-                .child("address-spaces")
-                .all("address-space")
-                .flat_map(|space| space.all("memory-segment"))
-                .find(|s| s.attr("name") == Some(name))
-                .unwrap_or_else(|| panic!("no memory segment {name}"));
-            Segment {
-                start: segment.num("start"),
-                size: segment.num("size"),
-                page: segment.attr("pagesize").map(num),
-            }
-        }
-
-        /// A `<property>` from any of the device's property groups.
-        pub fn property(&self, name: &str) -> u32 {
-            let property = self
-                .device()
-                .child("property-groups")
-                .all("property-group")
-                .flat_map(|group| group.all("property"))
-                .find(|p| p.attr("name") == Some(name))
-                .unwrap_or_else(|| panic!("no property {name}"));
-            property.num("value")
-        }
-
-        /// `register("TCA0", Some("SINGLE"), "CTRLA")` is TCA0.CTRLA in single
-        /// mode. Pass a mode only for modules that have them.
-        pub fn register(&self, instance: &str, mode: Option<&str>, name: &str) -> Register<'_> {
-            let label = match mode {
-                Some(m) => format!("{instance}.{m}.{name}"),
-                None => format!("{instance}.{name}"),
-            };
-            let (module_name, group) = self
-                .device()
-                .child("peripherals")
-                .all("module")
-                .find_map(|m| {
-                    let i = m
-                        .all("instance")
-                        .find(|i| i.attr("name") == Some(instance))?;
-                    Some((m.get("name"), i.child("register-group")))
-                })
-                .unwrap_or_else(|| panic!("no peripheral instance {instance}"));
-            let module = self.file().child("modules").named("module", module_name);
-            let mut matches = module
-                .named("register-group", group.get("name-in-module"))
-                .all("register")
-                .filter(|r| r.attr("name") == Some(name))
-                .filter(|r| match (mode, r.attr("modes")) {
-                    (Some(m), Some(modes)) => modes.split_whitespace().any(|x| x == m),
-                    (None, None) => true,
-                    _ => false,
-                });
-            let element = matches
-                .next()
-                .unwrap_or_else(|| panic!("no register {label}"));
-            assert!(matches.next().is_none(), "more than one {label}");
-            Register {
-                address: group.num("offset") + element.num("offset"),
-                size: element.num("size"),
-                element,
-                module,
-                label,
-            }
-        }
-    }
-
-    impl Register<'_> {
-        fn bitfield(&self, name: &str) -> &Element {
-            self.element.named("bitfield", name)
-        }
-
-        /// A bitfield's mask.
-        pub fn mask(&self, field: &str) -> u32 {
-            self.bitfield(field).num("mask")
-        }
-
-        /// A named value of a bitfield, shifted into place.
-        pub fn value(&self, field: &str, value: &str) -> u32 {
-            let bitfield = self.bitfield(field);
-            let mask = bitfield.num("mask");
-            let group = self.module.named("value-group", bitfield.get("values"));
-            let shifted = group.named("value", value).num("value") << mask.trailing_zeros();
-            assert_eq!(
-                shifted & !mask,
-                0,
-                "{}.{field}={value} spills out of its mask",
-                self.label
-            );
-            shifted
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::Path;
@@ -513,7 +372,7 @@ mod tests {
 
     use super::*;
 
-    pub(super) fn atdf() -> String {
+    fn atdf() -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/ATtiny1616.atdf");
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()))
     }
@@ -631,23 +490,6 @@ mod tests {
                 assert_eq!(base + n, register.address as usize, "{port}.{name}");
             }
         }
-    }
-
-    #[test]
-    fn layout_checks_use_the_same_constants_as_the_firmware() {
-        assert_eq!(crate::layout::VECTORS, regs::VECTORS, "vector count");
-        assert_eq!(
-            usize::from(crate::layout::CPU_CCP),
-            addr::CPU_CCP,
-            "CPU.CCP"
-        );
-    }
-
-    #[test]
-    fn sram_matches_the_atdf() {
-        let start = crate::elf::DATA_SPACE + mem::INTERNAL_SRAM_START as u32;
-        let end = crate::elf::DATA_SPACE + mem::INTERNAL_SRAM_END as u32;
-        assert_eq!(crate::elf::RAM, start..end, "elf::RAM");
     }
 
     /// link.x's MEMORY regions, and every other address in it, against the

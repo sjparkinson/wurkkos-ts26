@@ -106,126 +106,53 @@ use crate::switching::RandomSwitching;
 use crate::updi::map;
 use crate::world::{CALIBRATION, FUSE_NAMES, World};
 
-/// The registers the chip models, as data-space addresses, and their bits.
-/// A second copy of some of src/regs.rs, kept here so the model doesn't move
-/// when the firmware does. `tests::registers_match_the_atdf` holds both to the
-/// same source.
-mod reg {
-    pub const CPU_CCP: usize = 0x0034;
-    pub const RSTCTRL_RSTFR: usize = 0x0040;
-    pub const VREF_CTRLA: usize = 0x00A0;
-    pub const VREF_CTRLB: usize = 0x00A1;
-    pub const WDT_CTRLA: usize = 0x0100;
-    pub const WDT_STATUS: usize = 0x0101;
-    pub const CRCSCAN_CTRLA: usize = 0x0120;
-    pub const CRCSCAN_CTRLB: usize = 0x0121;
-    pub const CRCSCAN_STATUS: usize = 0x0122;
-    pub const ADC0_CTRLA: usize = 0x0600;
-    pub const ADC0_CTRLB: usize = 0x0601;
-    pub const ADC0_CTRLC: usize = 0x0602;
-    pub const ADC0_CTRLD: usize = 0x0603;
-    pub const ADC0_SAMPCTRL: usize = 0x0605;
-    pub const ADC0_MUXPOS: usize = 0x0606;
-    pub const ADC0_COMMAND: usize = 0x0608;
-    pub const ADC0_INTFLAGS: usize = 0x060B;
-    pub const ADC0_RES: usize = 0x0610;
-    pub const ADC0_CALIB: usize = 0x0616;
-    pub const SIGROW_TEMPSENSE0: usize = 0x1120;
-    pub const SIGROW_TEMPSENSE1: usize = 0x1121;
-    pub const VPORTA_IN: usize = 0x0002;
-    pub const VPORTA_INTFLAGS: usize = 0x0003;
-    pub const VPORTB_DIR: usize = 0x0004;
-    pub const VPORTB_OUT: usize = 0x0005;
-    pub const VPORTC_DIR: usize = 0x0008;
-    pub const VPORTC_OUT: usize = 0x0009;
-    pub const GPIOR0: usize = 0x001C;
-    pub const GPIOR3: usize = 0x001F;
-    pub const SLPCTRL_CTRLA: usize = 0x0050;
-    pub const CLKCTRL_MCLKCTRLB: usize = 0x0061;
-    pub const RTC_PITCTRLA: usize = 0x0150;
-    pub const RTC_PITSTATUS: usize = 0x0151;
-    pub const RTC_PITINTCTRL: usize = 0x0152;
-    pub const RTC_PITINTFLAGS: usize = 0x0153;
-    pub const PORTA_INTFLAGS: usize = 0x0409;
-    pub const PORTA_PIN0CTRL: usize = 0x0410;
-    pub const PORTB_PIN0CTRL: usize = 0x0430;
-    pub const PORTC_PIN0CTRL: usize = 0x0450;
-    pub const TCA0_CTRLA: usize = 0x0A00;
-    pub const TCA0_CTRLB: usize = 0x0A01;
-    pub const TCA0_INTCTRL: usize = 0x0A0A;
-    pub const TCA0_INTFLAGS: usize = 0x0A0B;
-    pub const TCA0_CNT: usize = 0x0A20;
-    pub const TCA0_PER: usize = 0x0A26;
-    pub const TCA0_CMP0: usize = 0x0A28;
-    pub const TCA0_PERBUF: usize = 0x0A36;
-    pub const TCA0_CMP0BUF: usize = 0x0A38;
-    /// One past the last byte of TCA0's 16-bit registers: CMP2BUF's high byte.
-    pub const TCA0_WIDE_END: usize = 0x0A3E;
-}
+// The registers the chip models, as data-space addresses, and their bits.
+// They're generated from the ATDF (src/regs.rs), so they only move when the
+// ATDF does, never with the firmware. Only the ones the ATDF names: anything
+// hand-written in src/regs.rs is the firmware's choice, and stays out.
+use ts26::regs::{
+    self, ADC_ENABLE, ADC_MUXPOS_AIN1, ADC_MUXPOS_TEMPSENSE, ADC_PRESC, ADC_REFSEL,
+    ADC_REFSEL_INTREF, ADC_RESRDY, ADC_SAMPCAP, ADC_SAMPLEN, ADC_SAMPNUM, ADC_SAMPNUM_ACC4,
+    ADC_STCONV, CRCSCAN_BUSY, CRCSCAN_ENABLE, CRCSCAN_OK, PORT_INVEN, PORT_ISC, PORT_PULLUPEN,
+    RSTCTRL_PORF, RTC_CTRLBUSY, RTC_PI, RTC_PITEN, SLPCTRL_SEN, TCA_CMP0EN, TCA_OVF,
+    VREF_ADC0REFEN, VREF_ADC0REFSEL, WDT_LOCK, WDT_PERIOD, WDT_SYNCBUSY, WDT_WINDOW, addr as reg,
+};
 
-const CCP_IOREG: u8 = 0xD8;
+/// One past the last byte of TCA0's 16-bit registers: CMP2BUF's high byte.
+const TCA0_WIDE_END: usize = reg::TCA0_CMP2BUF + 2;
+
+const CCP_IOREG: u8 = regs::CPU_CCP_IOREG;
 /// CLKCTRL.MCLKCTRLB: PDIV 2X with PEN, 20 MHz down to 10.
-const CLOCK_10MHZ: u8 = 0x01;
-const PORT_PULLUPEN: u8 = 0x08;
-const PORT_INVEN: u8 = 0x80;
-const PORT_ISC: u8 = 0x07;
-const ISC_INTDISABLE: u8 = 0;
-const ISC_BOTHEDGES: u8 = 1;
-const ISC_RISING: u8 = 2;
-const ISC_FALLING: u8 = 3;
-const ISC_INPUT_DISABLE: u8 = 4;
-const ISC_LEVEL: u8 = 5;
+const CLOCK_10MHZ: u8 = regs::CLKCTRL_PDIV_2X | regs::CLKCTRL_PEN;
+const ISC_INTDISABLE: u8 = regs::PORT_ISC_INTDISABLE;
+const ISC_BOTHEDGES: u8 = regs::PORT_ISC_BOTHEDGES;
+const ISC_RISING: u8 = regs::PORT_ISC_RISING;
+const ISC_FALLING: u8 = regs::PORT_ISC_FALLING;
+const ISC_INPUT_DISABLE: u8 = regs::PORT_ISC_INPUT_DISABLE;
+const ISC_LEVEL: u8 = regs::PORT_ISC_LEVEL;
 /// TCA0.CTRLA: CLKSEL DIV1 with ENABLE.
-const TCA_RUNNING: u8 = 0x01;
+const TCA_RUNNING: u8 = regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE;
 /// TCA0.CTRLB.WGMODE = DSBOTTOM.
-const TCA_DSBOTTOM: u8 = 0x07;
-/// TCA0.CTRLB.CMP0EN, on while the light's on, so PB0 goes back to PORT when
-/// it's off.
-const TCA_CMP0EN: u8 = 0x10;
-const TCA_OVF: u8 = 0x01;
-const RTC_PITEN: u8 = 0x01;
-const RTC_CTRLBUSY: u8 = 0x01;
-const RTC_PI: u8 = 0x01;
-const SLEEP_IDLE: u8 = 0x00;
-const SLEEP_POWER_DOWN: u8 = 0x04;
-const SLPCTRL_SEN: u8 = 0x01;
+const TCA_DSBOTTOM: u8 = regs::TCA_WGMODE_DSBOTTOM;
+// TCA0.CTRLB.CMP0EN is on while the light's on, so PB0 goes back to PORT when
+// it's off.
+const SLEEP_IDLE: u8 = regs::SLPCTRL_SMODE_IDLE;
+const SLEEP_POWER_DOWN: u8 = regs::SLPCTRL_SMODE_PDOWN;
 
-const VECTOR_PORTA: u8 = 3;
-const VECTOR_PORTB: u8 = 4;
-const VECTOR_PORTC: u8 = 5;
-const VECTOR_RTC_PIT: u8 = 7;
-const VECTOR_TCA0_OVF: u8 = 8;
-/// Reset plus 30 interrupts.
-const VECTORS: usize = 31;
+const VECTOR_PORTA: u8 = regs::VECTOR_PORTA_PORT as u8;
+const VECTOR_PORTB: u8 = regs::VECTOR_PORTB_PORT as u8;
+const VECTOR_PORTC: u8 = regs::VECTOR_PORTC_PORT as u8;
+const VECTOR_RTC_PIT: u8 = regs::VECTOR_RTC_PIT as u8;
+const VECTOR_TCA0_OVF: u8 = regs::VECTOR_TCA0_OVF as u8;
+/// Reset plus every interrupt.
+const VECTORS: usize = regs::VECTORS;
 
-const RSTCTRL_PORF: u8 = 0x01;
-const VREF_ADC0REFSEL: u8 = 0x70;
-const VREF_1V1: u8 = 0x10;
-const VREF_ADC0REFEN: u8 = 0x02;
-const WDT_PERIOD: u8 = 0x0F;
-const WDT_WINDOW: u8 = 0xF0;
-const WDT_LOCK: u8 = 0x80;
-const WDT_SYNCBUSY: u8 = 0x01;
+const VREF_1V1: u8 = regs::VREF_ADC0REFSEL_1V1;
 /// WDT.CTRLA.PERIOD = 8KCLK, the longest. Anything over is reserved.
-const WDT_PERIOD_MAX: u8 = 0x0B;
-const CRCSCAN_ENABLE: u8 = 0x01;
+const WDT_PERIOD_MAX: u8 = regs::WDT_PERIOD_8KCLK;
 /// CRCSCAN.CTRLB: SRC FLASH with MODE PRIORITY, both 0.
-const CRCSCAN_FLASH_PRIORITY: u8 = 0x00;
-const CRCSCAN_BUSY: u8 = 0x01;
-const CRCSCAN_OK: u8 = 0x02;
-const ADC_ENABLE: u8 = 0x01;
-const ADC_SAMPNUM: u8 = 0x07;
-const ADC_SAMPNUM_ACC4: u8 = 0x02;
-const ADC_SAMPCAP: u8 = 0x40;
-const ADC_REFSEL: u8 = 0x30;
-const ADC_REFSEL_INTREF: u8 = 0x00;
-const ADC_PRESC: u8 = 0x07;
-const ADC_SAMPLEN: u8 = 0x1F;
-const ADC_MUXPOS_AIN1: u8 = 0x01;
-const ADC_MUXPOS_TEMPSENSE: u8 = 0x1E;
-const ADC_STCONV: u8 = 0x01;
-const ADC_RESRDY: u8 = 0x01;
-const ADC_DUTY25: u8 = 0x01;
+const CRCSCAN_FLASH_PRIORITY: u8 = regs::CRCSCAN_SRC_FLASH | regs::CRCSCAN_MODE_PRIORITY;
+const ADC_DUTY25: u8 = regs::ADC_DUTYCYC_DUTY25;
 
 /// CPU cycles a second, from `hw::init`'s clock setup.
 const CLK_PER: u32 = 10_000_000;
@@ -1736,7 +1663,7 @@ impl Chip {
         let Some(low) = self.interrupted else {
             return Ok(());
         };
-        if (reg::TCA0_CNT..reg::TCA0_WIDE_END).contains(&a) {
+        if (reg::TCA0_CNT..TCA0_WIDE_END).contains(&a) {
             return Err(format!(
                 "a handler touches {} with the main loop halfway through {}, and they \
                  share TCA0's TEMP byte, so one corrupts the other (section 8.5.6)",
@@ -1752,7 +1679,7 @@ impl Chip {
 fn plain(addr: usize) -> bool {
     let pin_ctrl = (reg::PORTC_PIN0CTRL..reg::PORTC_PIN0CTRL + 8).contains(&addr);
     pin_ctrl
-        || (reg::GPIOR0..=reg::GPIOR3).contains(&addr)
+        || (reg::GPIO_GPIOR0..=reg::GPIO_GPIOR3).contains(&addr)
         || matches!(
             addr,
             reg::VPORTB_DIR
@@ -2127,7 +2054,7 @@ impl Bus for Chip {
                 }
                 self.tca.temp = Some((a, value));
             }
-            _ if (reg::TCA0_CNT..reg::TCA0_WIDE_END).contains(&a) && a & 1 != 0 => {
+            _ if (reg::TCA0_CNT..TCA0_WIDE_END).contains(&a) && a & 1 != 0 => {
                 match self.tca.temp.take() {
                     Some((low, lo)) if low == a - 1 => {
                         self.tca_written(low, u16::from_le_bytes([lo, value]))?;
@@ -2227,193 +2154,7 @@ impl Bus for Chip {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atdf::Atdf;
     use ts26::ui::Aux;
-
-    #[test]
-    fn registers_match_the_atdf() {
-        let atdf = Atdf::load();
-        let single = Some("SINGLE");
-        for (addr, instance, mode, name) in [
-            (reg::CPU_CCP, "CPU", None, "CCP"),
-            (reg::RSTCTRL_RSTFR, "RSTCTRL", None, "RSTFR"),
-            (reg::VREF_CTRLA, "VREF", None, "CTRLA"),
-            (reg::VREF_CTRLB, "VREF", None, "CTRLB"),
-            (reg::WDT_CTRLA, "WDT", None, "CTRLA"),
-            (reg::WDT_STATUS, "WDT", None, "STATUS"),
-            (reg::CRCSCAN_CTRLA, "CRCSCAN", None, "CTRLA"),
-            (reg::CRCSCAN_CTRLB, "CRCSCAN", None, "CTRLB"),
-            (reg::CRCSCAN_STATUS, "CRCSCAN", None, "STATUS"),
-            (reg::ADC0_CTRLA, "ADC0", None, "CTRLA"),
-            (reg::ADC0_CTRLB, "ADC0", None, "CTRLB"),
-            (reg::ADC0_CTRLC, "ADC0", None, "CTRLC"),
-            (reg::ADC0_CTRLD, "ADC0", None, "CTRLD"),
-            (reg::ADC0_SAMPCTRL, "ADC0", None, "SAMPCTRL"),
-            (reg::ADC0_MUXPOS, "ADC0", None, "MUXPOS"),
-            (reg::ADC0_COMMAND, "ADC0", None, "COMMAND"),
-            (reg::ADC0_INTFLAGS, "ADC0", None, "INTFLAGS"),
-            (reg::ADC0_RES, "ADC0", None, "RES"),
-            (reg::ADC0_CALIB, "ADC0", None, "CALIB"),
-            (reg::SIGROW_TEMPSENSE0, "SIGROW", None, "TEMPSENSE0"),
-            (reg::SIGROW_TEMPSENSE1, "SIGROW", None, "TEMPSENSE1"),
-            (reg::VPORTA_IN, "VPORTA", None, "IN"),
-            (reg::VPORTA_INTFLAGS, "VPORTA", None, "INTFLAGS"),
-            (reg::VPORTB_DIR, "VPORTB", None, "DIR"),
-            (reg::VPORTB_OUT, "VPORTB", None, "OUT"),
-            (reg::VPORTC_DIR, "VPORTC", None, "DIR"),
-            (reg::VPORTC_OUT, "VPORTC", None, "OUT"),
-            (reg::GPIOR0, "GPIO", None, "GPIOR0"),
-            (reg::GPIOR3, "GPIO", None, "GPIOR3"),
-            (reg::SLPCTRL_CTRLA, "SLPCTRL", None, "CTRLA"),
-            (reg::CLKCTRL_MCLKCTRLB, "CLKCTRL", None, "MCLKCTRLB"),
-            (reg::RTC_PITCTRLA, "RTC", None, "PITCTRLA"),
-            (reg::RTC_PITSTATUS, "RTC", None, "PITSTATUS"),
-            (reg::RTC_PITINTCTRL, "RTC", None, "PITINTCTRL"),
-            (reg::RTC_PITINTFLAGS, "RTC", None, "PITINTFLAGS"),
-            (reg::PORTA_INTFLAGS, "PORTA", None, "INTFLAGS"),
-            (reg::PORTA_PIN0CTRL, "PORTA", None, "PIN0CTRL"),
-            (reg::PORTB_PIN0CTRL, "PORTB", None, "PIN0CTRL"),
-            (reg::PORTC_PIN0CTRL, "PORTC", None, "PIN0CTRL"),
-            (reg::TCA0_CTRLA, "TCA0", single, "CTRLA"),
-            (reg::TCA0_CTRLB, "TCA0", single, "CTRLB"),
-            (reg::TCA0_INTCTRL, "TCA0", single, "INTCTRL"),
-            (reg::TCA0_INTFLAGS, "TCA0", single, "INTFLAGS"),
-            (reg::TCA0_CNT, "TCA0", single, "CNT"),
-            (reg::TCA0_PER, "TCA0", single, "PER"),
-            (reg::TCA0_CMP0, "TCA0", single, "CMP0"),
-            (reg::TCA0_PERBUF, "TCA0", single, "PERBUF"),
-            (reg::TCA0_CMP0BUF, "TCA0", single, "CMP0BUF"),
-        ] {
-            let register = atdf.register(instance, mode, name);
-            assert_eq!(addr as u32, register.address, "{instance}.{name}");
-        }
-        let last = atdf.register("TCA0", single, "CMP2BUF");
-        assert_eq!(reg::TCA0_WIDE_END as u32, last.address + last.size);
-    }
-
-    #[test]
-    fn bits_match_the_atdf() {
-        let atdf = Atdf::load();
-        let single = Some("SINGLE");
-        let reg = |instance, mode, name| atdf.register(instance, mode, name);
-        let (ctrla, ctrlb) = (reg("TCA0", single, "CTRLA"), reg("TCA0", single, "CTRLB"));
-        let pin = reg("PORTA", None, "PIN0CTRL");
-        let (slp, wdt_a) = (reg("SLPCTRL", None, "CTRLA"), reg("WDT", None, "CTRLA"));
-        let wdt_s = reg("WDT", None, "STATUS");
-        let (vref_a, vref_b) = (reg("VREF", None, "CTRLA"), reg("VREF", None, "CTRLB"));
-        let (crc_a, crc_s) = (
-            reg("CRCSCAN", None, "CTRLA"),
-            reg("CRCSCAN", None, "STATUS"),
-        );
-        let crc_b = reg("CRCSCAN", None, "CTRLB");
-        let (adc_a, adc_b) = (reg("ADC0", None, "CTRLA"), reg("ADC0", None, "CTRLB"));
-        let adc_c = reg("ADC0", None, "CTRLC");
-        let mux = reg("ADC0", None, "MUXPOS");
-        let clock = reg("CLKCTRL", None, "MCLKCTRLB");
-        for (bits, want, what) in [
-            (
-                CCP_IOREG,
-                reg("CPU", None, "CCP").value("CCP", "IOREG"),
-                "CCP",
-            ),
-            (
-                CLOCK_10MHZ,
-                clock.value("PDIV", "2X") | clock.mask("PEN"),
-                "10 MHz",
-            ),
-            (PORT_PULLUPEN, pin.mask("PULLUPEN"), "PULLUPEN"),
-            (PORT_INVEN, pin.mask("INVEN"), "INVEN"),
-            (PORT_ISC, pin.mask("ISC"), "ISC"),
-            (ISC_INTDISABLE, pin.value("ISC", "INTDISABLE"), "INTDISABLE"),
-            (ISC_BOTHEDGES, pin.value("ISC", "BOTHEDGES"), "BOTHEDGES"),
-            (ISC_RISING, pin.value("ISC", "RISING"), "RISING"),
-            (ISC_FALLING, pin.value("ISC", "FALLING"), "FALLING"),
-            (
-                ISC_INPUT_DISABLE,
-                pin.value("ISC", "INPUT_DISABLE"),
-                "INPUT_DISABLE",
-            ),
-            (ISC_LEVEL, pin.value("ISC", "LEVEL"), "LEVEL"),
-            (
-                TCA_RUNNING,
-                ctrla.value("CLKSEL", "DIV1") | ctrla.mask("ENABLE"),
-                "TCA running",
-            ),
-            (TCA_DSBOTTOM, ctrlb.value("WGMODE", "DSBOTTOM"), "DSBOTTOM"),
-            (TCA_CMP0EN, ctrlb.mask("CMP0EN"), "CMP0EN"),
-            (TCA_OVF, reg("TCA0", single, "INTFLAGS").mask("OVF"), "OVF"),
-            (
-                RTC_PITEN,
-                reg("RTC", None, "PITCTRLA").mask("PITEN"),
-                "PITEN",
-            ),
-            (
-                RTC_CTRLBUSY,
-                reg("RTC", None, "PITSTATUS").mask("CTRLBUSY"),
-                "CTRLBUSY",
-            ),
-            (RTC_PI, reg("RTC", None, "PITINTFLAGS").mask("PI"), "PI"),
-            (SLEEP_IDLE, slp.value("SMODE", "IDLE"), "IDLE"),
-            (SLEEP_POWER_DOWN, slp.value("SMODE", "PDOWN"), "PDOWN"),
-            (SLPCTRL_SEN, slp.mask("SEN"), "SEN"),
-            (
-                RSTCTRL_PORF,
-                reg("RSTCTRL", None, "RSTFR").mask("PORF"),
-                "PORF",
-            ),
-            (VREF_ADC0REFSEL, vref_a.mask("ADC0REFSEL"), "ADC0REFSEL"),
-            (VREF_1V1, vref_a.value("ADC0REFSEL", "1V1"), "1V1"),
-            (VREF_ADC0REFEN, vref_b.mask("ADC0REFEN"), "ADC0REFEN"),
-            (WDT_PERIOD, wdt_a.mask("PERIOD"), "PERIOD"),
-            (WDT_WINDOW, wdt_a.mask("WINDOW"), "WINDOW"),
-            (WDT_PERIOD_MAX, wdt_a.value("PERIOD", "8KCLK"), "8KCLK"),
-            (WDT_LOCK, wdt_s.mask("LOCK"), "LOCK"),
-            (WDT_SYNCBUSY, wdt_s.mask("SYNCBUSY"), "SYNCBUSY"),
-            (CRCSCAN_ENABLE, crc_a.mask("ENABLE"), "CRC ENABLE"),
-            (
-                CRCSCAN_FLASH_PRIORITY,
-                crc_b.value("SRC", "FLASH") | crc_b.value("MODE", "PRIORITY"),
-                "CRC setup",
-            ),
-            (CRCSCAN_BUSY, crc_s.mask("BUSY"), "CRC BUSY"),
-            (CRCSCAN_OK, crc_s.mask("OK"), "CRC OK"),
-            (ADC_ENABLE, adc_a.mask("ENABLE"), "ADC ENABLE"),
-            (ADC_SAMPNUM, adc_b.mask("SAMPNUM"), "SAMPNUM"),
-            (ADC_SAMPNUM_ACC4, adc_b.value("SAMPNUM", "ACC4"), "ACC4"),
-            (ADC_SAMPCAP, adc_c.mask("SAMPCAP"), "SAMPCAP"),
-            (ADC_REFSEL, adc_c.mask("REFSEL"), "REFSEL"),
-            (ADC_REFSEL_INTREF, adc_c.value("REFSEL", "INTREF"), "INTREF"),
-            (ADC_PRESC, adc_c.mask("PRESC"), "PRESC"),
-            (
-                ADC_SAMPLEN,
-                reg("ADC0", None, "SAMPCTRL").mask("SAMPLEN"),
-                "SAMPLEN",
-            ),
-            (ADC_MUXPOS_AIN1, mux.value("MUXPOS", "AIN1"), "AIN1"),
-            (
-                ADC_MUXPOS_TEMPSENSE,
-                mux.value("MUXPOS", "TEMPSENSE"),
-                "TEMPSENSE",
-            ),
-            (
-                ADC_STCONV,
-                reg("ADC0", None, "COMMAND").mask("STCONV"),
-                "STCONV",
-            ),
-            (
-                ADC_RESRDY,
-                reg("ADC0", None, "INTFLAGS").mask("RESRDY"),
-                "RESRDY",
-            ),
-            (
-                ADC_DUTY25,
-                reg("ADC0", None, "CALIB").value("DUTYCYC", "DUTY25"),
-                "DUTY25",
-            ),
-        ] {
-            assert_eq!(u32::from(bits), want, "{what}");
-        }
-    }
 
     /// A chip with the ADC set up as `hw::init` and `adc_channel` do.
     fn adc_ready(muxpos: u8) -> Chip {
@@ -2663,7 +2404,7 @@ mod tests {
         let err = chip.write(reg::TCA0_CMP0BUF as u16, 11).unwrap_err();
         assert!(err.contains("TEMP"), "{err}");
         // A byte that isn't TCA0's is fine.
-        chip.write(reg::GPIOR0 as u16, 1).unwrap();
+        chip.write(reg::GPIO_GPIOR0 as u16, 1).unwrap();
     }
 
     #[test]

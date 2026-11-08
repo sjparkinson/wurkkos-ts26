@@ -3,10 +3,13 @@
 
 use std::ops::Range;
 
+use ts26::regs::mem;
+
 /// AVR ELF files put data space at 0x800000.
 pub const DATA_SPACE: u32 = 0x80_0000;
 /// SRAM's data-space range on the ATtiny1616, as ELF addresses.
-pub const RAM: Range<u32> = 0x80_3800..0x80_4000;
+pub const RAM: Range<u32> =
+    DATA_SPACE + mem::INTERNAL_SRAM_START as u32..DATA_SPACE + mem::INTERNAL_SRAM_END as u32;
 /// The same range as the CPU and UPDI see it, as data-space addresses.
 pub const SRAM: Range<u16> = (RAM.start - DATA_SPACE) as u16..(RAM.end - DATA_SPACE) as u16;
 
