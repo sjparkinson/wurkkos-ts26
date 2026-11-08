@@ -451,6 +451,22 @@ mod tests {
         assert_eq!(map::NVMCTRL_STATUS, 0x1002, "NVMCTRL.STATUS");
     }
 
+    /// The NVM commands and status bits, pinned to the numbers in the
+    /// datasheet's NVMCTRL chapter and pymcuprog's `nvmp0.py`, for the same
+    /// reason. The fake chip decodes them
+    /// with these same names, so a wrong alias, FUSEWRITE in particular,
+    /// would pass every other test.
+    #[test]
+    fn nvm_commands_are_the_datasheets() {
+        assert_eq!(NVM_PAGE_WRITE, 0x01, "WP");
+        assert_eq!(NVM_PAGE_ERASE_WRITE, 0x03, "ERWP");
+        assert_eq!(NVM_PAGE_BUFFER_CLEAR, 0x04, "PBC");
+        assert_eq!(NVM_CHIP_ERASE, 0x05, "CHER");
+        assert_eq!(NVM_FBUSY, 0x01, "FBUSY");
+        assert_eq!(NVM_EEBUSY, 0x02, "EEBUSY");
+        assert_eq!(NVM_WRERROR, 0x04, "WRERROR");
+    }
+
     #[test]
     fn reads_the_sib() {
         let mut p = Programmer::connect(Tiny::new()).unwrap();

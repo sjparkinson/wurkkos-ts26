@@ -134,8 +134,6 @@ const ISC_LEVEL: u8 = regs::PORT_ISC_LEVEL;
 const TCA_RUNNING: u8 = regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE;
 /// TCA0.CTRLB.WGMODE = DSBOTTOM.
 const TCA_DSBOTTOM: u8 = regs::TCA_WGMODE_DSBOTTOM;
-// TCA0.CTRLB.CMP0EN is on while the light's on, so PB0 goes back to PORT when
-// it's off.
 const SLEEP_IDLE: u8 = regs::SLPCTRL_SMODE_IDLE;
 const SLEEP_POWER_DOWN: u8 = regs::SLPCTRL_SMODE_PDOWN;
 
