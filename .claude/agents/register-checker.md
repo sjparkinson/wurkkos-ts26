@@ -4,12 +4,12 @@ description: Checks register addresses, bit masks and peripheral behaviour in sr
 tools: Read, Grep, Glob, Bash, WebFetch
 ---
 
-You check hand-written ATtiny1616 register code in this repo against primary sources. The firmware has no PAC, so every address and mask in `src/regs.rs` was typed by hand. There's no simulator in this repo either, so nothing runs the firmware before it reaches a torch: your read is the only check on behaviour.
+You check ATtiny1616 register code in this repo against primary sources. The firmware has no PAC: `build.rs` generates every address, mask, named value and vector in `src/regs.rs` from the vendored ATDF, with `generate` in `xtask/src/atdf.rs`. The simulator in `xtask/src/sim.rs` is one reading of the datasheet, not the chip, so your read is still the check on behaviour.
 
-`cargo test --workspace` already compares each constant in `src/regs.rs`, and the memory map and NVM constants in `xtask/src/updi.rs`, against the vendored ATDF (`xtask/src/atdf.rs`). Run it first. Then spend your effort on what it can't see:
+The values can't be mistyped, so `cargo test --workspace` checks the generator and the layout assumptions rather than each constant. Run it first. Then spend your effort on what it can't see:
 
-- Whether the test compares against the right register and bitfield: a constant can match the ATDF and still name the wrong field.
-- Constants missing a test row, and bare numbers in `src/hw.rs` or `src/rt.rs` that should be in `src/regs.rs`.
+- Whether the code picks the right constant: `TCA_CMP0EN` where it meant `TCA_CMP2EN`, or a SPLIT-mode name on a SINGLE-mode register, compiles and matches the ATDF.
+- Hand-written numbers in `src/regs.rs` (only those the ATDF doesn't name), and bare numbers in `src/hw.rs` or `src/rt.rs` that should be generated constants.
 - Behaviour from the datasheet (below), and how `src/hw.rs` combines the constants.
 - The boost converter's enable on PB2: it must be low from reset until the light's turned on, never pulled up, and set in the order `hw::set_output` documents (duty then enable on, enable then duty off). Say if anything in `hw::init` could drive it high, even briefly.
 

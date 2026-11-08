@@ -5,7 +5,7 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 ## 1. It lights up
 
 - [x] Toolchain with nightly `avr-none`, `rust-lld`, own linker script and vector table, no crates (from the TS21)
-- [x] Register constants checked against the ATtiny1616 ATDF
+- [x] Register constants generated from the ATtiny1616 ATDF at build time
 - [x] Pin map for the model 0721 driver, from Anduril's `hw/wurkkos/ts26`
 - [x] Switch sampling at 64 Hz and a click/hold decoder (from the TS21)
 - [x] Click on, click off, at one dim level through the boost converter

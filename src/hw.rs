@@ -1,8 +1,7 @@
 //! The TS26 driver's pins and the ATtiny1616 registers that drive them.
 //!
-//! No PAC: the handful of registers we touch are written out by hand in
-//! `src/regs.rs`, and xtask's tests check them against Microchip's ATDF. The
-//! pin map is `ts26::board`'s.
+//! No PAC: the register constants are generated from Microchip's ATDF into
+//! `src/regs.rs` at build time. The pin map is `ts26::board`'s.
 
 #![allow(unsafe_code)]
 
@@ -93,6 +92,9 @@ fn write16(addr: usize, value: u16) {
 /// Rust gives no guarantee about how many instructions it puts between two
 /// `write` calls, so the pair is written out by hand.
 fn protected_write(addr: usize, value: u8) {
+    // `out` only reaches the first 64 I/O addresses, which are also the
+    // first 64 of data space.
+    const _: () = assert!(reg::CPU_CCP < 0x40);
     // SAFETY: writes the IOREG key to CPU.CCP, then `value` to `addr`.
     // Touches no memory Rust knows about.
     unsafe {

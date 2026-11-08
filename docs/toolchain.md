@@ -7,7 +7,7 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's 
 - rustc's built-in `avr-none` target with `-C target-cpu=attiny1616`.
 - A pinned nightly (`rust-toolchain.toml`), because `core` has to be rebuilt for AVR with `-Zbuild-std=core`, and inline assembly on AVR still needs `#![feature(asm_experimental_arch)]`.
 - Linked by the `rust-lld` that rustup ships, against this repo's own linker script (`link.x`) and startup code (`src/rt.rs`).
-- Registers written out by hand in `src/regs.rs`, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
+- Register constants generated from Microchip's ATDF at build time, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
 - The UPDI programmer and the simulator live in `xtask`, so rustup is the only thing to install.
 
 `cargo xtask hex` builds `target/avr-none/release/ts26.elf`, checks its layout, runs it on the simulator, pads the image to 16 KB with a CRC in the last two bytes, writes that as Intel HEX at `target/wurkkos-ts26-0721.hex`, and reports flash, RAM, stack and instruction counts. The simulator's a mistake-finder, not proof, and [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) has what it leaves out.
@@ -43,9 +43,9 @@ So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of
 
 If the link ever fails with an undefined `__*` symbol, this is why.
 
-## Registers by hand
+## Registers from the ATDF
 
-[avr-device](https://github.com/Rahix/avr-device) has the ATtiny1614 and 1617 but not the 1616, and [avr-hal](https://github.com/Rahix/avr-hal) has no tinyAVR 1-series support. Using the 1617's PAC would probably work, since it's the same die, but this firmware touches a limited set of registers. Writing them out by hand in `src/regs.rs`, each with a comment naming the register in the ATDF (`vendor/ATtiny1616.atdf`), is less code than the dependency. It's a module of the library, because `selftest` checks fuse fields with the same masks.
+[avr-device](https://github.com/Rahix/avr-device) has the ATtiny1614 and 1617 but not the 1616, and [avr-hal](https://github.com/Rahix/avr-hal) has no tinyAVR 1-series support. Using the 1617's PAC would probably work, since it's the same die, but this firmware touches a limited set of registers and takes no dependencies. Instead `build.rs` generates plain constants from the vendored ATDF (`vendor/ATtiny1616.atdf`) into `OUT_DIR`, and `src/regs.rs` includes them. It reuses the small XML parser in `xtask/src/atdf.rs`, by path, so there's no extra crate, and the constants fold away at compile time, so the hex came out byte for byte the same as it did with them typed out. It's a module of the library, because `selftest` checks fuse fields with the same masks.
 
 ## Workarounds in use
 

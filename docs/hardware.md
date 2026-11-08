@@ -108,7 +108,7 @@ The same ATtiny1616 as the TS21, so the TS21's [MCU notes](https://github.com/sj
 - The battery is read on AIN1 against the 1.1 V reference, where the TS21 reads VDD against 1.5 V.
 - TCA0 stays at TOP 255; no variable TOP.
 
-Register addresses and bit values in `src/regs.rs` are checked against Microchip's ATDF in [`vendor/`](../vendor/README.md) by `cargo test`.
+Register addresses and bit values in `src/regs.rs` are generated from Microchip's ATDF in [`vendor/`](../vendor/README.md) at build time.
 
 ## The rest of the light
 

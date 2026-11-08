@@ -1,20 +1,19 @@
-//! Enough XML to read Microchip's ATDF, and the tests that check every
-//! hand-typed register constant against the copy in `vendor/`.
+//! Enough XML to read Microchip's ATDF, and the generator that turns the copy
+//! in `vendor/` into the constants in `src/regs.rs`.
 //!
-//! Test-only: `main.rs` declares this module under `#[cfg(test)]`. The
-//! firmware's constants live in `src/regs.rs`, which is pulled in below by
-//! path because the firmware crate never builds for the host with them.
-//! The UPDI constants are checked in `updi.rs`'s own tests.
+//! This file does two jobs. The root package's `build.rs` loads it by path and
+//! calls [`generate`]. xtask compiles it for its tests only (`main.rs` declares
+//! it under `#[cfg(test)]`), which is where the parser and the generator get
+//! tested, because a build script can't have tests of its own. The tests also
+//! check what generating can't: what the firmware assumes about the ATDF's
+//! layout, and that `link.x` agrees with it. So nothing outside them may name
+//! `crate::` or `ts26::`, which `build.rs` doesn't have.
 //!
 //! The parser handles what ATDF files contain: elements, double- or
 //! single-quoted attributes, comments and the XML declaration. Text content
 //! is skipped, since the ATDF keeps everything in attributes.
 
-use std::fs;
-use std::path::Path;
-
-#[path = "../../src/regs.rs"]
-mod regs;
+use std::collections::BTreeMap;
 
 /// One XML element: its name, attributes and child elements.
 struct Element {
@@ -174,161 +173,350 @@ fn unescape(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// The vendored ATtiny1616 ATDF.
-pub struct Atdf {
-    root: Element,
-}
-
-/// A memory segment from the device's address spaces.
-pub struct Segment {
-    pub start: u32,
-    pub size: u32,
-    pub page: Option<u32>,
-}
-
 /// A register on one peripheral instance, at its data-space address.
-pub struct Register<'a> {
-    pub address: u32,
-    pub size: u32,
+struct Register<'a> {
+    instance: &'a str,
+    name: &'a str,
+    address: u32,
+    size: u32,
     element: &'a Element,
-    module: &'a Element,
-    label: String,
 }
 
-impl Atdf {
-    pub fn load() -> Atdf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/ATtiny1616.atdf");
-        let xml = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()));
-        Atdf { root: parse(&xml) }
+/// Every register on every peripheral instance. TCA0's come twice where its
+/// SINGLE and SPLIT modes share a name.
+fn registers(document: &Element) -> Vec<Register<'_>> {
+    let file = document.child("avr-tools-device-file");
+    let device = file.child("devices").child("device");
+    let mut registers = Vec::new();
+    for module in device.child("peripherals").all("module") {
+        let definition = file.child("modules").named("module", module.get("name"));
+        for instance in module.all("instance") {
+            for group in instance.all("register-group") {
+                let name = group.get("name-in-module");
+                for element in definition.named("register-group", name).all("register") {
+                    registers.push(Register {
+                        instance: instance.get("name"),
+                        name: element.get("name"),
+                        address: group.num("offset") + element.num("offset"),
+                        size: element.num("size"),
+                        element,
+                    });
+                }
+            }
+        }
     }
+    registers
+}
 
-    fn file(&self) -> &Element {
-        self.root.child("avr-tools-device-file")
-    }
+/// Generated constants on their way out, by name, so they come out sorted.
+#[derive(Default)]
+struct Consts(BTreeMap<String, (u32, String)>);
 
-    fn device(&self) -> &Element {
-        self.file().child("devices").child("device")
-    }
-
-    pub fn segment(&self, name: &str) -> Segment {
-        let segment = self
-            .device()
-            .child("address-spaces")
-            .all("address-space")
-            .flat_map(|space| space.all("memory-segment"))
-            .find(|s| s.attr("name") == Some(name))
-            .unwrap_or_else(|| panic!("no memory segment {name}"));
-        Segment {
-            start: segment.num("start"),
-            size: segment.num("size"),
-            page: segment.attr("pagesize").map(num),
+impl Consts {
+    /// Adds a constant. A name can turn up more than once (RTC.PITINTFLAGS.PI
+    /// and RTC.PITINTCTRL.PI, or a TCA register in both modes), which is fine
+    /// while the value agrees. If it doesn't, the names in `src/regs.rs` have
+    /// stopped being unique, and the build should say so. The ATDF's names
+    /// are nearly all upper case; a few values, like `10mV`, aren't.
+    fn add(&mut self, name: String, value: u32, doc: String) {
+        let name = name.to_ascii_uppercase();
+        if let Some((theirs, first)) = self.0.get(&name) {
+            assert_eq!(
+                *theirs, value,
+                "{name} is both `{first}` and `{doc}`, with different values"
+            );
+        } else {
+            self.0.insert(name, (value, doc));
         }
     }
 
-    /// A `<property>` from any of the device's property groups.
-    pub fn property(&self, name: &str) -> u32 {
-        let property = self
-            .device()
-            .child("property-groups")
-            .all("property-group")
+    fn render(&self, kind: fn(u32) -> &'static str) -> String {
+        self.0
+            .iter()
+            .map(|(name, (value, doc))| {
+                let kind = kind(*value);
+                format!("/// {doc}\npub const {name}: {kind} = {value:#04X};\n")
+            })
+            .collect()
+    }
+}
+
+/// `path`, and the ATDF's caption for it if it has one.
+fn doc(path: String, element: &Element) -> String {
+    match element.attr("caption") {
+        Some(caption) if !caption.is_empty() => format!("{path}: {caption}"),
+        _ => path,
+    }
+}
+
+/// The Rust source of every constant the ATDF can give us. `src/regs.rs`
+/// includes it, and describes the names.
+///
+/// Only addresses, masks, named values, segments, vectors and the signature.
+/// The `initval`s stay out on purpose: they disagree with the datasheet on
+/// ADC0.CALIB and the factory OSCCFG and SYSCFG0.
+pub fn generate(xml: &str) -> String {
+    let document = parse(xml);
+    let file = document.child("avr-tools-device-file");
+    let device = file.child("devices").child("device");
+
+    let mut addr = Consts::default();
+    for r in registers(&document) {
+        let width = match r.size {
+            1 => String::new(),
+            size => format!(", {}-bit", size * 8),
+        };
+        addr.add(
+            format!("{}_{}", r.instance, r.name),
+            r.address,
+            doc(format!("{}.{}{width}", r.instance, r.name), r.element),
+        );
+    }
+
+    let mut mem = Consts::default();
+    let spaces = device.child("address-spaces").all("address-space");
+    for segment in spaces.flat_map(|space| space.all("memory-segment")) {
+        let name = segment.get("name");
+        let (start, size) = (segment.num("start"), segment.num("size"));
+        mem.add(format!("{name}_START"), start, format!("{name}'s start."));
+        mem.add(format!("{name}_SIZE"), size, format!("{name}'s size."));
+        let end = "The first address after it.".to_string();
+        mem.add(format!("{name}_END"), start + size, end);
+        if let Some(page) = segment.attr("pagesize") {
+            let doc = format!("{name}'s page size.");
+            mem.add(format!("{name}_PAGE"), num(page), doc);
+        }
+    }
+
+    let mut bits = Consts::default();
+    for module in file.child("modules").all("module") {
+        let prefix = module.get("name");
+        let registers = module
+            .all("register-group")
+            .flat_map(|group| group.all("register"));
+        for register in registers {
+            for field in register.all("bitfield") {
+                let mask = field.num("mask");
+                let name = format!("{prefix}_{}", field.get("name"));
+                let path = format!("{prefix}.{}.{}", register.get("name"), field.get("name"));
+                let values = field.attr("values").map(|group| {
+                    let group = module.named("value-group", group);
+                    group.all("value")
+                });
+                for value in values.into_iter().flatten() {
+                    let label = value.get("name");
+                    let shifted = value.num("value") << mask.trailing_zeros();
+                    assert_eq!(shifted & !mask, 0, "{path}={label} spills out of its mask");
+                    bits.add(
+                        format!("{name}_{label}"),
+                        shifted,
+                        doc(format!("{path} = {label}"), value),
+                    );
+                }
+                bits.add(name, mask, doc(path, field));
+            }
+        }
+    }
+
+    let mut vectors = Consts::default();
+    let mut count = 0;
+    for interrupt in device.child("interrupts").all("interrupt") {
+        let index = interrupt.num("index");
+        let (instance, name) = (interrupt.get("module-instance"), interrupt.get("name"));
+        count = count.max(index + 1);
+        let path = format!("{instance}.{name}'s vector");
+        vectors.add(
+            format!("VECTOR_{instance}_{name}"),
+            index,
+            doc(path, interrupt),
+        );
+    }
+    let doc = "Entries in the vector table, reset included.".to_string();
+    vectors.add("VECTORS".into(), count, doc);
+
+    let property = |name: &str| {
+        let groups = device.child("property-groups").all("property-group");
+        groups
             .flat_map(|group| group.all("property"))
             .find(|p| p.attr("name") == Some(name))
-            .unwrap_or_else(|| panic!("no property {name}"));
-        property.num("value")
-    }
+            .unwrap_or_else(|| panic!("no property {name}"))
+            .num("value")
+    };
+    let signature = [
+        property("SIGNATURE0"),
+        property("SIGNATURE1"),
+        property("SIGNATURE2"),
+    ];
 
-    /// The vector table slot of one interrupt.
-    pub fn vector(&self, instance: &str, name: &str) -> u32 {
-        self.device()
-            .child("interrupts")
-            .all("interrupt")
-            .find(|i| i.attr("module-instance") == Some(instance) && i.attr("name") == Some(name))
-            .unwrap_or_else(|| panic!("no interrupt {instance}.{name}"))
-            .num("index")
-    }
-
-    /// Reset plus every interrupt: the highest vector index, plus one.
-    pub fn vectors(&self) -> u32 {
-        let interrupts = self.device().child("interrupts").all("interrupt");
-        interrupts
-            .map(|i| i.num("index"))
-            .max()
-            .expect("no interrupts")
-            + 1
-    }
-
-    /// `register("TCA0", Some("SINGLE"), "CTRLA")` is TCA0.CTRLA in single
-    /// mode. Pass a mode only for modules that have them.
-    pub fn register(&self, instance: &str, mode: Option<&str>, name: &str) -> Register<'_> {
-        let label = match mode {
-            Some(m) => format!("{instance}.{m}.{name}"),
-            None => format!("{instance}.{name}"),
-        };
-        let (module_name, group) = self
-            .device()
-            .child("peripherals")
-            .all("module")
-            .find_map(|m| {
-                let i = m
-                    .all("instance")
-                    .find(|i| i.attr("name") == Some(instance))?;
-                Some((m.get("name"), i.child("register-group")))
-            })
-            .unwrap_or_else(|| panic!("no peripheral instance {instance}"));
-        let module = self.file().child("modules").named("module", module_name);
-        let mut matches = module
-            .named("register-group", group.get("name-in-module"))
-            .all("register")
-            .filter(|r| r.attr("name") == Some(name))
-            .filter(|r| match (mode, r.attr("modes")) {
-                (Some(m), Some(modes)) => modes.split_whitespace().any(|x| x == m),
-                (None, None) => true,
-                _ => false,
-            });
-        let element = matches
-            .next()
-            .unwrap_or_else(|| panic!("no register {label}"));
-        assert!(matches.next().is_none(), "more than one {label}");
-        Register {
-            address: group.num("offset") + element.num("offset"),
-            size: element.num("size"),
-            element,
-            module,
-            label,
-        }
-    }
+    format!(
+        "/// Data-space addresses of every register.\n\
+         pub mod addr {{\n{}}}\n\n\
+         /// Every memory segment. All of them are in data space but PROGMEM.\n\
+         pub mod mem {{\n{}}}\n\n\
+         {}\n{}\n\
+         /// The device signature.\n\
+         pub const SIGNATURE: [u8; 3] = {signature:#04X?};\n",
+        addr.render(|_| "usize"),
+        mem.render(|_| "usize"),
+        bits.render(|value| if value > 0xFF { "u16" } else { "u8" }),
+        vectors.render(|_| "usize"),
+    )
 }
 
-impl Register<'_> {
-    fn bitfield(&self, name: &str) -> &Element {
-        self.element.named("bitfield", name)
+#[cfg(test)]
+pub use query::Atdf;
+
+/// Lookups for the simulator's and the UPDI programmer's tests, which still
+/// check their own copies of some constants against the ATDF.
+#[cfg(test)]
+mod query {
+    use super::{Element, num, parse};
+
+    /// The vendored ATtiny1616 ATDF.
+    pub struct Atdf {
+        root: Element,
     }
 
-    /// A bitfield's mask.
-    pub fn mask(&self, field: &str) -> u32 {
-        self.bitfield(field).num("mask")
+    /// A memory segment from the device's address spaces.
+    pub struct Segment {
+        pub start: u32,
+        pub size: u32,
+        pub page: Option<u32>,
     }
 
-    /// A named value of a bitfield, shifted into place.
-    pub fn value(&self, field: &str, value: &str) -> u32 {
-        let bitfield = self.bitfield(field);
-        let mask = bitfield.num("mask");
-        let group = self.module.named("value-group", bitfield.get("values"));
-        let shifted = group.named("value", value).num("value") << mask.trailing_zeros();
-        assert_eq!(
-            shifted & !mask,
-            0,
-            "{}.{field}={value} spills out of its mask",
-            self.label
-        );
-        shifted
+    /// A register on one peripheral instance, at its data-space address.
+    pub struct Register<'a> {
+        pub address: u32,
+        pub size: u32,
+        element: &'a Element,
+        module: &'a Element,
+        label: String,
+    }
+
+    impl Atdf {
+        pub fn load() -> Atdf {
+            Atdf {
+                root: parse(&super::tests::atdf()),
+            }
+        }
+
+        fn file(&self) -> &Element {
+            self.root.child("avr-tools-device-file")
+        }
+
+        fn device(&self) -> &Element {
+            self.file().child("devices").child("device")
+        }
+
+        pub fn segment(&self, name: &str) -> Segment {
+            let segment = self
+                .device()
+                .child("address-spaces")
+                .all("address-space")
+                .flat_map(|space| space.all("memory-segment"))
+                .find(|s| s.attr("name") == Some(name))
+                .unwrap_or_else(|| panic!("no memory segment {name}"));
+            Segment {
+                start: segment.num("start"),
+                size: segment.num("size"),
+                page: segment.attr("pagesize").map(num),
+            }
+        }
+
+        /// A `<property>` from any of the device's property groups.
+        pub fn property(&self, name: &str) -> u32 {
+            let property = self
+                .device()
+                .child("property-groups")
+                .all("property-group")
+                .flat_map(|group| group.all("property"))
+                .find(|p| p.attr("name") == Some(name))
+                .unwrap_or_else(|| panic!("no property {name}"));
+            property.num("value")
+        }
+
+        /// `register("TCA0", Some("SINGLE"), "CTRLA")` is TCA0.CTRLA in single
+        /// mode. Pass a mode only for modules that have them.
+        pub fn register(&self, instance: &str, mode: Option<&str>, name: &str) -> Register<'_> {
+            let label = match mode {
+                Some(m) => format!("{instance}.{m}.{name}"),
+                None => format!("{instance}.{name}"),
+            };
+            let (module_name, group) = self
+                .device()
+                .child("peripherals")
+                .all("module")
+                .find_map(|m| {
+                    let i = m
+                        .all("instance")
+                        .find(|i| i.attr("name") == Some(instance))?;
+                    Some((m.get("name"), i.child("register-group")))
+                })
+                .unwrap_or_else(|| panic!("no peripheral instance {instance}"));
+            let module = self.file().child("modules").named("module", module_name);
+            let mut matches = module
+                .named("register-group", group.get("name-in-module"))
+                .all("register")
+                .filter(|r| r.attr("name") == Some(name))
+                .filter(|r| match (mode, r.attr("modes")) {
+                    (Some(m), Some(modes)) => modes.split_whitespace().any(|x| x == m),
+                    (None, None) => true,
+                    _ => false,
+                });
+            let element = matches
+                .next()
+                .unwrap_or_else(|| panic!("no register {label}"));
+            assert!(matches.next().is_none(), "more than one {label}");
+            Register {
+                address: group.num("offset") + element.num("offset"),
+                size: element.num("size"),
+                element,
+                module,
+                label,
+            }
+        }
+    }
+
+    impl Register<'_> {
+        fn bitfield(&self, name: &str) -> &Element {
+            self.element.named("bitfield", name)
+        }
+
+        /// A bitfield's mask.
+        pub fn mask(&self, field: &str) -> u32 {
+            self.bitfield(field).num("mask")
+        }
+
+        /// A named value of a bitfield, shifted into place.
+        pub fn value(&self, field: &str, value: &str) -> u32 {
+            let bitfield = self.bitfield(field);
+            let mask = bitfield.num("mask");
+            let group = self.module.named("value-group", bitfield.get("values"));
+            let shifted = group.named("value", value).num("value") << mask.trailing_zeros();
+            assert_eq!(
+                shifted & !mask,
+                0,
+                "{}.{field}={value} spills out of its mask",
+                self.label
+            );
+            shifted
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use ts26::regs::{self, addr, mem};
+
     use super::*;
+
+    pub(super) fn atdf() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/ATtiny1616.atdf");
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()))
+    }
 
     #[test]
     fn parses_attributes_comments_and_nesting() {
@@ -345,369 +533,103 @@ mod tests {
         assert_eq!(num("16"), 16);
     }
 
-    /// Every address in `regs::addr`, and that the 16-bit ones really are.
+    /// One constant per rule in `generate`, as the datasheet has them, so a
+    /// generator that goes wrong can't agree with itself.
     #[test]
-    fn register_addresses_match_the_atdf() {
-        let atdf = Atdf::load();
-        let at = |instance: &str, mode: Option<&str>, name: &str| {
-            let register = atdf.register(instance, mode, name);
-            (register.address as usize, register.size)
-        };
-        let single = Some("SINGLE");
+    fn generates_each_kind_of_constant() {
+        assert_eq!(addr::CPU_CCP, 0x0034, "a plain address");
+        assert_eq!(addr::ADC0_CTRLA, 0x0600, "base plus offset");
+        assert_eq!(addr::TCA0_CMP1BUF, 0x0A3A, "a SINGLE mode register");
+        assert_eq!(addr::FUSE_BOOTEND, 0x1288, "a fuse");
+        assert_eq!(mem::INTERNAL_SRAM_START, 0x3800, "a segment's start");
+        assert_eq!(mem::INTERNAL_SRAM_SIZE, 0x0800, "a segment's size");
+        assert_eq!(mem::INTERNAL_SRAM_END, 0x4000, "a segment's end");
+        assert_eq!(mem::EEPROM_PAGE, 32, "a segment's page size");
+        assert_eq!(regs::PORT_PULLUPEN, 0x08, "a mask");
+        assert_eq!(regs::TCA_CMP1EN, 0x20, "a mask on a mode's register");
+        assert_eq!(regs::TCD_CMPASET, 0x0FFF, "a mask wider than a byte");
+        assert_eq!(regs::ADC_REFSEL_VDDREF, 0x10, "a shifted value");
+        assert_eq!(regs::RTC_PERIOD_CYC512, 0x40, "a shifted value");
+        assert_eq!(regs::ADC_REFSEL_INTREF, 0x00, "a value of zero");
+        assert_eq!(regs::VECTOR_RTC_PIT, 7, "a vector");
+        assert_eq!(regs::VECTORS, 31, "the vector count");
+        assert_eq!(regs::SIGNATURE, [0x1E, 0x94, 0x21], "the signature");
+    }
 
-        for (ours, instance, mode, name, size) in [
-            (regs::addr::CPU_CCP, "CPU", None, "CCP", 1),
-            (regs::addr::CPU_SREG, "CPU", None, "SREG", 1),
-            (regs::addr::VPORTA_IN, "VPORTA", None, "IN", 1),
-            (regs::addr::VPORTA_INTFLAGS, "VPORTA", None, "INTFLAGS", 1),
-            (regs::addr::VPORTB_DIR, "VPORTB", None, "DIR", 1),
-            (regs::addr::VPORTB_OUT, "VPORTB", None, "OUT", 1),
-            (regs::addr::VPORTC_DIR, "VPORTC", None, "DIR", 1),
-            (regs::addr::GPIO_GPIOR0, "GPIO", None, "GPIOR0", 1),
-            (regs::addr::GPIO_GPIOR1, "GPIO", None, "GPIOR1", 1),
-            (regs::addr::GPIO_GPIOR2, "GPIO", None, "GPIOR2", 1),
-            (regs::addr::GPIO_GPIOR3, "GPIO", None, "GPIOR3", 1),
-            (regs::addr::RSTCTRL_RSTFR, "RSTCTRL", None, "RSTFR", 1),
-            (regs::addr::SLPCTRL_CTRLA, "SLPCTRL", None, "CTRLA", 1),
-            (regs::addr::VREF_CTRLA, "VREF", None, "CTRLA", 1),
-            (regs::addr::VREF_CTRLB, "VREF", None, "CTRLB", 1),
-            (regs::addr::WDT_CTRLA, "WDT", None, "CTRLA", 1),
-            (regs::addr::WDT_STATUS, "WDT", None, "STATUS", 1),
-            (regs::addr::CRCSCAN_CTRLA, "CRCSCAN", None, "CTRLA", 1),
-            (regs::addr::CRCSCAN_CTRLB, "CRCSCAN", None, "CTRLB", 1),
-            (regs::addr::CRCSCAN_STATUS, "CRCSCAN", None, "STATUS", 1),
-            (regs::addr::RTC_PITINTCTRL, "RTC", None, "PITINTCTRL", 1),
-            (regs::addr::ADC0_CTRLA, "ADC0", None, "CTRLA", 1),
-            (regs::addr::ADC0_CTRLB, "ADC0", None, "CTRLB", 1),
-            (regs::addr::ADC0_CTRLC, "ADC0", None, "CTRLC", 1),
-            (regs::addr::ADC0_CTRLD, "ADC0", None, "CTRLD", 1),
-            (regs::addr::ADC0_SAMPCTRL, "ADC0", None, "SAMPCTRL", 1),
-            (regs::addr::ADC0_MUXPOS, "ADC0", None, "MUXPOS", 1),
-            (regs::addr::ADC0_COMMAND, "ADC0", None, "COMMAND", 1),
-            (regs::addr::ADC0_INTFLAGS, "ADC0", None, "INTFLAGS", 1),
-            (regs::addr::ADC0_RES, "ADC0", None, "RES", 2),
-            (regs::addr::ADC0_CALIB, "ADC0", None, "CALIB", 1),
-            (
-                regs::addr::SIGROW_TEMPSENSE0,
-                "SIGROW",
-                None,
-                "TEMPSENSE0",
-                1,
-            ),
-            (
-                regs::addr::SIGROW_TEMPSENSE1,
-                "SIGROW",
-                None,
-                "TEMPSENSE1",
-                1,
-            ),
-            (regs::addr::FUSE_WDTCFG, "FUSE", None, "WDTCFG", 1),
-            (regs::addr::FUSE_OSCCFG, "FUSE", None, "OSCCFG", 1),
-            (regs::addr::FUSE_SYSCFG0, "FUSE", None, "SYSCFG0", 1),
-            (regs::addr::FUSE_APPEND, "FUSE", None, "APPEND", 1),
-            (regs::addr::FUSE_BOOTEND, "FUSE", None, "BOOTEND", 1),
-            (
-                regs::addr::CLKCTRL_MCLKCTRLB,
-                "CLKCTRL",
-                None,
-                "MCLKCTRLB",
-                1,
-            ),
-            (regs::addr::RTC_PITCTRLA, "RTC", None, "PITCTRLA", 1),
-            (regs::addr::RTC_PITSTATUS, "RTC", None, "PITSTATUS", 1),
-            (regs::addr::RTC_PITINTFLAGS, "RTC", None, "PITINTFLAGS", 1),
-            (regs::addr::PORTA_PIN0CTRL, "PORTA", None, "PIN0CTRL", 1),
-            (regs::addr::PORTB_PIN0CTRL, "PORTB", None, "PIN0CTRL", 1),
-            (regs::addr::PORTC_PIN0CTRL, "PORTC", None, "PIN0CTRL", 1),
-            (regs::addr::TCA0_CTRLA, "TCA0", single, "CTRLA", 1),
-            (regs::addr::TCA0_CTRLB, "TCA0", single, "CTRLB", 1),
-            (regs::addr::TCA0_INTCTRL, "TCA0", single, "INTCTRL", 1),
-            (regs::addr::TCA0_INTFLAGS, "TCA0", single, "INTFLAGS", 1),
-            (regs::addr::TCA0_PER, "TCA0", single, "PER", 2),
-            (regs::addr::TCA0_CMP0, "TCA0", single, "CMP0", 2),
-            (regs::addr::TCA0_CMP0BUF, "TCA0", single, "CMP0BUF", 2),
+    #[test]
+    fn generated_constants_say_where_they_came_from() {
+        let source = generate(&atdf());
+        for line in [
+            "pub const ADC0_RES: usize = 0x610;",
+            "pub const TCD_CMPASET: u16 = 0xFFF;",
+            "pub const RTC_PI: u8 = 0x01;",
         ] {
-            let (address, theirs) = at(instance, mode, name);
-            assert!(
-                ours == address,
-                "{instance}.{name}: regs.rs says 0x{ours:04X}, the ATDF says 0x{address:04X}"
-            );
-            assert_eq!(size, theirs, "{instance}.{name} is {theirs} bytes wide");
+            assert!(source.contains(line), "{line}");
         }
+        assert!(source.contains("/// ADC0.RES, 16-bit: "), "the width");
+    }
 
-        // hw.rs reaches PINnCTRL as PIN0CTRL + n.
+    #[test]
+    fn repeated_names_are_fine_when_they_agree() {
+        let mut consts = Consts::default();
+        consts.add("A".into(), 1, "first".into());
+        consts.add("A".into(), 1, "second".into());
+        assert_eq!(
+            consts.render(|_| "u8"),
+            "/// first\npub const A: u8 = 0x01;\n"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "A is both `first` and `second`")]
+    fn repeated_names_that_disagree_stop_the_build() {
+        let mut consts = Consts::default();
+        consts.add("A".into(), 1, "first".into());
+        consts.add("A".into(), 2, "second".into());
+    }
+
+    /// `write16` and the ADC result read take these two bytes at a time, and
+    /// the simulator times TCA0's from CNT to CMP2BUF.
+    #[test]
+    fn the_16_bit_registers_are_16_bits() {
+        let xml = atdf();
+        let document = parse(&xml);
+        let registers = registers(&document);
+        for wide in [
+            addr::TCA0_CNT,
+            addr::TCA0_PER,
+            addr::TCA0_CMP0,
+            addr::TCA0_PERBUF,
+            addr::TCA0_CMP0BUF,
+            addr::TCA0_CMP2BUF,
+            addr::ADC0_RES,
+        ] {
+            let found = registers
+                .iter()
+                .any(|r| r.address as usize == wide && r.size == 2);
+            assert!(found, "nothing 16 bits wide at {wide:#06x}");
+        }
+    }
+
+    /// hw.rs reaches PINnCTRL as PIN0CTRL + n.
+    #[test]
+    fn pin_controls_are_consecutive() {
+        let xml = atdf();
+        let document = parse(&xml);
+        let registers = registers(&document);
         for (base, port) in [
-            (regs::addr::PORTA_PIN0CTRL, "PORTA"),
-            (regs::addr::PORTB_PIN0CTRL, "PORTB"),
-            (regs::addr::PORTC_PIN0CTRL, "PORTC"),
+            (addr::PORTA_PIN0CTRL, "PORTA"),
+            (addr::PORTB_PIN0CTRL, "PORTB"),
+            (addr::PORTC_PIN0CTRL, "PORTC"),
         ] {
-            for n in 1..8 {
+            for n in 0..8 {
                 let name = format!("PIN{n}CTRL");
-                assert_eq!(base + n, at(port, None, &name).0, "{port}.{name}");
+                let register = registers
+                    .iter()
+                    .find(|r| r.instance == port && r.name == name)
+                    .unwrap_or_else(|| panic!("no {port}.{name}"));
+                assert_eq!(base + n, register.address as usize, "{port}.{name}");
             }
-        }
-    }
-
-    /// Every bitfield value in `regs`, which must already be shifted into
-    /// place.
-    #[test]
-    fn bitfield_values_match_the_atdf() {
-        let atdf = Atdf::load();
-        let ccp = atdf.register("CPU", None, "CCP");
-        let mclkctrlb = atdf.register("CLKCTRL", None, "MCLKCTRLB");
-        let pinctrl = atdf.register("PORTA", None, "PIN0CTRL");
-        let ctrla = atdf.register("TCA0", Some("SINGLE"), "CTRLA");
-        let ctrlb = atdf.register("TCA0", Some("SINGLE"), "CTRLB");
-        let pitctrla = atdf.register("RTC", None, "PITCTRLA");
-        let pitstatus = atdf.register("RTC", None, "PITSTATUS");
-        let pitintflags = atdf.register("RTC", None, "PITINTFLAGS");
-        let pitintctrl = atdf.register("RTC", None, "PITINTCTRL");
-        let tca_intctrl = atdf.register("TCA0", Some("SINGLE"), "INTCTRL");
-        let tca_intflags = atdf.register("TCA0", Some("SINGLE"), "INTFLAGS");
-        let rstfr = atdf.register("RSTCTRL", None, "RSTFR");
-        let slpctrl = atdf.register("SLPCTRL", None, "CTRLA");
-        let vref_a = atdf.register("VREF", None, "CTRLA");
-        let vref_b = atdf.register("VREF", None, "CTRLB");
-        let wdt_ctrla = atdf.register("WDT", None, "CTRLA");
-        let wdt_status = atdf.register("WDT", None, "STATUS");
-        let crc_a = atdf.register("CRCSCAN", None, "CTRLA");
-        let crc_b = atdf.register("CRCSCAN", None, "CTRLB");
-        let crc_status = atdf.register("CRCSCAN", None, "STATUS");
-        let osccfg = atdf.register("FUSE", None, "OSCCFG");
-        let syscfg0 = atdf.register("FUSE", None, "SYSCFG0");
-        let adc_a = atdf.register("ADC0", None, "CTRLA");
-        let adc_b = atdf.register("ADC0", None, "CTRLB");
-        let adc_c = atdf.register("ADC0", None, "CTRLC");
-        let adc_d = atdf.register("ADC0", None, "CTRLD");
-        let sampctrl = atdf.register("ADC0", None, "SAMPCTRL");
-        let muxpos = atdf.register("ADC0", None, "MUXPOS");
-        let command = atdf.register("ADC0", None, "COMMAND");
-        let adc_flags = atdf.register("ADC0", None, "INTFLAGS");
-        let calib = atdf.register("ADC0", None, "CALIB");
-
-        for (ours, theirs, label) in [
-            (
-                regs::CPU_CCP_IOREG,
-                ccp.value("CCP", "IOREG"),
-                "CPU.CCP=IOREG",
-            ),
-            (
-                regs::CLKCTRL_PEN,
-                mclkctrlb.mask("PEN"),
-                "CLKCTRL.MCLKCTRLB.PEN",
-            ),
-            (
-                regs::CLKCTRL_PDIV_2X,
-                mclkctrlb.value("PDIV", "2X"),
-                "CLKCTRL.MCLKCTRLB.PDIV=2X",
-            ),
-            (
-                regs::PORT_PULLUPEN,
-                pinctrl.mask("PULLUPEN"),
-                "PORT.PINnCTRL.PULLUPEN",
-            ),
-            (
-                regs::PORT_ISC_BOTHEDGES,
-                pinctrl.value("ISC", "BOTHEDGES"),
-                "PORT.PINnCTRL.ISC=BOTHEDGES",
-            ),
-            (regs::TCA_ENABLE, ctrla.mask("ENABLE"), "TCA0.CTRLA.ENABLE"),
-            (
-                regs::TCA_CLKSEL_DIV1,
-                ctrla.value("CLKSEL", "DIV1"),
-                "TCA0.CTRLA.CLKSEL=DIV1",
-            ),
-            (regs::TCA_CMP0EN, ctrlb.mask("CMP0EN"), "TCA0.CTRLB.CMP0EN"),
-            (regs::TCA_CMP2EN, ctrlb.mask("CMP2EN"), "TCA0.CTRLB.CMP2EN"),
-            (
-                regs::TCA_WGMODE_DSBOTTOM,
-                ctrlb.value("WGMODE", "DSBOTTOM"),
-                "TCA0.CTRLB.WGMODE=DSBOTTOM",
-            ),
-            (
-                regs::RTC_PITEN,
-                pitctrla.mask("PITEN"),
-                "RTC.PITCTRLA.PITEN",
-            ),
-            (
-                regs::RTC_PERIOD_CYC512,
-                pitctrla.value("PERIOD", "CYC512"),
-                "RTC.PITCTRLA.PERIOD=CYC512",
-            ),
-            (
-                regs::RTC_CTRLBUSY,
-                pitstatus.mask("CTRLBUSY"),
-                "RTC.PITSTATUS.CTRLBUSY",
-            ),
-            (regs::RTC_PI, pitintflags.mask("PI"), "RTC.PITINTFLAGS.PI"),
-            (regs::RTC_PI, pitintctrl.mask("PI"), "RTC.PITINTCTRL.PI"),
-            (regs::TCA_OVF, tca_intctrl.mask("OVF"), "TCA0.INTCTRL.OVF"),
-            (regs::TCA_OVF, tca_intflags.mask("OVF"), "TCA0.INTFLAGS.OVF"),
-            (regs::RSTCTRL_WDRF, rstfr.mask("WDRF"), "RSTCTRL.RSTFR.WDRF"),
-            (regs::SLPCTRL_SEN, slpctrl.mask("SEN"), "SLPCTRL.CTRLA.SEN"),
-            (
-                regs::SLPCTRL_SMODE_IDLE,
-                slpctrl.value("SMODE", "IDLE"),
-                "SLPCTRL.CTRLA.SMODE=IDLE",
-            ),
-            (
-                regs::SLPCTRL_SMODE_PDOWN,
-                slpctrl.value("SMODE", "PDOWN"),
-                "SLPCTRL.CTRLA.SMODE=PDOWN",
-            ),
-            (
-                regs::VREF_ADC0REFSEL_1V1,
-                vref_a.value("ADC0REFSEL", "1V1"),
-                "VREF.CTRLA.ADC0REFSEL=1V1",
-            ),
-            (
-                regs::VREF_ADC0REFEN,
-                vref_b.mask("ADC0REFEN"),
-                "VREF.CTRLB.ADC0REFEN",
-            ),
-            (
-                regs::WDT_PERIOD_32CLK,
-                wdt_ctrla.value("PERIOD", "32CLK"),
-                "WDT.CTRLA.PERIOD=32CLK",
-            ),
-            (
-                regs::WDT_WINDOW_32CLK,
-                wdt_ctrla.value("WINDOW", "32CLK"),
-                "WDT.CTRLA.WINDOW=32CLK",
-            ),
-            (
-                regs::WDT_SYNCBUSY,
-                wdt_status.mask("SYNCBUSY"),
-                "WDT.STATUS.SYNCBUSY",
-            ),
-            (
-                regs::CRCSCAN_ENABLE,
-                crc_a.mask("ENABLE"),
-                "CRCSCAN.CTRLA.ENABLE",
-            ),
-            (
-                regs::CRCSCAN_SRC_FLASH,
-                crc_b.value("SRC", "FLASH"),
-                "CRCSCAN.CTRLB.SRC=FLASH",
-            ),
-            (
-                regs::CRCSCAN_MODE_PRIORITY,
-                crc_b.value("MODE", "PRIORITY"),
-                "CRCSCAN.CTRLB.MODE=PRIORITY",
-            ),
-            (
-                regs::CRCSCAN_BUSY,
-                crc_status.mask("BUSY"),
-                "CRCSCAN.STATUS.BUSY",
-            ),
-            (regs::CRCSCAN_OK, crc_status.mask("OK"), "CRCSCAN.STATUS.OK"),
-            (
-                regs::FUSE_FREQSEL,
-                osccfg.mask("FREQSEL"),
-                "FUSE.OSCCFG.FREQSEL",
-            ),
-            (
-                regs::FUSE_FREQSEL_20MHZ,
-                osccfg.value("FREQSEL", "20MHZ"),
-                "FUSE.OSCCFG.FREQSEL=20MHZ",
-            ),
-            (
-                regs::FUSE_OSCLOCK,
-                osccfg.mask("OSCLOCK"),
-                "FUSE.OSCCFG.OSCLOCK",
-            ),
-            (
-                regs::FUSE_RSTPINCFG,
-                syscfg0.mask("RSTPINCFG"),
-                "FUSE.SYSCFG0.RSTPINCFG",
-            ),
-            (
-                regs::FUSE_RSTPINCFG_UPDI,
-                syscfg0.value("RSTPINCFG", "UPDI"),
-                "FUSE.SYSCFG0.RSTPINCFG=UPDI",
-            ),
-            (regs::ADC_ENABLE, adc_a.mask("ENABLE"), "ADC0.CTRLA.ENABLE"),
-            (
-                regs::ADC_SAMPNUM_ACC4,
-                adc_b.value("SAMPNUM", "ACC4"),
-                "ADC0.CTRLB.SAMPNUM=ACC4",
-            ),
-            (
-                regs::ADC_SAMPCAP,
-                adc_c.mask("SAMPCAP"),
-                "ADC0.CTRLC.SAMPCAP",
-            ),
-            (
-                regs::ADC_REFSEL_INTREF,
-                adc_c.value("REFSEL", "INTREF"),
-                "ADC0.CTRLC.REFSEL=INTREF",
-            ),
-            (
-                regs::ADC_PRESC_DIV16,
-                adc_c.value("PRESC", "DIV16"),
-                "ADC0.CTRLC.PRESC=DIV16",
-            ),
-            (
-                regs::ADC_INITDLY_DLY32,
-                adc_d.value("INITDLY", "DLY32"),
-                "ADC0.CTRLD.INITDLY=DLY32",
-            ),
-            (
-                regs::ADC_SAMPLEN,
-                sampctrl.mask("SAMPLEN"),
-                "ADC0.SAMPCTRL.SAMPLEN",
-            ),
-            (
-                regs::ADC_MUXPOS_AIN1,
-                muxpos.value("MUXPOS", "AIN1"),
-                "ADC0.MUXPOS=AIN1",
-            ),
-            (
-                regs::ADC_MUXPOS_TEMPSENSE,
-                muxpos.value("MUXPOS", "TEMPSENSE"),
-                "ADC0.MUXPOS=TEMPSENSE",
-            ),
-            (
-                regs::ADC_STCONV,
-                command.mask("STCONV"),
-                "ADC0.COMMAND.STCONV",
-            ),
-            (
-                regs::ADC_RESRDY,
-                adc_flags.mask("RESRDY"),
-                "ADC0.INTFLAGS.RESRDY",
-            ),
-            (
-                regs::ADC_DUTYCYC_DUTY25,
-                calib.value("DUTYCYC", "DUTY25"),
-                "ADC0.CALIB.DUTYCYC=DUTY25",
-            ),
-        ] {
-            assert!(
-                u32::from(ours) == theirs,
-                "{label}: regs.rs says 0x{ours:02X}, the ATDF says 0x{theirs:02X}"
-            );
-        }
-    }
-
-    #[test]
-    fn vector_count_matches_the_atdf() {
-        assert_eq!(regs::VECTORS as u32, Atdf::load().vectors());
-    }
-
-    #[test]
-    fn handled_vectors_match_the_atdf() {
-        let atdf = Atdf::load();
-        for (ours, instance, name) in [
-            (regs::VECTOR_PORTA_PORT, "PORTA", "PORT"),
-            (regs::VECTOR_RTC_PIT, "RTC", "PIT"),
-            (regs::VECTOR_TCA0_OVF, "TCA0", "OVF"),
-        ] {
-            assert_eq!(
-                ours as u32,
-                atdf.vector(instance, name),
-                "{instance}.{name}"
-            );
         }
     }
 
@@ -716,16 +638,16 @@ mod tests {
         assert_eq!(crate::layout::VECTORS, regs::VECTORS, "vector count");
         assert_eq!(
             usize::from(crate::layout::CPU_CCP),
-            regs::addr::CPU_CCP,
+            addr::CPU_CCP,
             "CPU.CCP"
         );
     }
 
     #[test]
     fn sram_matches_the_atdf() {
-        let sram = Atdf::load().segment("INTERNAL_SRAM");
-        let start = crate::elf::DATA_SPACE + sram.start;
-        assert_eq!(crate::elf::RAM, start..start + sram.size, "elf::RAM");
+        let start = crate::elf::DATA_SPACE + mem::INTERNAL_SRAM_START as u32;
+        let end = crate::elf::DATA_SPACE + mem::INTERNAL_SRAM_END as u32;
+        assert_eq!(crate::elf::RAM, start..end, "elf::RAM");
     }
 
     /// link.x's MEMORY regions, and every other address in it, against the
@@ -733,20 +655,29 @@ mod tests {
     /// space, a toolchain convention the ATDF doesn't record.
     #[test]
     fn linker_script_matches_the_atdf() {
-        let atdf = Atdf::load();
         let data = crate::elf::DATA_SPACE;
-        let flash = atdf.segment("PROGMEM");
-        let mapped = atdf.segment("MAPPED_PROGMEM");
-        let sram = atdf.segment("INTERNAL_SRAM");
+        let mapped = mem::MAPPED_PROGMEM_START as u32;
 
         let script = link_x();
         let (memory, sections) = linker_script(&script);
         assert_eq!(
             memory,
             [
-                ("FLASH".into(), flash.start, flash.size),
-                ("MAPPED".into(), data + mapped.start, mapped.size),
-                ("RAM".into(), data + sram.start, sram.size),
+                (
+                    "FLASH".into(),
+                    mem::PROGMEM_START as u32,
+                    mem::PROGMEM_SIZE as u32
+                ),
+                (
+                    "MAPPED".into(),
+                    data + mapped,
+                    mem::MAPPED_PROGMEM_SIZE as u32
+                ),
+                (
+                    "RAM".into(),
+                    data + mem::INTERNAL_SRAM_START as u32,
+                    mem::INTERNAL_SRAM_SIZE as u32
+                ),
             ],
             "link.x MEMORY"
         );
@@ -754,7 +685,7 @@ mod tests {
         // for .rodata and as data-space ones for __data_load.
         for n in sections {
             assert!(
-                n == data + mapped.start || n == mapped.start,
+                n == data + mapped || n == mapped,
                 "link.x SECTIONS has {n:#x}, which isn't the mapped-flash window"
             );
         }
