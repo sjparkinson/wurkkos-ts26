@@ -165,6 +165,8 @@ pub fn init() {
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS);
 
+    // TCA0 stays in single mode (CTRLD.SPLITM at its reset value of 0),
+    // which is the only mode PER, CMP0 and CMP0BUF mean anything in.
     // Dual-slope PWM on WO0, straight off the 10 MHz clock. The BUF
     // registers apply at the bottom of a cycle, so duty changes never
     // glitch. PER goes in directly, with the timer stopped, or the first
