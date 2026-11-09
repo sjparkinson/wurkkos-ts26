@@ -164,7 +164,7 @@ So if the cell rail is fed, the emitters could light with the adapter as their o
 |---|---|---|---|
 | 2.1 | Look at the adapter in your hand. Cell out. Ohms between the pads again | The plain kit, and the same numbers as 1.6 | |
 | 2.2 | `cargo xtask hex` in the `first-light` worktree from 0.4, then from main `cargo xtask flash <port> ../ts26-first-light/target/wurkkos-ts26-0721.hex` ([flashing.md](flashing.md#the-first-flash-is-first-light)) | 628 bytes, the same warning as 0.4 about an image short of 16,384 bytes, and verify passes. A verify only shows the bytes arrived | "Ping, back up and flash", the batched UPDI frames, `PAGEWRITE` |
-| 2.3 | If verify fails | Run it once more. If it fails again, suspect `PAGEWRITE`, then the batched frames in `write_page`, and stop there. Only the fake chip has seen either | |
+| 2.3 | If verify fails | Run it once more. If it fails again, stop there. `PAGEWRITE` and the batched frames in `write_page` have both written a real chip by now, the breakout, through the Friend in 0.4 and 0.9 and through this adapter in 0.19. If they passed there, suspect the contact on the pads and this board before the programmer (my reasoning). A verify that passes still only shows the bytes arrived | |
 | 2.4 | `cargo xtask ping <port>`, then probe off | Same string as 1.7. A chip that talked before the flash and doesn't after it is the TS21 again, so stop and measure | |
 
 ## Stage 3: first-light on the light
