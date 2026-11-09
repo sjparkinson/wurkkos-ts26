@@ -16,6 +16,7 @@ use ts26::selftest::Fuses;
 use ts26::sensors::{Channel, Convert};
 use ts26::temp::Calibration;
 use ts26::ui::Aux;
+use ts26::watchdog::TICK_DEADLINE_CYCLES;
 
 use crate::regs::{self, addr as reg};
 
@@ -140,6 +141,8 @@ pub fn init() {
     // 20 MHz oscillator (the factory OSCCFG fuse) divided by 2. 10 MHz is
     // specified down to 2.7 V of VCC. VCC here comes from a regulator, not
     // the cell, and nobody knows yet how it behaves as the cell sags.
+    // `watchdog::CLOCK_HZ` is this clock, typed by hand, and the tick
+    // deadline's sums start from it.
     protected_write(
         reg::CLKCTRL_MCLKCTRLB,
         regs::CLKCTRL_PDIV_2X | regs::CLKCTRL_PEN,
@@ -306,23 +309,82 @@ fn prepare_sleep(rest: bool) {
 /// slept through. The only other interrupt is TCA0's overflow, which wakes it
 /// from idle every PWM cycle while the light's on, and it goes round again.
 ///
-/// Always true. On the TS21 false means a deadline ran out first, and this
-/// board has no deadline, so a dead 32 kHz oscillator stops the loop here.
+/// Those turns are the deadline. The tick and the watchdog share the 32 kHz
+/// oscillator, so if that stopped with the light on, nothing else would ever
+/// turn it off. Each turn with PB2 high and no tick is one more PWM cycle,
+/// timed by the 20 MHz oscillator. After `watchdog::TICK_DEADLINE_CYCLES` of
+/// them, about 104 ms, this gives up and returns false, and `main` calls
+/// [`halt`]. src/watchdog.rs has the sums.
+///
+/// With PB2 low there's no deadline, since there's no light to turn off.
+/// TCA0's interrupt is off then, so nothing wakes the sleep to count. A dead
+/// oscillator leaves the chip asleep, in idle or power-down, whichever `rest`
+/// chose, with the boost converter off, until the cell comes out.
+///
+/// Interrupts are on when it returns, either way. The simulator runs the
+/// deadline out (`oscillator_stops` in xtask/src/sim.rs). No real chip has.
 pub fn wait_for_tick(rest: bool) -> bool {
     prepare_sleep(rest);
-    loop {
+    let mut cycles = TICK_DEADLINE_CYCLES;
+    let ticked = loop {
         // SAFETY: `cli` only clears SREG.I. With no `nomem`, it's also a
         // compiler barrier, so the GPIOR0 read can't move above it.
         unsafe { asm!("cli", options(nostack)) };
         if read(reg::GPIO_GPIOR0) & TICK != 0 {
             write(reg::GPIO_GPIOR0, 0);
-            // SAFETY: `sei` only sets SREG.I.
-            unsafe { asm!("sei", options(nostack)) };
-            return true;
+            break true;
+        }
+        if read(reg::VPORTB_OUT) & 1 << ENABLE != 0 {
+            if cycles == 0 {
+                break false;
+            }
+            cycles -= 1;
         }
         // SAFETY: sets SREG.I and sleeps until an interrupt, whose handler
         // returns here. The handler saves what it touches.
         unsafe { asm!("sei", "sleep", options(nostack)) };
+    };
+    // SAFETY: `sei` only sets SREG.I.
+    unsafe { asm!("sei", options(nostack)) };
+    ticked
+}
+
+/// Turns the light off and stops for good. `main` calls this when
+/// [`wait_for_tick`]'s deadline runs out, and it's the panic handler too.
+///
+/// Interrupts go off first, so nothing else runs from here on. Then the
+/// output goes off in the usual order, PB2 low and then the duty
+/// ([`set_output`]), which turns TCA0's interrupt off as well. The PIT's goes
+/// off after it, which leaves no interrupt enabled, and the last step is
+/// power-down, with the ADC and its reference off as for any rest
+/// ([`prepare_sleep`]).
+///
+/// With no interrupt enabled, the datasheet says only a reset wakes the chip
+/// (DS40002204A section 11.3.1). Its block diagram has SREG.I gate the wake-up
+/// as well (figure 13-1), so `cli` alone ought to do, but no sentence says so
+/// and nobody's tried it, which is why this does both. The `sleep` is in a
+/// loop in case something wakes it all the same.
+///
+/// What comes next depends on the 32 kHz oscillator. If it's running, so is
+/// the watchdog, which counts in every sleep mode (section 19.3.4 and table
+/// 11-1). Nothing here feeds it, so it resets the chip within 64 WDT clocks of
+/// the last feed, and that boot comes up off and capped, like any hang. If the
+/// oscillator's stopped there's no reset. The chip stays here, off, at
+/// power-down current, until the cell comes out.
+///
+/// The simulator runs this with the oscillator stopped, and checks the chip
+/// stays down. It has no resets, so it can't run the other case. No real chip
+/// has run either.
+pub fn halt() -> ! {
+    // SAFETY: `cli` only clears SREG.I. With no `nomem`, it's also a compiler
+    // barrier, so nothing below can move above it.
+    unsafe { asm!("cli", options(nostack)) };
+    set_output(Output::OFF);
+    write(reg::RTC_PITINTCTRL, 0);
+    prepare_sleep(true);
+    loop {
+        // SAFETY: `sleep` stops the CPU. It touches no memory and no flags.
+        unsafe { asm!("sleep", options(nostack, preserves_flags)) };
     }
 }
 
@@ -394,10 +456,11 @@ pub fn temperature_calibration() -> Calibration {
 ///
 /// It waits for the write to sync, so that feed can't land while it's still
 /// syncing. The WDT shares its oscillator with the PIT, so if that's dead
-/// these waits never end, and neither would the loop: the light's off at this
-/// point, so that's where it stays. It keeps counting in every sleep mode,
-/// which is fine, since the PIT does too and the loop runs every tick, on or
-/// off. Never set WDT.STATUS.LOCK, and never touch the WDTCFG fuse.
+/// these waits never end, and neither would the loop's first wait for a tick,
+/// which has no deadline with the light off. The light's off at this point,
+/// so that's where it stays. The WDT keeps counting in every sleep mode, which
+/// is fine, since the PIT does too and the loop runs every tick, on or off.
+/// Never set WDT.STATUS.LOCK, and never touch the WDTCFG fuse.
 pub fn start_watchdog() {
     while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}
     protected_write(

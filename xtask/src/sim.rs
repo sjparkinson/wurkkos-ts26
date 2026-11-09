@@ -43,7 +43,9 @@
 //! - RTC.PITCTRLA isn't written while PITSTATUS.CTRLBUSY is set.
 //! - The PIT's flag goes up once a period of simulated time, which counts an
 //!   instruction at a time while the CPU's awake and skips to the next event
-//!   while it sleeps.
+//!   while it sleeps. A run can stretch the period to the slowest the two
+//!   oscillators' limits allow (tables 36-12 and 36-13), or stop the 32 kHz
+//!   oscillator, which stops the PIT and the watchdog together.
 //! - Interrupts come from TCA0's OVF and the PIT. The model has PORTA's
 //!   pin-change flags too, which a switch edge sets when PA5's ISC asks for
 //!   that edge, but the firmware leaves ISC at INTDISABLE, so none goes up and
@@ -58,6 +60,11 @@
 //!   that could wake it, which in power-down leaves out TCA0 (it stops) and
 //!   RISING and FALLING on all but pins 2 and 6 (table 16-3). Power-down also
 //!   wants no conversion running, the ADC off and its reference not forced on.
+//!   With no interrupt enabled at all, `sleep` is the chip stopping for good,
+//!   since only a reset wakes it (§11.3.1). That's `hw::halt`, and it fails
+//!   every run but the one that stops the oscillator. `sleep` with SREG.I
+//!   clear and an interrupt still enabled is an error: only a block diagram
+//!   says that interrupt couldn't wake it (figure 13-1, and `avr.rs`).
 //! - The watchdog: WDT.CTRLA takes the CCP key and isn't written while
 //!   SYNCBUSY is set, and nothing may change it once it's on. A `wdr` in the
 //!   closed window, or on its edge, fails, and so does running out the open
@@ -84,15 +91,22 @@
 //!    right, then the same startup code with them moved and given contents.
 //! 2. The reset vector again with PB2 already an output and high, as far as
 //!    the first register write, which has to clear it (`found_lit`).
-//! 3. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
-//! 4. Twenty thousand ticks of random clicks and holds.
-//! 5. Both of those again with an overflow landing on every instruction the
+//! 3. Two seconds lit with every tick at its slowest, which mustn't trip
+//!    `hw::wait_for_tick`'s deadline (`slow_ticks`).
+//! 4. The 32 kHz oscillator stopping with the light on. PB2 has to drop within
+//!    the deadline, and the chip then stop for good in power-down
+//!    (`oscillator_stops`). A tick lost with the oscillator still running ends
+//!    in a watchdog reset instead, which can't run here.
+//! 5. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
+//! 6. Twenty thousand ticks of random clicks and holds.
+//! 7. Both of those again with an overflow landing on every instruction the
 //!    main loop reaches (`Sim::land`), each as far as the first run kept
 //!    reaching new code, and a little past (`both_ways`).
 //!
-//! The last three drive `ts26::torch` alongside the firmware and check the
-//! pins show the library's output on every tick. `probe` separately runs
-//! src/bin/link_probe.rs, which has real statics.
+//! All but the first two drive `ts26::torch` alongside the firmware and check
+//! the pins show the library's output on every tick, the fourth until the
+//! oscillator stops. `probe` separately runs src/bin/link_probe.rs, which has
+//! real statics.
 
 use std::iter;
 use std::ops::Range;
@@ -102,8 +116,8 @@ use ts26::TICKS_PER_SECOND;
 use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
-use ts26::testing::{self, Example, Rig, Sample, Scene};
-use ts26::watchdog::Feeder;
+use ts26::testing::{self, Action, Example, Rig, Sample, Scene};
+use ts26::watchdog::{CLOCK_HZ, Feeder, TICK_DEADLINE_CYCLES};
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
@@ -162,6 +176,9 @@ const ADC_DUTY25: u8 = regs::ADC_DUTYCYC_DUTY25;
 
 /// CPU cycles a second, from `hw::init`'s clock setup.
 const CLK_PER: u32 = 10_000_000;
+// The library sizes `TICK_DEADLINE_CYCLES` for the same clock, and
+// `clocked_as_modelled` holds the firmware to it.
+const _: () = assert!(CLOCK_HZ == CLK_PER);
 /// Reads of WDT.STATUS that report SYNCBUSY after a write to CTRLA, like
 /// `PIT_SYNC_READS`.
 const WDT_SYNC_READS: u8 = 2;
@@ -335,6 +352,10 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
         linked.unhandled,
     )?)
     .map_err(|e| format!("starting with PB2 high: {e}"))?;
+    let mut clocks = Report::default();
+    slow_ticks(power_on()?, &mut clocks).map_err(|e| format!("with the slowest ticks: {e}"))?;
+    oscillator_stops(power_on()?, &mut clocks)
+        .map_err(|e| format!("with the 32 kHz oscillator stopped: {e}"))?;
 
     let examples = spec::examples(spec::UI_MD)?;
     // Every example, then the random switching, each with and without
@@ -356,6 +377,7 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
         handler_budget: HANDLER_BUDGET,
         ..Report::default()
     };
+    report.merge(&clocks);
     for run in reports {
         report.merge(&run?);
     }
@@ -420,10 +442,10 @@ const RANDOM_TICKS: usize = 20_000;
 
 /// Runs one of docs/ui.md's examples on the firmware and the library in step,
 /// then checks where the library ended up against the example.
-fn ui_example(sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
+fn ui_example(mut sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
     // Cut short, it never gets to the end. The level is the library's alone,
     // so the run that did get there has checked it.
-    let Some(level) = in_step(sim, testing::samples(example.actions()), report)? else {
+    let Some(level) = in_step(&mut sim, testing::samples(example.actions()), report)? else {
         return Ok(());
     };
     if example.expect.holds(level) {
@@ -439,7 +461,7 @@ fn ui_example(sim: Sim, example: &Example, report: &mut Report) -> Result<(), St
 /// Switches the firmware and the library the same random way. The host tests
 /// trust the library; this checks the AVR build of it, and `hw.rs`'s pins, do
 /// what it says.
-fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
+fn against_the_library(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     let samples = RandomSwitching::new(0x5EED)
         .flat_map(|(pressed, ticks)| iter::repeat_n(pressed, ticks.into()))
         .take(RANDOM_TICKS)
@@ -447,7 +469,110 @@ fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
             pressed,
             scene: Scene::NORMAL,
         });
-    in_step(sim, samples, report).map(drop)
+    in_step(&mut sim, samples, report).map(drop)
+}
+
+/// A click from off, then `ticks` more with the switch left alone, in step
+/// with the library, which has to leave the light on.
+fn lit(sim: &mut Sim, ticks: u16, report: &mut Report) -> Result<(), String> {
+    let script = [Action::Clicks(1), Action::Wait(ticks)];
+    in_step(sim, testing::samples(script), report)?;
+    if !sim.chip.enabled_high() {
+        return Err("a click from off left PB2 low, so there's no light to check".into());
+    }
+    Ok(())
+}
+
+/// The slowest tick oscillators inside the datasheet's limits give, in main
+/// clocks: the 32 kHz one 30% slow, and the 20 MHz one 5% fast, so more of
+/// its clocks fit in the time (tables 36-13 and 36-12, both over the full
+/// operating range, from characterisation).
+const SLOWEST_TICK_CYCLES: u64 = TICK_CYCLES * 105 / 70;
+/// Main clocks `hw::wait_for_tick` waits for a tick, with the light on, before
+/// it gives up on the 32 kHz oscillator.
+const DEADLINE_CYCLES: u64 = TICK_DEADLINE_CYCLES as u64 * PWM_CYCLE;
+// The slowest tick this chip can be given is well inside the deadline, so only
+// a run that stops the oscillator can trip it.
+const _: () = assert!(4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES);
+
+/// Two seconds lit with every tick as slow as the oscillators' limits allow.
+/// `hw::wait_for_tick`'s deadline mustn't trip: that stops the chip for good,
+/// which `Sim::tick` fails. Only the PIT's period changes. The model's
+/// watchdog counts PIT periods, so it's none the wiser.
+fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    sim.chip.tick_cycles = SLOWEST_TICK_CYCLES;
+    lit(&mut sim, 2 * TICKS_PER_SECOND, report)
+}
+
+/// Steps `hw::halt` may take from dropping PB2 to its `sleep`: instructions,
+/// or waits if it's gone to sleep some other way.
+const HALT_BUDGET: u64 = 100;
+/// PIT periods' worth of time to watch a chip that's stopped for good.
+const DOWN_PERIODS: u64 = 4 * TICKS_PER_SECOND as u64;
+
+/// The 32 kHz oscillator stops with the light on, and takes the tick and the
+/// watchdog with it. `hw::wait_for_tick`'s deadline is all that's left, and
+/// `main` answers it with `hw::halt`. This checks PB2 drops within the
+/// deadline of the stop, and not before it, which a count that ran fast would
+/// do. Then that the firmware gets to a `sleep` in power-down with no
+/// interrupt enabled, by `ready_for_power_down`'s rules, and that nothing
+/// runs and PB2 stays low for four seconds after.
+///
+/// The oscillator stops just as a tick lands, so the firmware has one more
+/// pass, and the deadline counts from the wait that ends it.
+///
+/// A tick that goes missing with the oscillator still running ends another
+/// way, in the watchdog resetting the chip. That can't run here: this chip
+/// has no resets, so a bite is a failed run.
+fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    lit(&mut sim, 0, report)?;
+    sim.chip.osc32k_stopped = true;
+    let stopped = sim.chip.now;
+    while sim.chip.enabled_high() {
+        sim.step()?;
+        if sim.chip.now - stopped > DEADLINE_CYCLES + TICK_BUDGET {
+            return Err(format!(
+                "PB2's still high {} PWM cycles on, past the deadline of {TICK_DEADLINE_CYCLES}",
+                (sim.chip.now - stopped) / PWM_CYCLE
+            ));
+        }
+    }
+    let took = sim.chip.now - stopped;
+    // The first cycle of the wait is a part of one.
+    if took < DEADLINE_CYCLES - PWM_CYCLE {
+        return Err(format!(
+            "PB2 dropped after {} PWM cycles, before the deadline of {TICK_DEADLINE_CYCLES}",
+            took / PWM_CYCLE
+        ));
+    }
+
+    for _ in 0..HALT_BUDGET {
+        if sim.chip.down {
+            break;
+        }
+        sim.step()?;
+        if sim.chip.enabled_high() {
+            return Err("dropped PB2, then raised it again".into());
+        }
+    }
+    if !sim.chip.down {
+        return Err(format!(
+            "dropped PB2, but didn't stop for good within {HALT_BUDGET} instructions"
+        ));
+    }
+    if !sim.chip.powering_down() {
+        return Err("stopped for good in idle, which leaves the main clock running".into());
+    }
+    let until = sim.chip.now + DOWN_PERIODS * TICK_CYCLES;
+    while sim.chip.now < until {
+        sim.step()?;
+        if !sim.cpu.asleep || sim.chip.enabled_high() {
+            return Err("woke up or raised PB2 after stopping for good".into());
+        }
+    }
+    // `lit` took the rest. `hw::halt` is a call deeper than the loop.
+    report.stack = report.stack.max(sim.stack());
+    Ok(())
 }
 
 /// Feeds the same switch samples to the firmware, from just after `main`, and
@@ -455,7 +580,7 @@ fn against_the_library(sim: Sim, report: &mut Report) -> Result<(), String> {
 /// tick. Returns the level it ends at, or `None` if `Landing::Until` cut it
 /// short.
 fn in_step(
-    mut sim: Sim,
+    sim: &mut Sim,
     samples: impl IntoIterator<Item = Sample>,
     report: &mut Report,
 ) -> Result<Option<u8>, String> {
@@ -537,7 +662,7 @@ fn in_step(
             )));
         }
     }
-    report.take(&sim);
+    report.take(sim);
     Ok(finished.then(|| rig.level()))
 }
 
@@ -975,7 +1100,8 @@ impl Sim {
     /// One pass of the main loop with the switch as given: runs until the
     /// next tick. Returns how many instructions the pass took, which stops
     /// when the firmware starts waiting for that tick, by polling the PIT's
-    /// flag or by going to sleep for the last time.
+    /// flag or by going to sleep for the last time. A firmware that stops for
+    /// good (`hw::halt`) with ticks still coming has failed.
     fn tick(&mut self, pressed: bool) -> Result<u64, String> {
         self.chip.set_switch(pressed)?;
         let (start, ticks) = (self.executed, self.chip.ticks);
@@ -983,6 +1109,13 @@ impl Sim {
         let mut pass_end = None;
         while self.chip.ticks == ticks {
             self.step()?;
+            if self.chip.down {
+                return Err(
+                    "sleeps with no interrupt enabled, so only a reset wakes it \
+                     (section 11.3.1): it's stopped for good"
+                        .into(),
+                );
+            }
             if self.chip.tick_polled {
                 pass_end.get_or_insert(self.executed);
             }
@@ -1095,6 +1228,17 @@ struct Chip {
     porta_flags: u8,
     /// When the PIT's current period ends.
     next_pit: u64,
+    /// Main clocks in a PIT period, which is the 32 kHz oscillator's speed
+    /// against the 20 MHz one's. `TICK_CYCLES` unless a run slows it.
+    tick_cycles: u64,
+    /// The 32 kHz oscillator has stopped. The PIT and the WDT both count it
+    /// (§23.12.7's reset value, §19.3.2), so neither does anything more: a
+    /// period is only that much time going by. The firmware writes neither
+    /// after start-up, so a sync left waiting on the oscillator isn't modelled.
+    osc32k_stopped: bool,
+    /// The last `sleep` ran with no interrupt enabled, so only a reset wakes
+    /// the chip (§11.3.1), and this one has no resets.
+    down: bool,
     /// PIT periods so far with the PIT on.
     ticks: u32,
     /// Whether the firmware's started waiting for a tick since this was
@@ -1136,6 +1280,9 @@ impl Chip {
             pit_flag: false,
             porta_flags: 0,
             next_pit: TICK_CYCLES,
+            tick_cycles: TICK_CYCLES,
+            osc32k_stopped: false,
+            down: false,
             ticks: 0,
             tick_polled: false,
             tca: Tca {
@@ -1254,7 +1401,10 @@ impl Chip {
             }
         }
         while self.now >= self.next_pit {
-            self.next_pit += TICK_CYCLES;
+            self.next_pit += self.tick_cycles;
+            if self.osc32k_stopped {
+                continue;
+            }
             if self.io[reg::RTC_PITCTRLA] & RTC_PITEN != 0 {
                 self.pit_flag = true;
                 self.ticks += 1;
@@ -1895,7 +2045,11 @@ impl Bus for Chip {
         self.ccp_hold && self.unlocked_until.is_some_and(|until| self.now <= until)
     }
 
-    fn sleep(&mut self) -> Result<(), String> {
+    /// With an interrupt enabled that can't wake it from the mode it's in,
+    /// that's a mistake. With none enabled at all, it's the chip stopping for
+    /// good: only a reset wakes it (§11.3.1). That sets `down`, which is for
+    /// whoever's running the chip to judge.
+    fn sleep(&mut self) -> Result<bool, String> {
         self.ccp_hold = false;
         self.tick_polled = true;
         let ctrla = self.io[reg::SLPCTRL_CTRLA];
@@ -1921,10 +2075,11 @@ impl Bus for Chip {
         if self.io[reg::RTC_PITCTRLA] & RTC_PITEN == 0 {
             wakes &= !(1 << VECTOR_RTC_PIT);
         }
-        if wakes == 0 {
+        if wakes == 0 && self.enabled != 0 {
             return Err("sleeps with no interrupt enabled that could wake it".into());
         }
-        Ok(())
+        self.down = wakes == 0;
+        Ok(wakes != 0)
     }
 
     /// Jumps to the next thing that happens. TCA0 stops in power-down
@@ -2573,11 +2728,62 @@ mod tests {
     }
 
     #[test]
-    fn nothing_to_wake_it_is_an_error() {
+    fn sleeping_with_no_interrupt_enabled_is_stopping_for_good() {
         let mut chip = running();
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_IDLE | SLPCTRL_SEN)
             .unwrap();
-        assert!(chip.sleep().unwrap_err().contains("no interrupt"));
+        assert_eq!(chip.sleep(), Ok(false));
+        assert!(chip.down);
+
+        // With one enabled, it's an ordinary sleep.
+        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        assert_eq!(chip.sleep(), Ok(true));
+        assert!(!chip.down);
+    }
+
+    /// `[sei, sleep]` with SLPCTRL set for idle and nothing enabled.
+    #[test]
+    fn a_pass_that_stops_for_good_fails() {
+        let image = [0x9478u16, 0x9588]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let mut sim = Sim::new(image, SRAM.start, 0).unwrap();
+        sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
+        let err = sim.tick(false).unwrap_err();
+        assert!(err.contains("stopped for good"), "{err}");
+    }
+
+    #[test]
+    fn a_stopped_oscillator_stops_the_pit_and_the_watchdog() {
+        let mut chip = watched();
+        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.osc32k_stopped = true;
+        // Long past the watchdog's 64 clocks.
+        ticks(&mut chip, 100).unwrap();
+        assert!(!chip.pit_flag);
+        assert_eq!(chip.ticks, 0);
+
+        chip.osc32k_stopped = false;
+        ticks(&mut chip, 1).unwrap();
+        assert!(chip.pit_flag);
+        assert!(ticks(&mut chip, 1).unwrap_err().contains("without wdr"));
+    }
+
+    #[test]
+    fn a_slow_oscillator_stretches_the_pits_period() {
+        let mut chip = Chip::new(Vec::new());
+        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.tick_cycles = SLOWEST_TICK_CYCLES;
+        // The period under way at the change runs out as it was.
+        ticks(&mut chip, 1).unwrap();
+        assert_eq!(chip.ticks, 1);
+        chip.advance_to(chip.now + SLOWEST_TICK_CYCLES - 1).unwrap();
+        assert_eq!(chip.ticks, 1);
+        chip.elapse().unwrap();
+        assert_eq!(chip.ticks, 2);
+        // 30% slow against 5% fast, in PWM cycles.
+        assert_eq!(SLOWEST_TICK_CYCLES.div_ceil(PWM_CYCLE), 460);
     }
 
     #[test]
@@ -2622,7 +2828,7 @@ mod tests {
         // Nor is it a way to wake up.
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_IDLE | SLPCTRL_SEN)
             .unwrap();
-        assert!(chip.sleep().unwrap_err().contains("no interrupt"));
+        assert_eq!(chip.sleep(), Ok(false), "nothing's enabled to wake it");
 
         chip.write(ctrl, PORT_PULLUPEN | ISC_INPUT_DISABLE).unwrap();
         assert!(read(&mut chip).unwrap_err().contains("input buffer"));

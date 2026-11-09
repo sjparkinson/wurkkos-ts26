@@ -23,8 +23,12 @@
 //! doesn't, by choice: that TS21 went dark straight after a verified flash of
 //! that stack, and a firmware hang wasn't ruled out. So nobody's seen this
 //! watchdog bite on a real chip until docs/bench-plan.md says so.
+//!
+//! The watchdog can't catch its own oscillator stopping, since the tick stops
+//! with it. [`TICK_DEADLINE_CYCLES`] is for that, and only with the light on.
 
 use crate::TICKS_PER_SECOND;
+use crate::ramp::PWM_TOP;
 
 /// Cycles of the WDT's 1.024 kHz clock in one tick.
 pub const CLOCKS_PER_TICK: u16 = 1024 / TICKS_PER_SECOND;
@@ -46,6 +50,52 @@ const _: () = {
     let gap = FEED_TICKS as u16 * CLOCKS_PER_TICK;
     assert!(gap > CLOSED_CLOCKS && gap < CLOSED_CLOCKS + OPEN_CLOCKS);
     assert!(CLOCKS_PER_TICK < OPEN_CLOCKS);
+};
+
+/// The main clock in hertz: the 20 MHz oscillator divided by 2, which is what
+/// `hw::init` sets. xtask's simulator holds the firmware to the same number.
+pub const CLOCK_HZ: u32 = 10_000_000;
+
+/// How many PWM cycles `hw::wait_for_tick` waits for a tick with the light on
+/// before it gives up, and `main` turns the light off for good (`hw::halt`).
+///
+/// The tick and the watchdog both run off the 32 kHz oscillator. If that
+/// stopped with the light on, the loop would wait for a tick that never came
+/// and the watchdog would never bite, so the boost converter would stay on
+/// with nothing watching the cell or the temperature. While the light's on,
+/// TCA0's overflow wakes that wait once a PWM cycle, and TCA0 runs off the
+/// 20 MHz oscillator. So the wait counts those.
+///
+/// A PWM cycle is 2 × [`PWM_TOP`] clocks, 51 µs, and a tick is about 306 of
+/// them. 2,048 is about 104 ms, over six ticks.
+///
+/// A tick that's only late is the watchdog's to catch. It bites 64 WDT clocks
+/// after a feed has synced, which takes up to three more (§19.3.6): 67 in
+/// all, a little over four ticks however slow the oscillator runs. At worst
+/// the 32 kHz oscillator is 30% slow and the 20 MHz one 5% fast (DS40002204A
+/// tables 36-13 and 36-12, over the full operating range, from
+/// characterisation and not production test), which makes a tick about 460
+/// cycles and those 67 clocks about 1,925. The deadline is longer, by 6%, so
+/// with both oscillators inside their limits the watchdog gets there first,
+/// and this is left for an oscillator that's stopped. Nobody's seen either on
+/// a real chip.
+pub const TICK_DEADLINE_CYCLES: u16 = 2048;
+
+const _: () = {
+    // Main clocks in a PWM cycle, in a tick and in the deadline.
+    let cycle = 2 * PWM_TOP as u32;
+    let tick = CLOCK_HZ / TICKS_PER_SECOND as u32;
+    let deadline = TICK_DEADLINE_CYCLES as u32 * cycle;
+    // About a tenth of a second.
+    assert!(deadline > 6 * tick && deadline < 7 * tick);
+    // The slowest tick inside the datasheet's limits: 5% more clocks from the
+    // 20 MHz oscillator, in the 1 / 0.7 of the time the 32 kHz one takes.
+    let slowest = tick * 105 / 70;
+    // The longest the watchdog takes to bite, in WDT clocks from the `wdr`:
+    // three to sync it, then both windows. The deadline counts from the wait
+    // after a tick, which is never before the last feed.
+    let bite = (3 + CLOSED_CLOCKS + OPEN_CLOCKS) as u32;
+    assert!(deadline * CLOCKS_PER_TICK as u32 > bite * slowest);
 };
 
 /// Counts ticks between feeds.
@@ -101,6 +151,19 @@ mod tests {
     #[test]
     fn a_tick_is_16_wdt_clocks() {
         assert_eq!(CLOCKS_PER_TICK, 16);
+    }
+
+    /// The figures in [`TICK_DEADLINE_CYCLES`]'s comment.
+    #[test]
+    fn the_tick_deadline_is_104_ms_against_ticks_of_306_cycles_or_460_at_worst() {
+        let cycle = 2 * u32::from(PWM_TOP);
+        let tick = CLOCK_HZ / u32::from(TICKS_PER_SECOND);
+        assert_eq!(tick / cycle, 306);
+        assert_eq!((tick * 105 / 70).div_ceil(cycle), 460);
+        // 67 WDT clocks at that speed, 16 to a tick.
+        assert_eq!((67 * (tick * 105 / 70) / 16).div_ceil(cycle), 1925);
+        let deadline = u32::from(TICK_DEADLINE_CYCLES) * cycle;
+        assert_eq!(deadline / (CLOCK_HZ / 1000), 104);
     }
 
     #[test]

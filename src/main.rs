@@ -51,8 +51,13 @@ extern "C" fn main() -> ! {
 
     loop {
         // Power-down or idle, by `Feeder::power_down`'s rule, which the
-        // simulator holds this loop to.
-        hw::wait_for_tick(feeder.power_down(torch.resting()));
+        // simulator holds this loop to. False means the light's on and no
+        // tick came in about 104 ms, so the 32 kHz oscillator has most likely
+        // stopped, and the watchdog with it. The light goes off and stays off
+        // until a reset.
+        if !hw::wait_for_tick(feeder.power_down(torch.resting())) {
+            hw::halt();
+        }
         torch.tick(hw::switch_pressed(), hw::adc_result());
         if let Some(convert) = torch.convert() {
             hw::adc_start(convert);
@@ -70,14 +75,19 @@ extern "C" fn main() -> ! {
     }
 }
 
-// Turns the light off and spins. The watchdog isn't fed here, so it resets the
-// chip within 64 WDT clocks of the last feed, about 63 ms, and the next boot
-// comes up off, with the light capped.
+// Turns the light off and powers down for good (`hw::halt`). The watchdog
+// isn't fed there, so it resets the chip within 64 WDT clocks of the last
+// feed, about 63 ms, and the next boot comes up off, with the light capped.
+//
+// Spinning here would end the same way while the watchdog runs. `halt` is for
+// when it doesn't, with the 32 kHz oscillator dead: no reset comes then, and
+// a spin would keep the CPU running off the cell for good where `halt`
+// sleeps. Nothing's ever run this. The simulator has no way to make the
+// firmware panic.
 #[cfg(target_arch = "avr")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    hw::set_output(ts26::ramp::Output::OFF);
-    loop {}
+    hw::halt()
 }
 
 #[cfg(not(target_arch = "avr"))]

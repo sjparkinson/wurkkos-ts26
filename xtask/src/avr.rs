@@ -28,10 +28,16 @@
 //! interrupt, so that's likely, not known. None of this has been seen on a
 //! real chip.
 //!
-//! `sleep` is an error with interrupts off or inside a handler, since
-//! nothing could wake the CPU, and otherwise asks the bus whether it would
-//! sleep and what could wake it. Asleep, each step either takes a pending
-//! interrupt or lets the bus move time on.
+//! `sleep` asks the bus whether the chip would sleep, and whether any
+//! interrupt is enabled that could wake it. With none, only a reset wakes it
+//! (§11.3.1), whatever SREG.I says, and that's how firmware stops for good.
+//! With one, `sleep` is an error with SREG.I clear. Figure 13-1 takes the
+//! wake-up from the interrupt request after SREG.I has gated it, so that
+//! interrupt couldn't wake the CPU. That's a block diagram, though, and no
+//! text says it. So firmware that means to stop turns the enables off as
+//! well, and firmware that doesn't has made a mistake. It's an error inside a
+//! handler too, where LVL0EX holds every other interrupt off. Asleep, each
+//! step either takes a pending interrupt or lets the bus move time on.
 
 use std::ops::Range;
 
@@ -84,9 +90,10 @@ pub trait Bus {
     fn holds_interrupts(&self) -> bool {
         false
     }
-    /// The CPU has run `sleep` with interrupts on. Errors if the chip
-    /// wouldn't sleep, or would sleep with nothing enabled to wake it.
-    fn sleep(&mut self) -> Result<(), String>;
+    /// The CPU has run `sleep`. Errors if the chip wouldn't sleep. Otherwise
+    /// says whether an interrupt is enabled that could wake it: with none,
+    /// only a reset does (DS40002204A §11.3.1).
+    fn sleep(&mut self) -> Result<bool, String>;
     /// The CPU's asleep and nothing's pending: move time on to the next
     /// thing that happens.
     fn idle(&mut self) -> Result<(), String>;
@@ -449,18 +456,24 @@ impl Cpu {
         Ok(())
     }
 
-    /// `sleep`. With interrupts off, or inside a handler where LVL0EX holds
-    /// every other interrupt off, nothing could wake the CPU.
+    /// `sleep`. Inside a handler, LVL0EX holds every other interrupt off, so
+    /// nothing could wake the CPU. Otherwise the bus says whether an enabled
+    /// interrupt could. With none it sleeps until a reset, SREG.I set or not.
+    /// With one and SREG.I clear, only a block diagram says that interrupt
+    /// couldn't wake it (figure 13-1), so firmware that does it is refused.
     fn sleep(&mut self, bus: &mut impl Bus) -> Result<(), String> {
-        if !self.flag(I) {
-            return Err("sleeps with SREG.I clear, so no interrupt can wake it".into());
-        }
         if let Some(vector) = self.handling {
             return Err(format!(
                 "sleeps inside the handler for interrupt {vector}, so no other can wake it"
             ));
         }
-        bus.sleep()?;
+        if bus.sleep()? && !self.flag(I) {
+            return Err(
+                "sleeps with SREG.I clear and an interrupt still enabled, which only a block \
+                 diagram says can't wake it (figure 13-1)"
+                    .into(),
+            );
+        }
         self.asleep = true;
         Ok(())
     }
@@ -694,6 +707,9 @@ mod tests {
         log: Vec<u8>,
         /// Bits of `pending` that time flags each `idle`.
         wake: u32,
+        /// No interrupt's enabled, so `sleep` says nothing can wake it, and
+        /// `idle` only passes the time.
+        nothing_enabled: bool,
         sleeps: u32,
         idles: u32,
     }
@@ -708,6 +724,7 @@ mod tests {
                 held: false,
                 log: Vec::new(),
                 wake: 0,
+                nothing_enabled: false,
                 sleeps: 0,
                 idles: 0,
             }
@@ -742,12 +759,12 @@ mod tests {
         fn holds_interrupts(&self) -> bool {
             self.held
         }
-        fn sleep(&mut self) -> Result<(), String> {
+        fn sleep(&mut self) -> Result<bool, String> {
             self.sleeps += 1;
-            Ok(())
+            Ok(!self.nothing_enabled)
         }
         fn idle(&mut self) -> Result<(), String> {
-            if self.wake == 0 {
+            if self.wake == 0 && !self.nothing_enabled {
                 return Err("nothing to wake on".into());
             }
             self.idles += 1;
@@ -1366,5 +1383,23 @@ mod tests {
         let image = program(&[], &[SEI, SLEEP, NOP]);
         let err = try_run(&image, |_, _| {}).err().unwrap();
         assert!(err.contains("asleep: nothing to wake on"), "{err}");
+    }
+
+    /// DS40002204A §11.3.1: with no interrupt enabled, only a reset wakes it.
+    /// SREG.I makes no difference to that.
+    #[test]
+    fn sleeps_for_good_with_no_interrupt_enabled() {
+        for start in [&[SLEEP, NOP][..], &[SEI, SLEEP, NOP]] {
+            let mut bus = TestBus::new(start);
+            bus.nothing_enabled = true;
+            let mut cpu = Cpu::new(&RAM);
+            for _ in 0..10 {
+                cpu.step(&mut bus).unwrap();
+            }
+            assert!(cpu.asleep);
+            assert_eq!(cpu.pc as usize, start.len() - 1, "never got past the sleep");
+            assert_eq!(bus.sleeps, 1);
+            assert!(bus.idles > 0, "time still passes");
+        }
     }
 }
