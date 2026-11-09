@@ -350,22 +350,45 @@ fn backup(port: &str, dir: &Path) -> Result<(), String> {
     }
 
     let mut p = connect_for_programming(port)?;
+    let read = read_chip(&mut p);
+    // Leave programming mode even after a failed read, so the chip isn't held
+    // in it until the next power cycle. The first error is the one to report.
+    let left = p.leave();
+    let chip = read?;
+
+    fs::create_dir_all(dir).map_err(at(dir))?;
+    write(&flash_path, &ihex::encode(&chip.flash))?;
+    write(&dir.join("eeprom.hex"), &ihex::encode(&chip.eeprom))?;
+    write(&dir.join("fuses.hex"), &ihex::encode(&chip.fuses))?;
+    eprintln!(
+        "saved flash, EEPROM and fuses (for reference, never written back) to {}",
+        dir.display()
+    );
+    // A backup that read whole is saved whatever leaving said, since it may be
+    // the only copy of the factory firmware.
+    left?;
+    Ok(())
+}
+
+/// What `backup` saves.
+struct Chip {
+    flash: Vec<u8>,
+    eeprom: Vec<u8>,
+    /// The fuses, then the lock byte.
+    fuses: Vec<u8>,
+}
+
+fn read_chip(p: &mut Programmer<Port>) -> Result<Chip, String> {
     eprintln!("reading flash");
     let flash = p.read(map::FLASH, map::FLASH_SIZE)?;
     eprintln!("reading EEPROM and fuses");
     let eeprom = p.read(map::EEPROM, map::EEPROM_SIZE)?;
     let fuses = p.read(map::FUSES, map::FUSES_SIZE)?;
-    p.leave()?;
-
-    fs::create_dir_all(dir).map_err(at(dir))?;
-    write(&flash_path, &ihex::encode(&flash))?;
-    write(&dir.join("eeprom.hex"), &ihex::encode(&eeprom))?;
-    write(&dir.join("fuses.hex"), &ihex::encode(&fuses))?;
-    eprintln!(
-        "saved flash, EEPROM and fuses (for reference, never written back) to {}",
-        dir.display()
-    );
-    Ok(())
+    Ok(Chip {
+        flash,
+        eeprom,
+        fuses,
+    })
 }
 
 fn flash(port: &str, image: &[u8]) -> Result<(), String> {
