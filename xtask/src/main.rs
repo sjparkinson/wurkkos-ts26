@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use serial::Port;
-use updi::{Programmer, map};
+use updi::{Programmer, SerialNumber, Wire, map};
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -42,9 +42,12 @@ commands:
   peek <port>             read the running chip's registers and SRAM, to see how
                           far the firmware got; it writes nothing, and the same
                           reset follows, so only the first run counts
-  backup <port> <dir>     save the chip's flash, EEPROM and fuses into <dir>
+  backup <port> <dir>     save the chip's flash, EEPROM, fuses and serial number
+                          into <dir>
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
-  restore <port> <dir>    put <dir>/flash.hex and <dir>/eeprom.hex back
+  restore <port> <dir>    put <dir>/flash.hex and <dir>/eeprom.hex back, on the
+                          chip whose serial number is in <dir>/serial.hex and
+                          no other
   simulate [script...]    try src/ui.rs live in the terminal, or on a script
                           such as `1C 2H:1.5s wait:1s 3C`
 
@@ -216,17 +219,19 @@ fn commas(n: u64) -> String {
     out
 }
 
-fn connect(port: &str) -> Result<Programmer<Port>, String> {
+/// Opens the adapter's port, which is where every command that talks to a
+/// chip starts. Anything that can refuse without a chip does it before this.
+fn open(port: &str) -> Result<Port, String> {
     eprintln!("connecting on {port}");
-    Programmer::connect(Port::open(port)?)
+    Port::open(port)
 }
 
-/// Connects, enters programming mode and refuses anything but an ATtiny1616,
-/// leaving programming mode again if either of those fails. Every command
-/// that reads or writes memory starts here.
-fn connect_for_programming(port: &str) -> Result<Programmer<Port>, String> {
-    eprintln!("connecting on {port}");
-    Programmer::connect_for_programming(Port::open(port)?)
+/// For `ping` and `peek`, which leave the firmware running. `backup` and
+/// `flash` go through `Programmer::connect_for_programming` instead, and
+/// `restore` through `Programmer::connect_for_restore`, which does the same
+/// and then checks whose backup it's been given.
+fn connect(port: &str) -> Result<Programmer<Port>, String> {
+    Programmer::connect(open(port)?)
 }
 
 fn ping(port: &str) -> Result<(), String> {
@@ -342,6 +347,15 @@ fn signed(image: &[u8]) -> Result<(), String> {
 }
 
 fn backup(port: &str, dir: &Path) -> Result<(), String> {
+    backup_from(|| open(port), dir)
+}
+
+/// `backup`, with opening the port left to `open`, so the tests can hand it
+/// the fake chip and see what's refused before any port is opened.
+fn backup_from<W: Wire>(
+    open: impl FnOnce() -> Result<W, String>,
+    dir: &Path,
+) -> Result<(), String> {
     let flash_path = dir.join("flash.hex");
     if flash_path.exists() {
         return Err(format!(
@@ -351,7 +365,7 @@ fn backup(port: &str, dir: &Path) -> Result<(), String> {
         ));
     }
 
-    let mut p = connect_for_programming(port)?;
+    let mut p = Programmer::connect_for_programming(open()?)?;
     let read = read_chip(&mut p);
     // Leave programming mode even after a failed read, so the chip isn't held
     // in it until the next power cycle. The first error is the one to report.
@@ -362,10 +376,23 @@ fn backup(port: &str, dir: &Path) -> Result<(), String> {
     write(&flash_path, &ihex::encode(&chip.flash))?;
     write(&dir.join("eeprom.hex"), &ihex::encode(&chip.eeprom))?;
     write(&dir.join("fuses.hex"), &ihex::encode(&chip.fuses))?;
+    write(&dir.join("serial.hex"), &ihex::encode(chip.serial.bytes()))?;
     eprintln!(
-        "saved flash, EEPROM and fuses (for reference, never written back) to {}",
+        "saved flash, EEPROM, fuses (for reference, never written back) and the chip's serial \
+         number, {}, to {}",
+        chip.serial,
         dir.display()
     );
+    // A serial number that can't tell chips apart doesn't stop the backup,
+    // since this may be the only copy of the factory firmware. It does stop
+    // `restore`, so say so now, before anything's been flashed over it.
+    if chip.serial.is_blank() {
+        eprintln!(
+            "warning: that serial number can't tell one chip from another. The backup is \
+             saved all the same, but `restore` will refuse it, since it couldn't check it \
+             was writing to the chip this came from"
+        );
+    }
     // A backup that read whole is saved whatever leaving said, since it may be
     // the only copy of the factory firmware.
     left?;
@@ -378,34 +405,95 @@ struct Chip {
     eeprom: Vec<u8>,
     /// The fuses, then the lock byte.
     fuses: Vec<u8>,
+    /// Which chip this is, for `restore` to check before it writes.
+    serial: SerialNumber,
 }
 
-fn read_chip(p: &mut Programmer<Port>) -> Result<Chip, String> {
+fn read_chip<W: Wire>(p: &mut Programmer<W>) -> Result<Chip, String> {
     eprintln!("reading flash");
     let flash = p.read(map::FLASH, map::FLASH_SIZE)?;
-    eprintln!("reading EEPROM and fuses");
+    eprintln!("reading EEPROM, fuses and the serial number");
     let eeprom = p.read(map::EEPROM, map::EEPROM_SIZE)?;
     let fuses = p.read(map::FUSES, map::FUSES_SIZE)?;
+    let serial = p.serial_number()?;
     Ok(Chip {
         flash,
         eeprom,
         fuses,
+        serial,
     })
 }
 
 fn flash(port: &str, image: &[u8]) -> Result<(), String> {
-    program(port, image, None)
+    let connect = || Programmer::connect_for_programming(open(port)?);
+    program(connect, image, None)
 }
 
 fn restore(port: &str, dir: &Path) -> Result<(), String> {
-    let flash = read_hex(&dir.join("flash.hex"))?;
-    let eeprom = read_hex(&dir.join("eeprom.hex"))?;
-    program(port, &flash, Some(&eeprom))
+    restore_onto(|| open(port), dir)
 }
 
-/// Erase, write, verify, restart. The chip erase wipes EEPROM too unless the
-/// EESAVE fuse is set; pass `Some` to put contents back.
-fn program(port: &str, flash: &[u8], eeprom: Option<&[u8]>) -> Result<(), String> {
+/// `restore`, with opening the port left to `open`, for the same reason as
+/// [`backup_from`]. The backup is read first, and `program` checks its sizes
+/// before it connects, so a directory that's refused for what's in it never
+/// opens the port.
+fn restore_onto<W: Wire>(
+    open: impl FnOnce() -> Result<W, String>,
+    dir: &Path,
+) -> Result<(), String> {
+    let backup = read_backup(dir)?;
+    let connect = || {
+        let p = Programmer::connect_for_restore(open()?, &backup.serial, dir)?;
+        eprintln!(
+            "this chip's serial number, {}, is the one saved in {}",
+            backup.serial,
+            dir.display()
+        );
+        Ok(p)
+    };
+    program(connect, &backup.flash, Some(&backup.eeprom))
+}
+
+/// What `restore` takes from a backup's directory.
+struct Backup {
+    flash: Vec<u8>,
+    eeprom: Vec<u8>,
+    /// The serial number of the chip `backup` read these from, which is the
+    /// only chip `restore` writes them to.
+    serial: SerialNumber,
+}
+
+/// Reads the backup in `dir`, the serial number first, since without one
+/// that can tell chips apart the rest won't be written. Fuses aren't read:
+/// nothing writes them back.
+fn read_backup(dir: &Path) -> Result<Backup, String> {
+    let serial_path = dir.join("serial.hex");
+    if !serial_path.try_exists().map_err(at(&serial_path))? {
+        return Err(format!(
+            "{} doesn't exist, so nothing says which chip this backup was read from. \
+             `restore` only writes a backup onto the chip it was read from, and the serial \
+             number in that file is how it tells, so it won't write this one",
+            serial_path.display()
+        ));
+    }
+    let serial = SerialNumber::from_bytes(&read_hex(&serial_path)?).map_err(at(&serial_path))?;
+    serial.check_saved(dir)?;
+    Ok(Backup {
+        flash: read_hex(&dir.join("flash.hex"))?,
+        eeprom: read_hex(&dir.join("eeprom.hex"))?,
+        serial,
+    })
+}
+
+/// Erase, write, verify, restart, on whatever `connect` connects to. The
+/// chip erase wipes EEPROM too unless the EESAVE fuse is set; pass `Some` to
+/// put contents back. Images that don't fit are refused before `connect`
+/// runs.
+fn program<W: Wire>(
+    connect: impl FnOnce() -> Result<Programmer<W>, String>,
+    flash: &[u8],
+    eeprom: Option<&[u8]>,
+) -> Result<(), String> {
     if flash.len() > map::FLASH_SIZE {
         return Err(format!(
             "the image is {} bytes; the ATtiny1616 has {}",
@@ -420,7 +508,7 @@ fn program(port: &str, flash: &[u8], eeprom: Option<&[u8]>) -> Result<(), String
         ));
     }
 
-    let mut p = connect_for_programming(port)?;
+    let mut p = connect()?;
     let written = write_and_verify(&mut p, flash, eeprom);
     // Leave programming mode even after a failure, so the chip isn't held in
     // it until the next power cycle. The first error is the one to report.
@@ -431,8 +519,8 @@ fn program(port: &str, flash: &[u8], eeprom: Option<&[u8]>) -> Result<(), String
     Ok(())
 }
 
-fn write_and_verify(
-    p: &mut Programmer<Port>,
+fn write_and_verify<W: Wire>(
+    p: &mut Programmer<W>,
     flash: &[u8],
     eeprom: Option<&[u8]>,
 ) -> Result<(), String> {
@@ -475,9 +563,165 @@ fn run(command: &mut Command) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::env;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
-    use super::{commas, crc, ihex, row, runs, signed, this_boards_hex};
+    use super::updi::SerialNumber;
+    use super::updi::tests::fake::Tiny;
+    use super::{
+        backup_from, commas, crc, ihex, read_hex, restore_onto, row, runs, signed, this_boards_hex,
+        write,
+    };
+
+    /// A directory of the test's own under the system's temporary one, gone
+    /// again when the test's done with it.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(test: &str) -> Self {
+            let dir = env::temp_dir().join(format!("ts26-xtask-{}-{test}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        /// Where a test keeps one chip's backup. `backup` makes it.
+        fn backup(&self) -> PathBuf {
+            self.0.join("backup").join("torch")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A fake chip with something in flash and EEPROM worth backing up.
+    fn chip() -> Tiny {
+        let mut tiny = Tiny::new();
+        for (i, byte) in tiny.flash.iter_mut().take(1000).enumerate() {
+            *byte = (i * 7 + 3) as u8;
+        }
+        for (i, byte) in tiny.eeprom.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        tiny
+    }
+
+    /// Stands in for opening the port, with the fake chip on the far end.
+    fn on<'a>(tiny: &'a mut Tiny) -> impl FnOnce() -> Result<&'a mut Tiny, String> {
+        move || Ok(tiny)
+    }
+
+    /// Stands in for opening the port where nothing should get that far.
+    fn no_port() -> Result<Tiny, String> {
+        panic!("the port was opened");
+    }
+
+    fn shown(serial: &[u8]) -> String {
+        SerialNumber::from_bytes(serial).unwrap().to_string()
+    }
+
+    #[test]
+    fn backup_saves_the_serial_number_and_restore_puts_the_backup_back() {
+        let scratch = Scratch::new("restores");
+        let dir = scratch.backup();
+        let mut tiny = chip();
+        let (flash, eeprom) = (tiny.flash.clone(), tiny.eeprom.clone());
+
+        backup_from(on(&mut tiny), &dir).unwrap();
+        assert_eq!(read_hex(&dir.join("flash.hex")).unwrap(), flash);
+        assert_eq!(read_hex(&dir.join("eeprom.hex")).unwrap(), eeprom);
+        assert_eq!(read_hex(&dir.join("serial.hex")).unwrap(), tiny.serial);
+        assert!(dir.join("fuses.hex").exists(), "no fuses.hex");
+
+        // Something else has been flashed since.
+        tiny.flash.fill(0x42);
+        tiny.eeprom.fill(0x24);
+        restore_onto(on(&mut tiny), &dir).unwrap();
+        assert!(tiny.flash == flash, "flash isn't the backup's");
+        assert!(tiny.eeprom == eeprom, "EEPROM isn't the backup's");
+        assert!(tiny.updi_disabled, "UPDI was left on");
+        assert!(!tiny.progmode, "the chip was left in programming mode");
+    }
+
+    #[test]
+    fn restore_refuses_a_backup_from_another_chip_and_writes_nothing() {
+        let scratch = Scratch::new("another-chip");
+        let dir = scratch.backup();
+        let mut breakout = chip();
+        backup_from(on(&mut breakout), &dir).unwrap();
+
+        let mut torch = Tiny::new();
+        torch.serial[4] ^= 0x80;
+        torch.flash.fill(0x42);
+        torch.eeprom.fill(0x24);
+        let err = restore_onto(on(&mut torch), &dir).unwrap_err();
+
+        assert!(err.contains(&shown(&torch.serial)), "{err}");
+        assert!(err.contains(&shown(&breakout.serial)), "{err}");
+        assert!(err.contains(&dir.display().to_string()), "{err}");
+        assert!(torch.flash.iter().all(|&b| b == 0x42), "flash changed");
+        assert!(torch.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
+        assert_eq!(torch.page_writes + torch.page_erase_writes, 0);
+        assert!(torch.updi_disabled, "UPDI was left on");
+        assert!(!torch.progmode, "the chip was left in programming mode");
+        assert!(!torch.in_reset, "the chip was left in reset");
+    }
+
+    #[test]
+    fn restore_refuses_a_backup_with_no_serial_number_before_it_opens_the_port() {
+        let scratch = Scratch::new("no-serial");
+        let dir = scratch.backup();
+        backup_from(on(&mut chip()), &dir).unwrap();
+        fs::remove_file(dir.join("serial.hex")).unwrap();
+
+        let err = restore_onto(no_port, &dir).unwrap_err();
+        assert!(err.contains("serial.hex doesn't exist"), "{err}");
+        assert!(err.contains("which chip"), "{err}");
+    }
+
+    #[test]
+    fn restore_refuses_a_serial_number_of_the_wrong_size_before_it_opens_the_port() {
+        let scratch = Scratch::new("short-serial");
+        let dir = scratch.backup();
+        backup_from(on(&mut chip()), &dir).unwrap();
+        write(&dir.join("serial.hex"), &ihex::encode(&[0x12; 9])).unwrap();
+
+        let err = restore_onto(no_port, &dir).unwrap_err();
+        assert!(err.contains("serial.hex"), "{err}");
+        assert!(err.contains("10 bytes, not 9"), "{err}");
+    }
+
+    #[test]
+    fn backup_saves_a_blank_serial_number_and_restore_refuses_it_before_it_opens_the_port() {
+        for blank in [0xFF, 0x00] {
+            let scratch = Scratch::new(&format!("blank-{blank:02x}"));
+            let dir = scratch.backup();
+            let mut tiny = chip();
+            tiny.serial.fill(blank);
+
+            backup_from(on(&mut tiny), &dir).unwrap();
+            assert_eq!(read_hex(&dir.join("flash.hex")).unwrap(), tiny.flash);
+            assert_eq!(read_hex(&dir.join("serial.hex")).unwrap(), tiny.serial);
+
+            let err = restore_onto(no_port, &dir).unwrap_err();
+            assert!(err.contains(&format!("all {blank:02X}")), "{err}");
+            assert!(err.contains(&dir.display().to_string()), "{err}");
+        }
+    }
+
+    #[test]
+    fn backup_refuses_to_overwrite_one_before_it_opens_the_port() {
+        let scratch = Scratch::new("overwrite");
+        let dir = scratch.backup();
+        backup_from(on(&mut chip()), &dir).unwrap();
+
+        let err = backup_from(no_port, &dir).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+    }
 
     #[test]
     fn flash_takes_only_a_signed_image() {

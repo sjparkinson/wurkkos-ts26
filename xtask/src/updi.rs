@@ -16,7 +16,9 @@
 //! unlock a locked chip. None of those are needed to flash a TS26, and the
 //! first can leave it unrecoverable without a high-voltage programmer.
 
+use std::fmt;
 use std::io;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 // NVMCTRL.CTRLA commands and NVMCTRL.STATUS bits.
@@ -44,6 +46,13 @@ pub mod map {
     pub const SIGNATURE: u16 = mem::SIGNATURES_START as u16;
     /// What the signature reads.
     pub const ATTINY1616: [u8; 3] = regs::SIGNATURE;
+
+    /// The chip's serial number, SIGROW.SERNUM0 to SERNUM9: the ten bytes
+    /// of the signature row straight after the signature (DS §6.10.2.2).
+    /// Read only: UPDI can't write the signature row (DS table 6-5), and
+    /// nothing here tries.
+    pub const SERIAL: u16 = addr::SIGROW_SERNUM0 as u16;
+    pub const SERIAL_SIZE: usize = addr::SIGROW_SERNUM9 - addr::SIGROW_SERNUM0 + 1;
 
     /// The fuses (0x1280..0x128A) and the lock byte (0x128A). Read only:
     /// nothing here writes them.
@@ -121,6 +130,92 @@ const MAX_BLOCK: usize = 256;
 /// How long the chip gets to come out of reset into programming mode.
 const PROGMODE_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// A chip's serial number: SIGROW.SERNUM0 to SERNUM9, in that order.
+///
+/// The datasheet's words are "Each device has an individual serial number,
+/// representing a unique ID" (DS §6.10.2.2). That sentence is all there is to
+/// go on: it doesn't say how the number's made up, and nobody here has
+/// compared two chips'. `backup` saves it beside the images, and `restore`
+/// checks it before it erases anything, so a backup only goes back onto the
+/// chip it was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SerialNumber([u8; map::SERIAL_SIZE]);
+
+impl SerialNumber {
+    /// From the bytes `backup` saved, which have to be all ten.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        match bytes.try_into() {
+            Ok(bytes) => Ok(Self(bytes)),
+            Err(_) => Err(format!(
+                "a serial number is {} bytes, not {}",
+                map::SERIAL_SIZE,
+                bytes.len()
+            )),
+        }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Whether every byte is 0xFF, or every byte is 0x00. Two chips that
+    /// both read that way couldn't be told apart, so it can't say which chip
+    /// a backup came from, and a check against it would pass for the wrong
+    /// reason. Nothing says a real chip ever reads like this.
+    pub fn is_blank(&self) -> bool {
+        self.0 == [0xFF; map::SERIAL_SIZE] || self.0 == [0x00; map::SERIAL_SIZE]
+    }
+
+    /// Fails if this serial number, the one saved with the backup in `dir`,
+    /// is blank. That needs no chip, so `restore` asks before it opens the
+    /// port.
+    pub fn check_saved(&self, dir: &Path) -> Result<()> {
+        if !self.is_blank() {
+            return Ok(());
+        }
+        Err(format!(
+            "the backup in {} was saved with a serial number of all {:02X}, which can't tell \
+             one chip from another. `restore` only writes a backup onto the chip it was read \
+             from, and with that serial number it can't tell, so it won't write this backup",
+            dir.display(),
+            self.0[0]
+        ))
+    }
+
+    /// Fails unless `chip`, just read from the chip on the wire, is this
+    /// serial number, the one saved with the backup in `dir`. A blank one on
+    /// either side fails too. Only [`Programmer::connect_for_restore`] asks,
+    /// and it asks before anything's erased, which is what the errors say.
+    fn check_chip(&self, chip: &Self, dir: &Path) -> Result<()> {
+        self.check_saved(dir)?;
+        if chip.is_blank() {
+            return Err(format!(
+                "this chip's serial number reads all {:02X}, which can't tell one chip from \
+                 another, so `restore` can't tell whether the backup in {} (serial number \
+                 {self}) was read from it. Nothing was erased or written",
+                chip.0[0],
+                dir.display()
+            ));
+        }
+        if chip != self {
+            return Err(format!(
+                "this chip's serial number is {chip}, and the backup in {} was read from a \
+                 chip whose serial number is {self}. `restore` only writes a backup onto the \
+                 chip it was read from, so nothing was erased or written",
+                dir.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// As `12 34 56`, the way the signature's shown.
+impl fmt::Display for SerialNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&hex(&self.0))
+    }
+}
+
 pub struct Programmer<W: Wire> {
     wire: W,
 }
@@ -151,6 +246,31 @@ impl<W: Wire> Programmer<W> {
     pub fn connect_for_programming(wire: W) -> Result<Self> {
         let mut p = Self::connect(wire)?;
         match p.enter_progmode().and_then(|()| p.check_signature()) {
+            Ok(()) => Ok(p),
+            Err(error) => {
+                // Whatever leaving says, the first error is the one to report.
+                let _ = p.leave();
+                Err(error)
+            }
+        }
+    }
+
+    /// As [`Self::connect_for_programming`], for `restore`. It then reads
+    /// the chip's serial number and refuses any chip but the one the backup
+    /// in `dir` was read from, whose serial number is `saved`. That's after
+    /// the signature check and before anything's erased: there's no
+    /// programmer to erase with until the two match. A chip that's refused is
+    /// left the way [`Self::leave`] does it, with a reset and then UPDI off.
+    ///
+    /// A blank `saved` is refused before a byte goes out. All this adds on
+    /// the wire is one read of the signature row.
+    pub fn connect_for_restore(wire: W, saved: &SerialNumber, dir: &Path) -> Result<Self> {
+        saved.check_saved(dir)?;
+        let mut p = Self::connect_for_programming(wire)?;
+        match p
+            .serial_number()
+            .and_then(|chip| saved.check_chip(&chip, dir))
+        {
             Ok(()) => Ok(p),
             Err(error) => {
                 // Whatever leaving says, the first error is the one to report.
@@ -231,6 +351,15 @@ impl<W: Wire> Programmer<W> {
                 hex(&signature)
             ))
         }
+    }
+
+    /// Reads the chip's serial number, the ten bytes of the signature row
+    /// after the signature. It's the same kind of read as
+    /// [`Self::check_signature`]'s, a little further along the row, which
+    /// UPDI can read on an unlocked chip (DS table 6-5).
+    pub fn serial_number(&mut self) -> Result<SerialNumber> {
+        let bytes = self.read(map::SERIAL, map::SERIAL_SIZE)?;
+        SerialNumber::from_bytes(&bytes)
     }
 
     /// Reads `len` bytes of data space from `addr`.
@@ -453,16 +582,43 @@ fn io_error(error: io::Error) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use fake::Tiny;
+
+    /// Where the tests say a backup is. Nothing's read from it.
+    const BACKUP: &str = "backup/breakout";
 
     /// What `map` assumes about the ATDF's segments. Its constants come from
     /// the ATDF, but the UPDI instruction set isn't in there, so that stays
     /// checked by review against the datasheet and pymcuprog.
     #[test]
     fn map_assumes_what_the_atdf_says() {
-        use ts26::regs::mem;
+        use ts26::regs::{addr, mem};
+
+        // SERIAL and SERIAL_SIZE take SERNUM0 and SERNUM9 as the ends of one
+        // run of bytes, which starts where the signature stops.
+        let sernum = [
+            addr::SIGROW_SERNUM0,
+            addr::SIGROW_SERNUM1,
+            addr::SIGROW_SERNUM2,
+            addr::SIGROW_SERNUM3,
+            addr::SIGROW_SERNUM4,
+            addr::SIGROW_SERNUM5,
+            addr::SIGROW_SERNUM6,
+            addr::SIGROW_SERNUM7,
+            addr::SIGROW_SERNUM8,
+            addr::SIGROW_SERNUM9,
+        ];
+        assert_eq!(sernum.len(), map::SERIAL_SIZE, "serial number size");
+        for (n, at) in sernum.into_iter().enumerate() {
+            assert_eq!(at, usize::from(map::SERIAL) + n, "SERNUM{n}");
+        }
+        assert_eq!(
+            mem::SIGNATURES_END,
+            usize::from(map::SERIAL),
+            "serial number follows the signature"
+        );
 
         assert_eq!(map::FLASH_SIZE, mem::PROGMEM_SIZE, "PROGMEM size");
         assert_eq!(map::FLASH_PAGE, mem::PROGMEM_PAGE, "PROGMEM page");
@@ -492,6 +648,9 @@ mod tests {
         assert_eq!(map::EEPROM_PAGE, 32, "EEPROM page");
         assert_eq!(map::SIGNATURE, 0x1100, "signature");
         assert_eq!(map::ATTINY1616, [0x1E, 0x94, 0x21], "ATtiny1616");
+        // SIGROW is at 0x1100 (§7.1) and SERNUM0 is 3 into it (§6.10.1).
+        assert_eq!(map::SERIAL, 0x1103, "serial number");
+        assert_eq!(map::SERIAL_SIZE, 10, "serial number size");
         assert_eq!(map::FUSES, 0x1280, "fuses");
         assert_eq!(map::FUSES_SIZE, 11, "fuses and lock byte");
         assert_eq!(map::NVMCTRL_CTRLA, 0x1000, "NVMCTRL.CTRLA");
@@ -605,22 +764,44 @@ mod tests {
         assert!(!tiny.updi_disabled, "UPDI was turned off");
     }
 
-    /// Connects for programming to a chip that should be refused, and checks
-    /// it was let go the way `leave` does it: reset a second time, then UPDI
-    /// off, with the chip out of programming mode and its flash and EEPROM
-    /// as they were. Returns the error.
-    fn refused(mut tiny: Tiny) -> String {
+    /// Gives a chip something in flash and EEPROM to lose.
+    fn with_contents(mut tiny: Tiny) -> Tiny {
         tiny.flash.fill(0x42);
         tiny.eeprom.fill(0x24);
-        let Err(error) = Programmer::connect_for_programming(&mut tiny) else {
-            panic!("connected for programming");
-        };
+        tiny
+    }
+
+    /// Checks a chip that was refused was let go the way `leave` does it:
+    /// reset a second time, then UPDI off, with the chip out of programming
+    /// mode and the flash and EEPROM [`with_contents`] gave it as they were.
+    fn assert_let_go(tiny: &Tiny) {
         assert_eq!(tiny.resets, 2, "one reset to enter and one to leave");
         assert!(!tiny.in_reset, "the chip was left in reset");
         assert!(!tiny.progmode, "the chip was left in programming mode");
         assert!(tiny.updi_disabled, "UPDI was left on");
         assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
         assert!(tiny.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
+    }
+
+    /// Connects for programming to a chip that should be refused, and checks
+    /// it was let go. Returns the error.
+    fn refused(tiny: Tiny) -> String {
+        let mut tiny = with_contents(tiny);
+        let Err(error) = Programmer::connect_for_programming(&mut tiny) else {
+            panic!("connected for programming");
+        };
+        assert_let_go(&tiny);
+        error
+    }
+
+    /// The same for a restore, of a backup that was saved with `saved`.
+    fn refused_a_restore(tiny: Tiny, saved: &SerialNumber) -> String {
+        let mut tiny = with_contents(tiny);
+        let Err(error) = Programmer::connect_for_restore(&mut tiny, saved, Path::new(BACKUP))
+        else {
+            panic!("connected for a restore");
+        };
+        assert_let_go(&tiny);
         error
     }
 
@@ -646,6 +827,104 @@ mod tests {
         tiny.locked = true;
         let err = refused(tiny);
         assert!(err.contains("locked"), "{err}");
+    }
+
+    #[test]
+    fn reads_the_serial_number_from_sernum0_to_sernum9() {
+        let mut tiny = Tiny::new();
+        tiny.serial = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9];
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        let serial = p.serial_number().unwrap();
+        assert_eq!(serial.bytes(), p.wire.serial);
+        assert_eq!(serial.to_string(), "A0 A1 A2 A3 A4 A5 A6 A7 A8 A9");
+    }
+
+    #[test]
+    fn a_serial_number_is_ten_bytes() {
+        assert!(SerialNumber::from_bytes(&[0x12; 10]).is_ok());
+        for wrong in [0, 9, 11] {
+            let err = SerialNumber::from_bytes(&vec![0x12; wrong]).unwrap_err();
+            assert!(err.contains(&format!("not {wrong}")), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_serial_number_of_all_ff_or_all_00_is_blank() {
+        for fill in [0xFF, 0x00] {
+            assert!(SerialNumber([fill; map::SERIAL_SIZE]).is_blank());
+            // One byte that isn't is enough to tell a chip by.
+            for n in 0..map::SERIAL_SIZE {
+                let mut bytes = [fill; map::SERIAL_SIZE];
+                bytes[n] ^= 0x01;
+                assert!(!SerialNumber(bytes).is_blank(), "{fill:02X}, byte {n}");
+            }
+        }
+        assert!(!SerialNumber(Tiny::new().serial).is_blank(), "the fake's");
+    }
+
+    #[test]
+    fn connects_for_a_restore_onto_the_chip_the_backup_was_read_from() {
+        let mut tiny = Tiny::new();
+        let saved = SerialNumber(tiny.serial);
+        let p = Programmer::connect_for_restore(&mut tiny, &saved, Path::new(BACKUP));
+        assert!(p.is_ok());
+        drop(p);
+        assert!(tiny.progmode, "not in programming mode");
+        assert!(!tiny.updi_disabled, "UPDI was turned off");
+    }
+
+    #[test]
+    fn a_restore_onto_another_chip_ends_with_updi_off_and_nothing_written() {
+        let saved = SerialNumber(Tiny::new().serial);
+        // A serial number that differs in any one byte is another chip's.
+        for n in 0..map::SERIAL_SIZE {
+            let mut tiny = Tiny::new();
+            tiny.serial[n] ^= 0x01;
+            let chip = SerialNumber(tiny.serial);
+            let err = refused_a_restore(tiny, &saved);
+            assert!(err.contains(&chip.to_string()), "byte {n}: {err}");
+            assert!(err.contains(&saved.to_string()), "byte {n}: {err}");
+            assert!(err.contains(BACKUP), "byte {n}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_restore_onto_a_chip_with_a_blank_serial_number_ends_with_updi_off() {
+        let saved = SerialNumber(Tiny::new().serial);
+        for (blank, name) in [(0xFF, "all FF"), (0x00, "all 00")] {
+            let mut tiny = Tiny::new();
+            tiny.serial = [blank; map::SERIAL_SIZE];
+            let err = refused_a_restore(tiny, &saved);
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains(&saved.to_string()), "{err}");
+            assert!(err.contains(BACKUP), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_restore_of_a_backup_with_a_blank_serial_number_sends_nothing() {
+        for (blank, name) in [(0xFF, "all FF"), (0x00, "all 00")] {
+            // The chip reads the same, so comparing the two would pass.
+            let mut tiny = Tiny::new();
+            tiny.serial = [blank; map::SERIAL_SIZE];
+            let saved = SerialNumber(tiny.serial);
+            let Err(err) = Programmer::connect_for_restore(&mut tiny, &saved, Path::new(BACKUP))
+            else {
+                panic!("connected for a restore");
+            };
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains(BACKUP), "{err}");
+            assert_eq!(tiny.sent, 0, "bytes went out");
+        }
+    }
+
+    #[test]
+    fn a_restore_checks_the_signature_before_the_serial_number() {
+        let mut tiny = Tiny::new();
+        tiny.signature = [0x1E, 0x94, 0x20];
+        tiny.serial[0] ^= 0x01;
+        let err = refused_a_restore(tiny, &SerialNumber(Tiny::new().serial));
+        assert!(err.contains("1E 94 20"), "{err}");
     }
 
     #[test]
@@ -776,14 +1055,16 @@ mod tests {
     /// A pretend ATtiny1616 on the far end of the wire, enough to exercise
     /// the instruction framing, the ACK rules and the NVM controller. It's
     /// written from the same datasheet as the programmer, so it catches
-    /// slips, not misreadings. Only a real chip catches those.
-    mod fake {
+    /// slips, not misreadings. Only a real chip catches those. `main.rs`'s
+    /// tests back it up and restore it too.
+    pub(crate) mod fake {
         use super::super::*;
         use std::collections::VecDeque;
 
         const FLASH_END: u16 = map::FLASH + (map::FLASH_SIZE - 1) as u16;
         const EEPROM_END: u16 = map::EEPROM + (map::EEPROM_SIZE - 1) as u16;
         const SIGNATURE_END: u16 = map::SIGNATURE + (map::ATTINY1616.len() - 1) as u16;
+        const SERIAL_END: u16 = map::SERIAL + (map::SERIAL_SIZE - 1) as u16;
         /// FUSE.OSCCFG, the third fuse byte.
         const OSCCFG: u16 = map::FUSES + 2;
 
@@ -813,9 +1094,14 @@ mod tests {
             pub flash: Vec<u8>,
             pub eeprom: Vec<u8>,
             pub signature: [u8; 3],
+            /// SIGROW.SERNUM0 to SERNUM9. The bytes are made up: nobody
+            /// here has read a real chip's.
+            pub serial: [u8; map::SERIAL_SIZE],
             pub locked: bool,
             pub asleep: bool,
             pub breaks: usize,
+            /// Bytes the programmer has sent, to anything.
+            pub sent: usize,
             pub updi_disabled: bool,
             pub in_reset: bool,
             /// Reset requests that were applied and then released.
@@ -860,9 +1146,11 @@ mod tests {
                     flash: vec![0xFF; map::FLASH_SIZE],
                     eeprom: vec![0xFF; map::EEPROM_SIZE],
                     signature: map::ATTINY1616,
+                    serial: [0x51, 0x3A, 0x07, 0xC4, 0x19, 0xE2, 0x6D, 0x80, 0x2B, 0xF5],
                     locked: false,
                     asleep: false,
                     breaks: 0,
+                    sent: 0,
                     updi_disabled: false,
                     in_reset: false,
                     resets: 0,
@@ -1055,6 +1343,7 @@ mod tests {
                     map::SIGNATURE..=SIGNATURE_END => {
                         self.signature[usize::from(addr - map::SIGNATURE)]
                     }
+                    map::SERIAL..=SERIAL_END => self.serial[usize::from(addr - map::SERIAL)],
                     OSCCFG => 0x02,
                     _ => 0,
                 }
@@ -1129,6 +1418,7 @@ mod tests {
 
         impl Wire for Tiny {
             fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+                self.sent += bytes.len();
                 for &b in bytes {
                     self.byte(b);
                 }
