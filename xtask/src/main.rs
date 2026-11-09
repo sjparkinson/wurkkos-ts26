@@ -42,14 +42,14 @@ commands:
   peek <port>             read the running chip's registers and SRAM, to see how
                           far the firmware got; it writes nothing, and the same
                           reset follows, so only the first run counts
-  backup <port>           save the torch's flash, EEPROM and fuses into backup/
+  backup <port> <dir>     save the chip's flash, EEPROM and fuses into <dir>
   flash <port> [file.hex] build and flash the firmware, or flash file.hex
-  restore <port>          put backup/flash.hex and backup/eeprom.hex back
+  restore <port> <dir>    put <dir>/flash.hex and <dir>/eeprom.hex back
   simulate [script...]    try src/ui.rs live in the terminal, or on a script
                           such as `1C 2H:1.5s wait:1s 3C`
 
 <port> is the serial UPDI adapter, e.g. /dev/cu.usbserial-1410 on macOS
-or /dev/ttyUSB0 on Linux.
+or /dev/ttyUSB0 on Linux. <dir> names one chip's backup, e.g. backup/torch.
 ";
 
 const ELF: &str = "target/avr-none/release/ts26.elf";
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
         ["hex"] => hex(),
         ["ping", port] => ping(port),
         ["peek", port] => peek(port),
-        ["backup", port] => backup(port),
+        ["backup", port, dir] => backup(port, Path::new(dir)),
         ["flash", port] => build()
             .and_then(|(elf, _)| crc::sign(&elf.flash_image()))
             .and_then(|image| flash(port, &image)),
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             .and_then(|()| read_hex(Path::new(file)))
             .and_then(|image| signed(&image).map(|()| image))
             .and_then(|image| flash(port, &image)),
-        ["restore", port] => restore(port),
+        ["restore", port, dir] => restore(port, Path::new(dir)),
         ["simulate"] => simulate::interactive(),
         ["simulate", script @ ..] => simulate::script(script),
         _ => {
@@ -307,7 +307,7 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
     }
     Err(format!(
         "{} doesn't say it's for the TS26 (model 0721), so it won't be flashed. Flash the \
-         file `cargo xtask hex` writes, or use `restore` for a backup",
+         file `cargo xtask hex` writes, or use `restore <port> <dir>` for a backup",
         path.display()
     ))
 }
@@ -339,8 +339,7 @@ fn signed(image: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn backup(port: &str) -> Result<(), String> {
-    let dir = root().join("backup");
+fn backup(port: &str, dir: &Path) -> Result<(), String> {
     let flash_path = dir.join("flash.hex");
     if flash_path.exists() {
         return Err(format!(
@@ -358,11 +357,14 @@ fn backup(port: &str) -> Result<(), String> {
     let fuses = p.read(map::FUSES, map::FUSES_SIZE)?;
     p.leave()?;
 
-    fs::create_dir_all(&dir).map_err(at(&dir))?;
+    fs::create_dir_all(dir).map_err(at(dir))?;
     write(&flash_path, &ihex::encode(&flash))?;
     write(&dir.join("eeprom.hex"), &ihex::encode(&eeprom))?;
     write(&dir.join("fuses.hex"), &ihex::encode(&fuses))?;
-    eprintln!("saved flash, EEPROM and fuses (for reference, never written back) to backup/");
+    eprintln!(
+        "saved flash, EEPROM and fuses (for reference, never written back) to {}",
+        dir.display()
+    );
     Ok(())
 }
 
@@ -370,8 +372,7 @@ fn flash(port: &str, image: &[u8]) -> Result<(), String> {
     program(port, image, None)
 }
 
-fn restore(port: &str) -> Result<(), String> {
-    let dir = root().join("backup");
+fn restore(port: &str, dir: &Path) -> Result<(), String> {
     let flash = read_hex(&dir.join("flash.hex"))?;
     let eeprom = read_hex(&dir.join("eeprom.hex"))?;
     program(port, &flash, Some(&eeprom))
@@ -488,11 +489,12 @@ mod tests {
         }
         for bad in [
             "target/wurkkos-ts21-0614.hex",
-            "backup/flash.hex",
+            "backup/torch/flash.hex",
             "ts26/firmware.hex",
         ] {
             let err = this_boards_hex(Path::new(bad)).unwrap_err();
             assert!(err.contains("model 0721"), "{bad}: {err}");
+            assert!(err.contains("`restore <port> <dir>`"), "{bad}: {err}");
         }
     }
 
