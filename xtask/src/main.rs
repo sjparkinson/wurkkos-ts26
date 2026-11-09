@@ -221,13 +221,12 @@ fn connect(port: &str) -> Result<Programmer<Port>, String> {
     Programmer::connect(Port::open(port)?)
 }
 
-/// Connects, enters programming mode and refuses anything but an ATtiny1616.
-/// Every command that reads or writes memory starts here.
+/// Connects, enters programming mode and refuses anything but an ATtiny1616,
+/// leaving programming mode again if either of those fails. Every command
+/// that reads or writes memory starts here.
 fn connect_for_programming(port: &str) -> Result<Programmer<Port>, String> {
-    let mut p = connect(port)?;
-    p.enter_progmode()?;
-    p.check_signature()?;
-    Ok(p)
+    eprintln!("connecting on {port}");
+    Programmer::connect_for_programming(Port::open(port)?)
 }
 
 fn ping(port: &str) -> Result<(), String> {

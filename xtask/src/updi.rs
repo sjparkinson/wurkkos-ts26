@@ -137,6 +137,29 @@ impl<W: Wire> Programmer<W> {
         Ok(p)
     }
 
+    /// Brings up the link, enters programming mode and refuses anything but
+    /// an ATtiny1616. If either of the last two fails, the NVM key and a
+    /// reset may already have gone out, so this leaves the way
+    /// [`Self::leave`] does before it reports what failed. Returning early
+    /// would leave the chip with UPDI on, and perhaps held in programming
+    /// mode, with nothing here to let it go.
+    ///
+    /// Leaving is a reset request and UPDIDIS, both writes to UPDI's own
+    /// registers, which is all a locked chip accepts (DS §33.3.8.1). Neither
+    /// erases anything: that takes the chip erase key, which this never
+    /// sends.
+    pub fn connect_for_programming(wire: W) -> Result<Self> {
+        let mut p = Self::connect(wire)?;
+        match p.enter_progmode().and_then(|()| p.check_signature()) {
+            Ok(()) => Ok(p),
+            Err(error) => {
+                // Whatever leaving says, the first error is the one to report.
+                let _ = p.leave();
+                Err(error)
+            }
+        }
+    }
+
     fn init_link(&mut self) -> Result<()> {
         self.stcs(CS_CTRLB, CTRLB_CCDETDIS)?;
         self.stcs(CS_CTRLA, CTRLA_IBDLY)?;
@@ -573,6 +596,59 @@ mod tests {
     }
 
     #[test]
+    fn connects_for_programming_and_stays_connected() {
+        let mut tiny = Tiny::new();
+        let p = Programmer::connect_for_programming(&mut tiny);
+        assert!(p.is_ok());
+        drop(p);
+        assert!(tiny.progmode, "not in programming mode");
+        assert!(!tiny.updi_disabled, "UPDI was turned off");
+    }
+
+    /// Connects for programming to a chip that should be refused, and checks
+    /// it was let go the way `leave` does it: reset a second time, then UPDI
+    /// off, with the chip out of programming mode and its flash and EEPROM
+    /// as they were. Returns the error.
+    fn refused(mut tiny: Tiny) -> String {
+        tiny.flash.fill(0x42);
+        tiny.eeprom.fill(0x24);
+        let Err(error) = Programmer::connect_for_programming(&mut tiny) else {
+            panic!("connected for programming");
+        };
+        assert_eq!(tiny.resets, 2, "one reset to enter and one to leave");
+        assert!(!tiny.in_reset, "the chip was left in reset");
+        assert!(!tiny.progmode, "the chip was left in programming mode");
+        assert!(tiny.updi_disabled, "UPDI was left on");
+        assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
+        assert!(tiny.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
+        error
+    }
+
+    #[test]
+    fn a_wrong_signature_ends_with_updi_off() {
+        let mut tiny = Tiny::new();
+        tiny.signature = [0x1E, 0x94, 0x20];
+        let err = refused(tiny);
+        assert!(err.contains("1E 94 20"), "{err}");
+    }
+
+    #[test]
+    fn a_start_up_that_never_finishes_ends_with_updi_off() {
+        let mut tiny = Tiny::new();
+        tiny.start_up = Duration::from_secs(3600);
+        let err = refused(tiny);
+        assert!(err.contains("programming mode"), "{err}");
+    }
+
+    #[test]
+    fn a_locked_chip_ends_with_updi_off_and_nothing_written() {
+        let mut tiny = Tiny::new();
+        tiny.locked = true;
+        let err = refused(tiny);
+        assert!(err.contains("locked"), "{err}");
+    }
+
+    #[test]
     fn writes_and_verifies_flash_then_starts_the_firmware() {
         let image: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
         let mut tiny = Tiny::new();
@@ -742,6 +818,10 @@ mod tests {
             pub breaks: usize,
             pub updi_disabled: bool,
             pub in_reset: bool,
+            /// Reset requests that were applied and then released.
+            pub resets: usize,
+            /// In NVM programming mode, with the CPU held.
+            pub progmode: bool,
             /// How long after a reset the chip's still starting up, reading
             /// as locked and not in programming mode.
             pub start_up: Duration,
@@ -766,7 +846,6 @@ mod tests {
             replies: VecDeque<u8>,
             ctrla: u8,
             key_status: u8,
-            progmode: bool,
             ptr: u16,
             repeat: usize,
             page_buffer: Vec<u8>,
@@ -786,6 +865,8 @@ mod tests {
                     breaks: 0,
                     updi_disabled: false,
                     in_reset: false,
+                    resets: 0,
+                    progmode: false,
                     start_up: Duration::ZERO,
                     // A full-speed USB adapter's frame, about the best a
                     // round trip gets.
@@ -801,7 +882,6 @@ mod tests {
                     replies: VecDeque::new(),
                     ctrla: 0,
                     key_status: 0,
-                    progmode: false,
                     ptr: 0,
                     repeat: 1,
                     page_buffer: vec![0xFF; map::FLASH_PAGE],
@@ -944,9 +1024,21 @@ mod tests {
             fn stcs(&mut self, reg: u8, value: u8) {
                 match reg {
                     CS_CTRLA => self.ctrla = value,
-                    CS_CTRLB => self.updi_disabled = value & CTRLB_UPDIDIS != 0,
+                    CS_CTRLB => {
+                        self.updi_disabled = value & CTRLB_UPDIDIS != 0;
+                        if self.updi_disabled {
+                            // Turning UPDI off resets the system, puts the
+                            // CPU back in the run state whatever it was in,
+                            // and resets any keys (DS §33.3.2.2.2).
+                            self.progmode = false;
+                            self.key_status = 0;
+                        }
+                    }
                     ASI_RESET_REQ if value == RESET_REQ_APPLY => self.in_reset = true,
                     ASI_RESET_REQ => {
+                        if self.in_reset {
+                            self.resets += 1;
+                        }
                         self.in_reset = false;
                         self.started_at = self.elapsed + self.start_up;
                         self.progmode = self.key_status & KEY_STATUS_NVMPROG != 0 && !self.locked;
@@ -1069,6 +1161,26 @@ mod tests {
 
             fn now(&self) -> Instant {
                 self.clock_start + self.elapsed
+            }
+        }
+
+        /// Lets a test keep hold of the chip while a programmer drives it, to
+        /// see how a connection that failed left it.
+        impl Wire for &mut Tiny {
+            fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+                (**self).send(bytes)
+            }
+
+            fn recv(&mut self, buf: &mut [u8]) -> io::Result<()> {
+                (**self).recv(buf)
+            }
+
+            fn double_break(&mut self) -> io::Result<()> {
+                (**self).double_break()
+            }
+
+            fn now(&self) -> Instant {
+                (**self).now()
             }
         }
     }
