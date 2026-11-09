@@ -44,10 +44,16 @@
 //! - The PIT's flag goes up once a period of simulated time, which counts an
 //!   instruction at a time while the CPU's awake and skips to the next event
 //!   while it sleeps.
-//! - Interrupts come from TCA0's OVF, the PIT and PORTA's pin-change flags,
-//!   which a switch edge sets when PA5's ISC asks for that edge. Enabling one
-//!   with SREG.I set and its vector going to `__unhandled_interrupt` is an
-//!   error: the real chip would return with the flag still up, forever.
+//! - Interrupts come from TCA0's OVF and the PIT. The model has PORTA's
+//!   pin-change flags too, which a switch edge sets when PA5's ISC asks for
+//!   that edge, but the firmware leaves ISC at INTDISABLE, so none goes up and
+//!   the switch never wakes it. Enabling an interrupt with SREG.I set and its
+//!   vector going to `__unhandled_interrupt` is an error: the real chip would
+//!   return with the flag still up, forever. PORTA's vector is one of those.
+//! - The switch is read through VPORTA.IN, which wants PA5's input buffer on
+//!   and its pull-up, since the switch only pulls the pin low. IN follows the
+//!   pin at once here. The real one stops following it in power-down, and the
+//!   datasheet doesn't say how soon after a wake it's caught up (§16.3.5).
 //! - `sleep` needs SLPCTRL.SEN, idle or power-down, and an enabled interrupt
 //!   that could wake it, which in power-down leaves out TCA0 (it stops) and
 //!   RISING and FALLING on all but pins 2 and 6 (table 16-3). Power-down also
@@ -1500,7 +1506,13 @@ impl Chip {
     }
 
     /// Presses or releases the switch on PA5. A change sets PA5's flag in
-    /// PORTA.INTFLAGS if its ISC asks for that edge (§16.5.10).
+    /// PORTA.INTFLAGS if its ISC asks for that edge (§16.5.10). INTDISABLE,
+    /// which is where the firmware leaves it, asks for none.
+    ///
+    /// `Sim::tick` only moves the switch between ticks, so an edge that's
+    /// asked for always raises its flag. A press that's over before the chip
+    /// has woken from power-down can wake it with no flag at all (table
+    /// 16-3's note 1), and that isn't modelled.
     fn set_switch(&mut self, pressed: bool) -> Result<(), String> {
         if pressed == self.pressed {
             return Ok(());
@@ -1937,10 +1949,22 @@ impl Bus for Chip {
             return Ok(*self.flash.get(usize::from(addr - MAPPED)).unwrap_or(&0xFF));
         }
         match a {
+            // Every ISC but INPUT_DISABLE leaves the input buffer on, INTDISABLE
+            // included (§16.3.2.1, §16.5.11). The pull-up is Anduril's setting
+            // for the pin (docs/hardware.md). Nobody's seen whether the board
+            // has one of its own, so this takes it that it hasn't.
             reg::VPORTA_IN => {
-                if self.switch_ctrl() & PORT_ISC == ISC_INPUT_DISABLE {
+                let ctrl = self.switch_ctrl();
+                if ctrl & PORT_ISC == ISC_INPUT_DISABLE {
                     return Err(
                         "reads PA5 with its input buffer off, so PORTA.IN never changes".into(),
+                    );
+                }
+                if ctrl & PORT_PULLUPEN == 0 {
+                    return Err(
+                        "reads PA5 without its pull-up, and nothing else is known to pull \
+                         a released switch high"
+                            .into(),
                     );
                 }
                 Ok(if self.pressed { !SWITCH } else { 0xFF })
@@ -2579,6 +2603,29 @@ mod tests {
             chip.porta_flags, 0,
             "a rising edge, which ISC didn't ask for"
         );
+    }
+
+    /// PA5 as `hw::init` leaves it: the pull-up, and ISC at INTDISABLE.
+    #[test]
+    fn pa5_reads_through_its_pull_up_and_a_press_raises_nothing() {
+        let mut chip = Chip::new(Vec::new());
+        let ctrl = (reg::PORTA_PIN0CTRL + SWITCH_PIN) as u16;
+        let read = |chip: &mut Chip| chip.read(reg::VPORTA_IN as u16);
+        assert!(read(&mut chip).unwrap_err().contains("pull-up"));
+        chip.write(ctrl, PORT_PULLUPEN | ISC_INTDISABLE).unwrap();
+        assert_eq!(read(&mut chip), Ok(0xFF));
+
+        chip.set_switch(true).unwrap();
+        assert_eq!(read(&mut chip), Ok(!SWITCH));
+        assert_eq!(chip.porta_flags, 0, "no sense, so no flag");
+        assert_eq!(chip.interrupt(), None);
+        // Nor is it a way to wake up.
+        chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_IDLE | SLPCTRL_SEN)
+            .unwrap();
+        assert!(chip.sleep().unwrap_err().contains("no interrupt"));
+
+        chip.write(ctrl, PORT_PULLUPEN | ISC_INPUT_DISABLE).unwrap();
+        assert!(read(&mut chip).unwrap_err().contains("input buffer"));
     }
 
     #[test]

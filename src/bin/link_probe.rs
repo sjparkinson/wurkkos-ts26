@@ -27,7 +27,6 @@ mod rt;
 /// interrupt, so they're empty.
 #[cfg(target_arch = "avr")]
 mod hw {
-    pub extern "avr-interrupt" fn porta_port() {}
     pub extern "avr-interrupt" fn rtc_pit() {}
     pub extern "avr-interrupt" fn tca0_ovf() {}
 }

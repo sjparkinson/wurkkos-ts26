@@ -150,10 +150,15 @@ pub fn init() {
     // buffer on, no pull-up to skew the divider. The outputs get no pull-up
     // either, so PB2 can't creep the boost converter on before it's an
     // output.
+    //
+    // PA5 is the switch, and its pull-up is what the switch pulls against.
+    // ISC stays at INTDISABLE, its reset value: no interrupt, and the input
+    // buffer on, so VPORTA.IN still reads the pin (DS40002204A sections
+    // 16.3.2.1 and 16.5.11). `wait_for_tick` says why there's no interrupt.
     for pin in 0..8 {
         let ctrl = match pin {
             UPDI | BATTERY => continue,
-            SWITCH => regs::PORT_PULLUPEN | regs::PORT_ISC_BOTHEDGES,
+            SWITCH => regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE,
             _ => regs::PORT_PULLUPEN,
         };
         write(reg::PORTA_PIN0CTRL + pin as usize, ctrl);
@@ -283,12 +288,23 @@ fn prepare_sleep(rest: bool) {
 /// PIT carries on in there (section 23.8 and the errata's table 3-3), so the
 /// loop runs every tick, on or off, and that's how it sees the switch.
 ///
+/// The switch has no interrupt, so a press never wakes the chip: it waits for
+/// the next tick, 15.6 ms at most, and the loop reads PA5 then. A press that
+/// comes and goes between two ticks is missed. An interrupt on the pin
+/// wouldn't change either, since the loop only looks once a tick: the chip
+/// would wake and go straight back to sleep. It wouldn't be dependable from
+/// power-down anyway. PA5 is a partially asynchronous pin, so with the clock
+/// stopped a press that's over before the chip has woken can wake it and
+/// raise no interrupt (DS40002204A table 16-3, and table 5-1's note 2).
+/// Nobody's measured how short a press this switch can give.
+///
 /// The PIT interrupt sets [`TICK`]; this checks and clears it with interrupts
 /// off, so a tick can't land between the check and the clear. If it isn't set
 /// yet, `sei` and `sleep` go back to back (AN2515C section 4.5): the
 /// instruction after `sei` always runs before a pending interrupt, so a tick
 /// that arrived after the check wakes the `sleep` at once rather than being
-/// slept through. Anything else that wakes it goes round again.
+/// slept through. The only other interrupt is TCA0's overflow, which wakes it
+/// from idle every PWM cycle while the light's on, and it goes round again.
 ///
 /// Always true. On the TS21 false means a deadline ran out first, and this
 /// board has no deadline, so a dead 32 kHz oscillator stops the loop here.
@@ -317,15 +333,6 @@ pub fn wait_for_tick(rest: bool) -> bool {
 pub extern "avr-interrupt" fn rtc_pit() {
     write(reg::RTC_PITINTFLAGS, regs::RTC_PI);
     write(reg::GPIO_GPIOR0, TICK);
-}
-
-/// PORTA_PORT, vector 3: the switch moved. The loop samples the pin every
-/// tick, so all this has to do is clear the flag, or the interrupt would fire
-/// again the moment it returned. It wakes the chip, and the `sleep` in
-/// [`wait_for_tick`] takes it back down until the tick.
-#[unsafe(no_mangle)]
-pub extern "avr-interrupt" fn porta_port() {
-    write(reg::VPORTA_INTFLAGS, 1 << SWITCH);
 }
 
 /// Points the ADC at `muxpos`, turning it and the 1.1 V reference on if a rest
@@ -488,6 +495,15 @@ pub fn set_aux(colour: Aux) {
     }
 }
 
+/// Whether the switch is down. It pulls PA5 low against the pin's pull-up.
+/// The loop calls this once a tick, and it's all the firmware knows of the
+/// switch: PA5 has no interrupt (see [`wait_for_tick`]).
+///
+/// IN stops following the pin in power-down, since the clock that syncs it
+/// has stopped (DS40002204A section 16.3.5), and the datasheet doesn't say
+/// how many clocks it takes to catch up after a wake. The loop gets here once
+/// the PIT's handler has run and returned, dozens of clocks on, which ought to
+/// be plenty. Nobody's measured it.
 pub fn switch_pressed() -> bool {
     read(reg::VPORTA_IN) & (1 << SWITCH) == 0
 }

@@ -38,8 +38,7 @@ use crate::regs;
 // The table below lists the handled vectors in this order, with runs of
 // unhandled slots between them.
 const _: () = assert!(
-    0 < regs::VECTOR_PORTA_PORT
-        && regs::VECTOR_PORTA_PORT < regs::VECTOR_RTC_PIT
+    0 < regs::VECTOR_RTC_PIT
         && regs::VECTOR_RTC_PIT < regs::VECTOR_TCA0_OVF
         && regs::VECTOR_TCA0_OVF < regs::VECTORS
 );
@@ -72,10 +71,6 @@ global_asm!(
     // assembler repeat the line between them. The handled ones go to hw.rs
     // and the rest to `__unhandled_interrupt`. Nothing enables those, so they
     // can't fire.
-    "  .rept {before_porta}",
-    "  jmp __unhandled_interrupt",
-    "  .endr",
-    "  jmp {porta_port}",
     "  .rept {before_pit}",
     "  jmp __unhandled_interrupt",
     "  .endr",
@@ -172,9 +167,7 @@ global_asm!(
     "5:",
     "  rjmp 5b",
     // The unhandled slots around the handled ones. Slot 0 is reset.
-    before_porta = const regs::VECTOR_PORTA_PORT - 1,
-    porta_port = sym crate::hw::porta_port,
-    before_pit = const regs::VECTOR_RTC_PIT - regs::VECTOR_PORTA_PORT - 1,
+    before_pit = const regs::VECTOR_RTC_PIT - 1,
     rtc_pit = sym crate::hw::rtc_pit,
     before_ovf = const regs::VECTOR_TCA0_OVF - regs::VECTOR_RTC_PIT - 1,
     tca0_ovf = sym crate::hw::tca0_ovf,
