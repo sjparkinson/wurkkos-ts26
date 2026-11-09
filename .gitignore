@@ -3,7 +3,8 @@
 debug
 target
 
-# cargo xtask backup saves the torch's stock flash, EEPROM and fuses here
+# cargo xtask backup <port> <dir> saves a chip's flash, EEPROM and fuses, and
+# the docs keep each chip's <dir> under here, such as backup/torch
 /backup
 
 # Microchip's PDFs are all rights reserved, so they stay local. docs/microchip/README.md lists them
