@@ -198,7 +198,7 @@ Write the result in the [table](#results) before going on.
 | 4.4 | 1C on, 1C off, a few dozen times, then holds | Same feel as the docs/ui.md rows. The 64 Hz tick has the delta-sigma interrupt running under it now, so sluggish clicks mean the interrupt's eating the loop | |
 | 4.5 | Tail current, off, on the 4 A range | Reads 0.000 to 0.003 once it's asleep. Anything steadily over about 5 mA isn't a sleeping chip, or it's a reset loop | The rough version of the off current |
 | 4.6 | Aux, off, in lockout (4C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from Anduril, so the wrong colour means that's wrong here | "Likely" on the aux pins |
-| 4.7 | An hour on at a low level, in sight | Stays on and doesn't move. It going out on its own is the watchdog biting | "It never trips in normal use", in part |
+| 4.7 | An hour on at a low level, in sight | Stays on and doesn't move. Going out five minutes after it came on, and coming back with 1C, is a cell voltage it can't read ([flashing.md](flashing.md#if-its-capped-at-level-50)). Going out at any other time is the watchdog biting, or the tick deadline, which ends in the same reset while the oscillator's alive | "It never trips in normal use", in part |
 | 4.8 | Leave it off overnight, then 1C | Comes on at once. 6.2 is the real test | |
 
 ## Stage 5: the ramp
@@ -256,6 +256,7 @@ None exist yet, and they should stay on a throwaway branch: they aren't the firm
 
 | Check | Why | What would unlock it |
 |---|---|---|
+| The deadline for a tick that stops while the light's on | It needs the 32 kHz oscillator to stop, and nothing here can stop it | Nothing on this bench. Only the simulator has run it |
 | Off current to the µA | No mA or µA range | A 1 kΩ resistor in series with the cell: 1 mV per µA, on the 600 mV range. The firmware waking each tick will wobble it, and the 3 readings a second will average that |
 | What the supply pad does with the cell in or out, and what VCC really is | The pads are under the head, and the head has to be on for the light to run | A wire from the body to the head, so the meter can reach the pads with the head off |
 | PB2 and PB0 through a real reset, on the torch | Too quick for the meter | A scope. 3.1 by eye is the stand-in |

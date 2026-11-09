@@ -44,7 +44,7 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 - **Every register address and bit mask comes from `src/regs.rs`, which `build.rs` generates from the ATDF** (`vendor/ATtiny1616.atdf`) with `generate` in `xtask/src/atdf.rs`. No bare register numbers in `src/hw.rs` or `src/rt.rs`, and nothing typed by hand that the ATDF names: use the generated constant. A number the ATDF doesn't have, like `ADC_SAMPLEN_32US`, goes in `src/regs.rs` by hand with a comment saying why. Use the `register-checker` agent after touching `src/regs.rs`, `src/hw.rs` or `src/rt.rs`, for what the ATDF can't express.
 - **16-bit peripheral registers: low byte first.** Use `write16` in `src/hw.rs`.
 - **The boost converter's enable (PB2) is the dangerous pin.** It's low whenever the light's off, including at reset and in the panic handler. Turn on by setting the duty and then raising the enable; turn off by dropping the enable and then zeroing the duty. Never give PB2 a pull-up.
-- **PA1 is analogue (the battery divider) and PA0 is UPDI.** `hw::init` leaves both pins' settings alone. Don't add a pull-up to either.
+- **PA1 is analogue (the battery divider) and PA0 is UPDI.** `hw::init` turns PA1's digital input buffer off and writes nothing else to either pin. Don't add a pull-up to either.
 - **Logic goes in the library** (`src/lib.rs` and its modules), which is `no_std`, has no `unsafe`, and is tested on the host. `src/main.rs` stays a thin loop.
 - **docs/ui.md is the UI spec.** Change it in the same commit as the code, and add a test in `src/ui.rs` or `src/torch.rs` for every row you add.
 - **Tick off docs/roadmap.md** in the commit that does the work.
@@ -59,4 +59,4 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 - `.rodata` is linked at 0x808000 and up: AVR ELF files put data space at 0x800000, plus the mapped-flash window at 0x8000. It's how const tables are read without `lpm`.
 - `src/main.rs` has a host `fn main()` that exits with an error. It's there so the workspace builds and tests on the host.
 - `src/main.rs` idles rather than powers down on the tick after a watchdog feed, at about 0.37 mA. The datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped. It stays until docs/breakout.md's T4 says it can go.
-- `hw::wait_for_tick` returns a `bool` that's always true. On the TS21 false meant a deadline ran out, and that's not been decided here.
+- `hw::wait_for_tick` only has a deadline while the light's on: about 104 ms with no tick, then `main` calls `hw::halt`, which turns the light off and powers down for good. With the light off there's none, since a dead 32 kHz oscillator then leaves the chip asleep with PB2 low, which is the safe state.
