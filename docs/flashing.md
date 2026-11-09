@@ -26,7 +26,7 @@ Watch the pad spacing before you rely on a fixed probe. gchart's standard three-
 
 Where the TS26's pads are, which is which and their pitch are in [hardware.md](hardware.md#the-flashing-pads), with how sure anyone is about each. Check there before you buy a fixed probe.
 
-Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI.
+Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI. Finding ground only names one pad of three, so tell the supply pad from the UPDI pad as well before the probe goes on. Rows 1.5 and 1.6 of [bench-plan.md](bench-plan.md#stage-1-the-pads-and-stock) do that from how each reads against ground with the cell out, and row 0.16 names the probe's own three pins first.
 
 Measure the ohms between each pair of pads before the first contact and write them down, so you've got something to compare with if it stops talking. I don't know what a good TS26 reads. About 2.5 Ω between all three is what the dead TS21 read.
 
