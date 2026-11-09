@@ -8,7 +8,7 @@ Only a non-high-voltage UPDI adapter ever goes on the TS26's pads. Adafruit's Hi
 
 I lost the TS21 on 2026-11-06 after hand-holding the Friend on its pads. It then measured about 2.5 Ω between all three pads. I think 12 V or a slipped probe did it, and I can't prove either.
 
-The Friend puts a 12 V pulse on the UPDI line on every falling edge of RTS, which probably means every time a tool opens the port, and nothing turns that off. The chip's RESET pin is rated for that, but nobody knows what else sits on these pads. Keep it for a breakout. [bench-plan.md](bench-plan.md#the-high-voltage-updi-friends-12-v-pulse) has the detail.
+The Friend puts a 12 V pulse on the UPDI line on every falling edge of RTS, which probably means every time a tool opens the port, and nothing turns that off. The chip's RESET pin is rated for that, but nobody knows what else sits on these pads. Keep it for a breakout. [breakout.md](breakout.md#the-high-voltage-updi-friends-12-v-pulse) has the detail.
 
 Both adapters are CH340s and show up as USB ID `1a86:7523`, with the same kind of port name, so nothing on the computer tells you which one you've plugged in. Look at the one in your hand, and keep the Friend unplugged and off the bench whenever the torch is open.
 
@@ -26,7 +26,7 @@ Watch the pad spacing before you rely on a fixed probe. gchart's standard three-
 
 Where the TS26's pads are, which is which and their pitch are in [hardware.md](hardware.md#the-flashing-pads), with how sure anyone is about each. Check there before you buy a fixed probe.
 
-Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Nobody's reported what else that supply reaches on a TS26, the boost converter included, so make the first contact in the dark, watching the emitters, as row 1.7 of [bench-plan.md](bench-plan.md#what-the-adapter-powers) has it. Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI. Finding ground only names one pad of three, so tell the supply pad from the UPDI pad as well before the probe goes on. Rows 1.5 and 1.6 of [bench-plan.md](bench-plan.md#stage-1-the-pads-and-stock) do that from how each reads against ground with the cell out, and row 0.16 names the probe's own three pins first.
+Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Nobody's reported what else that supply reaches on a TS26, the boost converter included, so make the first contact in the dark, watching the emitters, as row 1.7 of [breakout.md](breakout.md#what-the-adapter-powers) has it. Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI. Finding ground only names one pad of three, so tell the supply pad from the UPDI pad as well before the probe goes on. Rows 1.5 and 1.6 of [breakout.md](breakout.md#stage-1-the-pads-and-stock) do that from how each reads against ground with the cell out, and row 0.16 names the probe's own three pins first.
 
 Measure the ohms between each pair of pads before the first contact and write them down, so you've got something to compare with if it stops talking. I don't know what a good TS26 reads. About 2.5 Ω between all three is what the dead TS21 read.
 
@@ -42,7 +42,7 @@ Run `ls /dev/cu.*` before and after plugging the adapter in. On macOS it's somet
 cargo xtask ping /dev/cu.usbserial-XXXX
 ```
 
-This reads the chip's System Information Block and writes no memory, but don't count on it leaving a running chip alone. `ping` finishes by setting UPDIDIS to turn UPDI off, and DS40002204A §33.3.2.2.2 says that's when "the UPDI will issue a System Reset". So expect the firmware to restart as `ping` ends, which loses the remembered level and clears a cap left by a watchdog reset. The datasheet doesn't say whether turning UPDI on disturbs running code (§33.3.2.1.1 doesn't mention a reset), and the reset in §33.3.2.1.3 is UPDI's own, from the 12 V pulse. Nobody's seen any of this on a real chip. Row 0.8 of [bench-plan.md](bench-plan.md#stage-0-the-breakout) finds out. A real TS21 says `found tinyAVR P:0D:0-3`, so expect something like that. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
+This reads the chip's System Information Block and writes no memory, but don't count on it leaving a running chip alone. `ping` finishes by setting UPDIDIS to turn UPDI off, and DS40002204A §33.3.2.2.2 says that's when "the UPDI will issue a System Reset". So expect the firmware to restart as `ping` ends, which loses the remembered level and clears a cap left by a watchdog reset. The datasheet doesn't say whether turning UPDI on disturbs running code (§33.3.2.1.1 doesn't mention a reset), and the reset in §33.3.2.1.3 is UPDI's own, from the 12 V pulse. Nobody's seen any of this on a real chip. Row 0.8 of [breakout.md](breakout.md#stage-0-the-breakout) finds out. A real TS21 says `found tinyAVR P:0D:0-3`, so expect something like that. If you don't, see [If it doesn't talk](#if-it-doesnt-talk).
 
 ## Back up the factory firmware first
 
@@ -74,7 +74,7 @@ cargo xtask flash /dev/cu.usbserial-XXXX ../ts26-first-light/target/wurkkos-ts26
 
 Main's `flash` takes the file because its name has `ts26` in it. It then warns that the image isn't the full 16,384 bytes with a CRC, and that a build of this firmware like that caps itself at level 50. Expect the warning and carry on: `first-light` has no CRC check, so nothing in it does any capping. Keep the worktree until stage 3 has passed, since a torch that goes dark later gets `first-light` again.
 
-The full firmware only goes on once that's proven on the light, which is stage 3 of [bench-plan.md](bench-plan.md#stage-3-first-light-on-the-light). The TS21 went dark straight after a flash that verified, of a firmware with far more going on at start-up, and a firmware hang wasn't ruled out. Starting small means a dark torch here has a short list of causes.
+The full firmware only goes on once that's proven on the light, which is stage 3 of [breakout.md](breakout.md#stage-3-first-light-on-the-light). The TS21 went dark straight after a flash that verified, of a firmware with far more going on at start-up, and a firmware hang wasn't ruled out. Starting small means a dark torch here has a short list of causes.
 
 `first-light` has no low-voltage protection and doesn't sleep, so don't leave a cell in it.
 

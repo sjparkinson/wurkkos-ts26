@@ -3,7 +3,7 @@
 Rust firmware for the Wurkkos TS26 torch (model 0721).
 
 > [!WARNING]
-> This isn't firmware to carry yet. It has never run on a real TS26. Its sleep, low-voltage protection, thermal regulation and watchdog have only run on a simulator, which finds mistakes and proves nothing, and every threshold behind them is unmeasured on this light. See the [roadmap](docs/roadmap.md) and the [bench plan](docs/bench-plan.md).
+> This isn't firmware to carry yet. It has never run on a real TS26. Its sleep, low-voltage protection, thermal regulation and watchdog have only run on a simulator, which finds mistakes and proves nothing, and every threshold behind them is unmeasured on this light. See the [roadmap](docs/roadmap.md) and the [bench plan](docs/breakout.md).
 
 ## Using it
 

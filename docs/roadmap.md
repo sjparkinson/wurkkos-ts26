@@ -1,6 +1,6 @@
 # Roadmap
 
-Roughly in order. Each step should leave a torch that's no worse than the step before. Tick things off here in the commit that does them. Where the TS21 has already done the work, [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21) is the place to borrow it from, after checking what's different about this board. [bench-plan.md](bench-plan.md) gathers every check on a real light into one run.
+Roughly in order. Each step should leave a torch that's no worse than the step before. Tick things off here in the commit that does them. Where the TS21 has already done the work, [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21) is the place to borrow it from, after checking what's different about this board. [breakout.md](breakout.md) gathers every check on a real light into one run.
 
 ## 1. It lights up
 
@@ -17,10 +17,10 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 
 ## 2. It's safe to leave a cell in
 
-A tick here means the firmware does it and it runs on the simulator. Nothing below has met a real light, so none of it means the torch is safe yet. [bench-plan.md](bench-plan.md) is what would.
+A tick here means the firmware does it and it runs on the simulator. Nothing below has met a real light, so none of it means the torch is safe yet. [breakout.md](breakout.md) is what would.
 
 - [x] Sleep when off, in power-down, with PB2 low first. Firmware only. The PIT wakes it every tick and the loop samples PA5. On the tick after a watchdog feed it idles instead, because the datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped
-- [ ] Test power-down straight after a feed on a real light (T4 in [bench-plan.md](bench-plan.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA, so this isn't fit for a drawer until then
+- [ ] Test power-down straight after a feed on a real light (T4 in [breakout.md](breakout.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA, so this isn't fit for a drawer until then
 - [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. The firmware reads it with Anduril's slope of 1094. Still needs checking against a multimeter
 - [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge. A cell it can't read holds the light at level 50 and turns it off after five minutes
 - [x] Thermal regulation from the internal temperature sensor. Firmware only, and every constant's unmeasured. `ramp::CEILING` holds the light at level 120 until it's been run on a real light
