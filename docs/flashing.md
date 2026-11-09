@@ -52,9 +52,11 @@ Do this before you flash anything. It's the only copy of Wurkkos's build and its
 cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
 ```
 
-That puts the chip in programming mode, checks it's an ATtiny1616, and saves `flash.hex` (all 16 KB), `eeprom.hex` and `fuses.hex` into the directory you name. The fuses are there for reference only. It refuses to run if that directory already has a `flash.hex`, so a second run can't overwrite your factory copy with this firmware.
+That puts the chip in programming mode, checks it's an ATtiny1616, and saves `flash.hex` (all 16 KB), `eeprom.hex`, `fuses.hex` and `serial.hex` into the directory you name. The fuses are there for reference only. The serial number is the chip's own, from its signature row, and it's how `restore` knows whose backup it's been given. It refuses to run if that directory already has a `flash.hex`, so a second run can't overwrite your factory copy with this firmware.
 
-The directory holds one chip's backup, and nothing in the files says which chip. Give each chip its own, such as `backup/torch` here and `backup/breakout` for a spare. The path is used as given, so run the command from the repo root for it to land in the repo's `backup/`, which is git-ignored. Copy it somewhere safe too. There's no default: leave the directory off and you get the usage text.
+If it warns that the serial number can't tell one chip from another (all FF or all 00), the backup is saved all the same, but `restore` will refuse it. Stop there, before anything goes over the factory firmware.
+
+The directory holds one chip's backup. Give each chip its own, such as `backup/torch` here and `backup/breakout` for a spare. The path is used as given, so run the command from the repo root for it to land in the repo's `backup/`, which is git-ignored. Copy it somewhere safe too. There's no default: leave the directory off and you get the usage text.
 
 ## The first flash is `first-light`
 
@@ -90,7 +92,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 4. reads all 16 KB back and compares
 5. resets the chip and turns UPDI off, so the new firmware starts
 
-If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, and for a `backup` whose read fails: the programmer resets the chip and turns UPDI off before it reports the error.
+If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, for a `backup` whose read fails and for a `restore` that's refused: the programmer resets the chip and turns UPDI off before it reports the error.
 
 Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
@@ -112,13 +114,13 @@ One more thing caps the light at level 50, and it isn't a check at power-on: a c
 
 ## Going back
 
-`restore` puts a backup's flash and EEPROM back. It writes every EEPROM page, blank ones included, since with EESAVE set the old contents survive the erase.
+`restore` puts a backup's flash and EEPROM back, and only onto the chip they were read from. Before it erases anything it reads the chip's serial number and compares it with the backup's `serial.hex`, and it refuses on a mismatch, a missing `serial.hex` or a serial number that's blank. The datasheet calls the number unique to each device (DS40002204A §6.10.2.2), and nobody here has compared two chips'. It writes every EEPROM page, blank ones included, since with EESAVE set the old contents survive the erase.
 
 ```sh
 cargo xtask restore /dev/cu.usbserial-XXXX backup/torch
 ```
 
-It writes whichever directory you name and can't tell whose backup that is, so check it's this torch's before you run it.
+The check says which chip a backup came from and nothing about which build it holds, so a later backup of the same chip passes too. Read the directory in the command before you run it. `flash` has no such check, since it has no backup to compare.
 
 For current Anduril, download a release zip from [ToyKeeper's releases](https://github.com/ToyKeeper/anduril/releases) and pull the TS26 build out of its `hex/` directory. Anduril's `MODELS` file lists model 0721 as `wurkkos-ts26`, and the hex is named after the release, so in `anduril.r2026-10-26.zip` it's `hex/anduril.r2026-10-26.wurkkos-ts26.hex`. Flash that.
 

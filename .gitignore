@@ -3,7 +3,7 @@
 debug
 target
 
-# cargo xtask backup <port> <dir> saves a chip's flash, EEPROM and fuses, and
+# cargo xtask backup <port> <dir> saves a chip's flash, EEPROM, fuses and serial number, and
 # the docs keep each chip's <dir> under here, such as backup/torch
 /backup
 
