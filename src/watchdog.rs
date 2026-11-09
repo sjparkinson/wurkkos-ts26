@@ -22,7 +22,7 @@
 //! with three deliberate resets and a marker in `.noinit`. This firmware
 //! doesn't, by choice: that TS21 went dark straight after a verified flash of
 //! that stack, and a firmware hang wasn't ruled out. So nobody's seen this
-//! watchdog bite on a real chip until docs/bench-plan.md says so.
+//! watchdog bite on a real chip until docs/breakout.md says so.
 //!
 //! The watchdog can't catch its own oscillator stopping, since the tick stops
 //! with it. [`TICK_DEADLINE_CYCLES`] is for that, and only with the light on.
