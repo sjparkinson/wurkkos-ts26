@@ -132,6 +132,29 @@ fn protected_write(addr: usize, value: u8) {
 /// Nobody's seen either happen. The simulator checks the order, starting
 /// with PORTB dirty and the rest of the chip clean (`found_lit` in
 /// xtask/src/sim.rs), and that's as far as it's been tested.
+///
+/// PB2 isn't all such a start would find stale. What follows is my reading of
+/// the code, and nothing has run it. PB0 stays TCA0's, still carrying the old
+/// PWM into a boost converter that's now off, until [`init`] writes CTRLB and
+/// hands it back to PORT, low. GPIOR1 to 3 and TCA0.INTCTRL keep the lit
+/// torch's level and its overflow interrupt. src/rt.rs clears SREG.I, so
+/// [`tca0_ovf`] waits for [`wait_for_tick`]'s first `sei`, then loads the old
+/// duty into a compare that no pin shows, until the first pass's
+/// [`set_output`] clears the lot (`Changes` always reports its first value).
+/// The watchdog is still running in window mode, and the datasheet doesn't
+/// say whether [`start_watchdog`] writing the same setting again restarts its
+/// windows. If it doesn't, the first pass's feed can land in the closed
+/// window, or come after the open one has run out, and either resets the chip
+/// for real, to come up capped like any hang. Otherwise the torch carries on,
+/// off.
+///
+/// Two more things nothing puts right. SP keeps whatever it held, since only
+/// a reset loads it, so `main` starts a little way down the stack. And if the
+/// jump came from inside a handler, CPUINT still has that handler running
+/// (LVL0EX only clears on `reti`, DS40002204A section 13.5.2), so no tick is
+/// ever taken, and the first wait sits there until the watchdog resets the
+/// chip. PB2 is low through all of it, so there's no code for any of this, and
+/// no software reset at boot.
 pub fn hold_enable_low() {
     write(reg::VPORTB_OUT, 0);
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
