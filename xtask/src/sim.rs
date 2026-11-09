@@ -76,9 +76,11 @@
 //!
 //! 1. Reset to `main` with SRAM full of junk, checking .data and .bss come out
 //!    right, then the same startup code with them moved and given contents.
-//! 2. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
-//! 3. Twenty thousand ticks of random clicks and holds.
-//! 4. Both of those again with an overflow landing on every instruction the
+//! 2. The reset vector again with PB2 already an output and high, as far as
+//!    the first register write, which has to clear it (`found_lit`).
+//! 3. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
+//! 4. Twenty thousand ticks of random clicks and holds.
+//! 5. Both of those again with an overflow landing on every instruction the
 //!    main loop reaches (`Sim::land`), each as far as the first run kept
 //!    reaching new code, and a little past (`both_ways`).
 //!
@@ -188,6 +190,7 @@ const JUNK: u8 = 0xA5;
 
 // The pins, from `ts26::board`, which src/hw.rs uses too.
 const SWITCH: u8 = 1 << board::SWITCH; // PA5, active low
+const PWM: u8 = 1 << board::PWM; // PB0, the brightness
 const ENABLE: u8 = 1 << board::ENABLE; // PB2, the boost converter
 const SWITCH_PIN: usize = board::SWITCH as usize;
 const ENABLE_PIN: usize = board::ENABLE as usize;
@@ -320,6 +323,12 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     check_startup(&sim.chip, &linked.layout).map_err(|e| format!("startup: {e}"))?;
     startup_with_statics(&image, reset, &linked)
         .map_err(|e| format!("startup with statics: {e}"))?;
+    found_lit(Sim::new(
+        signed.clone(),
+        linked.layout.bss.end,
+        linked.unhandled,
+    )?)
+    .map_err(|e| format!("starting with PB2 high: {e}"))?;
 
     let examples = spec::examples(spec::UI_MD)?;
     // Every example, then the random switching, each with and without
@@ -671,6 +680,37 @@ fn patch_startup(
         image[at..at + 2].copy_from_slice(&ldi(r, k).to_le_bytes());
     }
     Ok(())
+}
+
+/// Runs `sim` from the reset vector with PORTB as a lit torch has it, PB2 an
+/// output and high, and checks the first register the firmware writes clears
+/// PB2 in VPORTB.OUT. That's `hw::hold_enable_low`'s job, ahead of the CRC
+/// scan and everything else.
+///
+/// A stray jump to the vector would find the port like that, since nothing
+/// short of a reset clears OUT. This isn't a model of one, though. Only PORTB
+/// starts dirty: the rest of the chip, SP and SREG included, is as a reset
+/// leaves it. It shows what the firmware's first write does to a pin it finds
+/// high, and that's all.
+fn found_lit(mut sim: Sim) -> Result<(), String> {
+    sim.chip.io[reg::VPORTB_DIR] = ENABLE | PWM;
+    sim.chip.io[reg::VPORTB_OUT] = ENABLE;
+    for _ in 0..BOOT_BUDGET {
+        if sim.chip.register_writes == 0 {
+            sim.step()?;
+        } else if sim.chip.io[reg::VPORTB_OUT] & ENABLE == 0 {
+            return Ok(());
+        } else {
+            return Err(
+                "the first register it writes leaves PB2 set in VPORTB.OUT, so the boost \
+                 converter stays on: clear OUT before DIR, and before anything else"
+                    .into(),
+            );
+        }
+    }
+    Err(format!(
+        "wrote no register within {BOOT_BUDGET} instructions"
+    ))
 }
 
 /// A bit for each vector whose slot in `image`'s table is a `jmp` to
@@ -1071,6 +1111,8 @@ struct Chip {
     interrupted: Option<usize>,
     /// Times `sleep` has run in power-down.
     power_downs: u32,
+    /// Writes to anything but SRAM so far.
+    register_writes: u32,
 }
 
 impl Chip {
@@ -1118,6 +1160,7 @@ impl Chip {
             in_handler: false,
             interrupted: None,
             power_downs: 0,
+            register_writes: 0,
         }
     }
 
@@ -1964,6 +2007,7 @@ impl Bus for Chip {
             self.sram[usize::from(addr - SRAM.start)] = value;
             return Ok(());
         }
+        self.register_writes += 1;
         match a {
             reg::CPU_CCP => {
                 if value != CCP_IOREG {
@@ -2432,6 +2476,31 @@ mod tests {
         }
         chip.write(reg::PORTB_PIN0CTRL as u16 + 3, PORT_PULLUPEN)
             .unwrap();
+    }
+
+    /// `out a, r`, for an I/O address.
+    fn out(a: usize, r: u8) -> u16 {
+        0xB800 | (a as u16 & 0x30) << 5 | u16::from(r) << 4 | a as u16 & 0x0F
+    }
+
+    #[test]
+    fn found_lit_wants_out_cleared_by_the_first_register_write() {
+        // r16 has PB0 and PB2, for DIR, and r17 is 0, for OUT.
+        let run = |writes: [u16; 2]| {
+            let image = [ldi(16, ENABLE | PWM), ldi(17, 0)]
+                .into_iter()
+                .chain(writes)
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            found_lit(Sim::new(image, SRAM.start, 0)?)
+        };
+        let dir = out(reg::VPORTB_DIR, 16);
+        let clear = out(reg::VPORTB_OUT, 17);
+        assert_eq!(run([clear, dir]), Ok(()));
+        let err = run([dir, clear]).unwrap_err();
+        assert!(err.contains("leaves PB2 set"), "{err}");
+        // Neither write, so it runs off the end of the image.
+        assert!(run([ldi(16, 0), ldi(17, 0)]).is_err());
     }
 
     #[test]

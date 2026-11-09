@@ -121,9 +121,18 @@ fn protected_write(addr: usize, value: u8) {
 /// Drives PB0 and PB2 low, the boost converter off. `main` calls this before
 /// anything else, since PB2 is a high-impedance input from reset until it's
 /// an output, and the CRC scan in [`flash_ok`] stalls the CPU for about 7 ms
-/// before [`init`] runs. OUT is still zero from reset, so making the pins
-/// outputs is all it takes. [`init`] writes the same again.
+/// before [`init`] runs. [`init`] writes DIR again.
+///
+/// OUT goes first, then DIR. A reset leaves OUT at zero, and this doesn't
+/// count on having had one. If the CPU ever got to the reset vector some
+/// other way, by a stray jump or a dip in the supply with the brown-out
+/// detector off, OUT could still have PB2 set from a light that was on, and
+/// DIR alone would hold the boost converter on through the scan and `init`.
+/// Nobody's seen either happen. The simulator checks the order, starting
+/// with PORTB dirty and the rest of the chip clean (`found_lit` in
+/// xtask/src/sim.rs), and that's as far as it's been tested.
 pub fn hold_enable_low() {
+    write(reg::VPORTB_OUT, 0);
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
 }
 
@@ -160,8 +169,9 @@ pub fn init() {
         }
     }
 
-    // OUT is still zero from reset, so these all come up low: the boost
-    // converter off, and the aux LEDs dark.
+    // PORTB's OUT is zero because `hold_enable_low` cleared it. PORTC's is as
+    // reset left it, zero, and nothing in here ever writes it. So these all
+    // come up low: the boost converter off, and the aux LEDs dark.
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS);
 
