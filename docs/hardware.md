@@ -22,7 +22,7 @@ The product page lists two versions, 519A 5000 K high CRI and TN3535 6000 K, and
 |---|---|---|
 | PA0 | UPDI | The programming pad |
 | PA1 | Battery sense | Through a divider, ADC AIN1 |
-| PA5 | Side switch | Active low, internal pull-up, interrupt on both edges |
+| PA5 | Side switch | Active low, internal pull-up. Anduril also takes an interrupt on both edges; this firmware reads the pin every tick and takes none |
 | PB0 | Brightness | TCA0 WO0 (CMP0), PWM into the current control |
 | PB2 | Boost enable | Output, high runs the boost converter |
 | PC1, PC2, PC3 | Aux blue, green, red | Plain on/off GPIO |
@@ -30,7 +30,7 @@ The product page lists two versions, 519A 5000 K high CRI and TN3535 6000 K, and
 
 PA2 to PA4, PA6, PA7, PB1, PB3 to PB5 and PC0 are unused, and get the pull-up. PA6 is the ATtiny1616's DAC0 pin (the ATDF's `signal function="DAC0" ... pad="PA6"`), unused here. Confirmed. [904a34cde](https://github.com/ToyKeeper/anduril/commit/904a34cde) (June 2026) fixed the switch's sense register from `PIN2CTRL` to `PIN5CTRL` with "no functional change", so the switch has always been PA5.
 
-Anduril's `hwdef_setup()` leaves PA1 and PB2 at their reset values (the pull-up lines for both are commented out) and makes PB2 an output with `VPORTB.DIR`, so it drives the reset value of `OUT`, low. Confirmed. Before that, during reset, and for as long as a programmer holds the chip in programming mode, PB2 is a high-impedance input, and the MP3432 datasheet says "Do not leave EN floating". So a pull-down on the board is likely, but nobody's seen one.
+Anduril's `hwdef_setup()` leaves PA1 and PB2 at their reset values (the pull-up lines for both are commented out) and makes PB2 an output with `VPORTB.DIR`, so it drives the reset value of `OUT`, low. Confirmed. This firmware writes `OUT` to zero first and then `DIR`, so it doesn't count on having had a reset. Before that, during reset, and for as long as a programmer holds the chip in programming mode, PB2 is a high-impedance input, and the MP3432 datasheet says "Do not leave EN floating". So a pull-down on the board is likely, but nobody's seen one.
 
 ### PWM, not a DAC
 
