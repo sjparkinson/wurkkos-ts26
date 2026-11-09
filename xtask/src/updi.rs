@@ -223,6 +223,15 @@ pub struct Programmer<W: Wire> {
 impl<W: Wire> Programmer<W> {
     /// Brings up the UPDI link, with a double break and a second try if the
     /// chip doesn't answer the first time.
+    ///
+    /// If the second try fails too, this gives up without sending UPDIDIS,
+    /// though the chip may have heard enough to turn UPDI on. That's been
+    /// looked at and left. By then the line has failed to answer twice, and
+    /// it gets no more bytes sent down it: for one that's held low,
+    /// docs/flashing.md says to stop and measure. What's left behind is UPDI
+    /// and its clock request staying on, which costs power (DS §33.3.2.2.2),
+    /// and only while the chip has any. The cell's out, so the adapter is its
+    /// only supply, and that goes as the probe lifts.
     pub fn connect(wire: W) -> Result<Self> {
         let mut p = Self { wire };
         if p.init_link().is_err() {
@@ -481,6 +490,16 @@ impl<W: Wire> Programmer<W> {
         self.wait_nvm()
     }
 
+    /// Polls until the NVM controller's idle, and gives up after a count of
+    /// polls where [`Self::enter_progmode`] goes by the clock. That's been
+    /// looked at and left. A count is only wrong when a fast adapter can get
+    /// through it before the chip's done, and this one is an upper bound with
+    /// room to spare: the datasheet's typical times are 2 ms for a page write
+    /// and 4 ms for a page erase-write or a chip erase (DS §36.22, table
+    /// 36-38, which gives no maximum), and 10,000 polls take a second even at
+    /// 0.1 ms a round trip. `serial.rs` can't be that quick. A poll is five
+    /// 12-bit frames, about 0.5 ms at 115,200 baud before any USB latency, so
+    /// it's five seconds or more.
     fn wait_nvm(&mut self) -> Result<()> {
         for _ in 0..10_000 {
             let status = self.lds(map::NVMCTRL_STATUS)?;
