@@ -16,13 +16,13 @@ The first three run on your machine's own target. The second clippy lints the fi
 
 ## The simulator
 
-`xtask/src/sim.rs` puts a fake ATtiny1616 around a CPU in `xtask/src/avr.rs`, wired like the TS26, and runs the real firmware on it: from reset, through every example in docs/ui.md, through thousands of ticks of random clicks, and again with an interrupt landing on every instruction the loop reaches. It turns the rules a real chip enforces quietly into errors, such as PB2 high with no duty, a `wdr` in the closed window, or a handler that touches TCA0's shared TEMP byte. It refuses any register it doesn't model, so the first `cargo xtask hex` after you touch a new one fails until you teach it.
+`xtask/src/sim.rs` puts a fake ATtiny1616 around a CPU in `xtask/src/avr.rs`, wired like the TS26, and runs the real firmware on it: from reset, through every example in docs/ui.md, through thousands of ticks of random clicks, and again with an interrupt landing on every instruction the loop reaches. It also starts once with PB2 already high, runs with every tick as slow as the datasheet allows, and stops the 32 kHz oscillator with the light on. It turns the rules a real chip enforces quietly into errors, such as PB2 high with no duty, a `wdr` in the closed window, or a handler that touches TCA0's shared TEMP byte. It refuses any register it doesn't model, so the first `cargo xtask hex` after you touch a new one fails until you teach it.
 
 It's a mistake-finder, not proof. It's my reading of the datasheet, run against code written from that same reading, and it's never been compared with a real chip. A pass means the firmware does what the simulator thinks it should. What it leaves out:
 
 - **Chip resets.** A watchdog bite is a failed run, so a real bite, and the boot after one, never runs anywhere. Neither does anything that happens to the pins during a reset.
 - **Anything analogue.** The MP3432, whatever turns PB0's PWM into current, the cell, the divider's real ratio and VCC. The ADC reads scripted numbers.
-- **Clocks and time.** It counts instructions, not cycles, and budgets by taking each as the slowest. The oscillators don't drift, and a `wdr` that's lost in power-down can't happen.
+- **Clocks and time.** It counts instructions, not cycles, and budgets by taking each as the slowest. The oscillators don't drift, apart from the one run that slows every tick to the datasheet's limit and the one that stops the 32 kHz oscillator outright, and a `wdr` that's lost in power-down can't happen.
 - **The flash itself.** Fuses are scripted, and the CRC runs over the image, so it shows `xtask` and the firmware agree with each other and not that the chip does.
 - **The programmer on the pads.** Nothing here can see a slipped probe, or 12 V.
 
@@ -42,7 +42,8 @@ src/thermal.rs    thermal regulation
 src/temp.rs       the temperature sensor's calibration
 src/sensors.rs    which ADC conversion is due on which tick
 src/gradual.rs    fading a ceiling a level at a time
-src/watchdog.rs   which passes of the loop feed the watchdog, and the window that's sized for
+src/watchdog.rs   which passes of the loop feed the watchdog, the window that's sized for, and
+                  the deadline for a tick that stops while the light's on
 src/selftest.rs   what the checks at power-on found
 src/testing.rs    a fake ADC, readings and the docs/ui.md script reader, shared by the tests and the simulator
 src/regs.rs       register addresses and bit values, generated from the ATDF by build.rs

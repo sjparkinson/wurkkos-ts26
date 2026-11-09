@@ -82,6 +82,7 @@ A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also wha
 |---|---|---|
 | Aux LEDs | Dim and steady: blue when off, red in lockout, out while the main LED's lit. They never flash | Done |
 | Sleep when off | Powers down, and looks at the switch 64 times a second | Done |
+| A tick that stops | With the light on, off within about a tenth of a second, and it stays off until the watchdog resets the chip or the cell comes out | Done |
 
 The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware.
 
