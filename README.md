@@ -30,4 +30,4 @@ cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
 cargo xtask flash /dev/cu.usbserial-XXXX
 ```
 
-See [docs/flashing.md](docs/flashing.md) for programmers, the pads, and restoring the backup.
+That last line is for a torch that's already run `first-light`, the small image that goes on first. See [docs/flashing.md](docs/flashing.md) for that, programmers, the pads, and restoring the backup.

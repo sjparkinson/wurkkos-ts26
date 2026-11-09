@@ -90,7 +90,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 4. reads all 16 KB back and compares
 5. resets the chip and turns UPDI off, so the new firmware starts
 
-If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again.
+If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, and for a `backup` whose read fails: the programmer resets the chip and turns UPDI off before it reports the error.
 
 Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
