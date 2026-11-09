@@ -6,7 +6,7 @@ The order is the point of it. **The first flash on the torch is `first-light` (c
 
 Each check says what it needs:
 
-- **First light**: `first-light`, the firmware as of commit `9d3b7dc`.
+- **First light**: `first-light`, the firmware as of commit `9d3b7dc`, built in its own worktree and flashed with main's programmer.
 - **Main**: the full firmware on main.
 - **T1**, **T2**, **T3**, **T4**: a [test build](#test-builds).
 
@@ -106,7 +106,7 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | 0.1 | `cargo xtask ping <port>`, ten times | | `found tinyAVR` and the same string every time (a TS21 says `P:0D:0-3`). A first attempt that only works on the retry would be the pulse holding UPDI in reset | 1.7 |
 | 0.2 | `cargo xtask backup <port> backup/breakout` | | `flash.hex`, `eeprom.hex` and `fuses.hex` in `backup/breakout` | 1.8 |
 | 0.3 | Read `backup/breakout/fuses.hex` against `selftest::Fuses::ok`, as 1.9 | | Seesaw might not use the factory fuses. If it fails, the full firmware caps itself here for a good reason, so 0.11 can't work. Don't write the fuses | 1.9 |
-| 0.4 | Flash `first-light` as in [flashing.md](flashing.md#the-first-flash-is-first-light) | First light | Verify passes. `cargo xtask hex` on that commit says 628 bytes | 2.2 |
+| 0.4 | Build `first-light` in its own worktree and flash it from main, as in [flashing.md](flashing.md#the-first-flash-is-first-light) | First light | `cargo xtask hex` in the worktree says 628 bytes. `flash` warns that the image isn't the full 16,384 bytes with a CRC, which is expected for `first-light`, and verify passes | 2.2 |
 | 0.5 | LEDs on. 1C on, 1C off, a few dozen times | First light | Both LEDs follow the clicks | 3.2 |
 | 0.6 | LEDs off, light on. Meter on frequency on SCL, then DC volts | First light | 19.6 kHz, which is 10 MHz / (2 × 255). A wrong clock is unmistakable. DC volts should be about 3.9% of VCC (duty 10 of 255), about 130 mV at 3.3 V | The 10 MHz clock and dual-slope PWM on silicon |
 | 0.7 | DC volts on pin 7 (PB2), off, then on, then through a power cycle by the Friend | First light | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
@@ -149,7 +149,7 @@ If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signa
 | # | Do | Expect | Closes |
 |---|---|---|---|
 | 2.1 | Look at the adapter in your hand. Cell out. Ohms between the pads again | The plain kit, and the same numbers as 1.6 | |
-| 2.2 | `git switch --detach 9d3b7dc`, `cargo xtask hex`, `cargo xtask flash <port>`, `git switch -` | 628 bytes, and verify passes. A verify only shows the bytes arrived | "Ping, back up and flash", the batched UPDI frames, `PAGEWRITE` |
+| 2.2 | `cargo xtask hex` in the `first-light` worktree from 0.4, then from main `cargo xtask flash <port> ../ts26-first-light/target/wurkkos-ts26-0721.hex` ([flashing.md](flashing.md#the-first-flash-is-first-light)) | 628 bytes, the same warning as 0.4 about an image short of 16,384 bytes, and verify passes. A verify only shows the bytes arrived | "Ping, back up and flash", the batched UPDI frames, `PAGEWRITE` |
 | 2.3 | If verify fails | Run it once more. If it fails again, suspect `PAGEWRITE`, then the batched frames in `write_page`, and stop there. Only the fake chip has seen either | |
 | 2.4 | `cargo xtask ping <port>`, then probe off | Same string as 1.7. A chip that talked before the flash and doesn't after it is the TS21 again, so stop and measure | |
 
@@ -176,7 +176,7 @@ Write the result in the [table](#results) before going on.
 
 | # | Do | Expect | Closes |
 |---|---|---|---|
-| 4.1 | Back on main, `cargo xtask flash <port>`, then `ping`, then probe off and leave it a few seconds with no cell, so VCC really collapses | Verify passes, and it still talks. A flash doesn't power-cycle the chip, and what Anduril left in the reset flags could otherwise count as a hang | |
+| 4.1 | From main, `cargo xtask flash <port>` with no file, then `ping`, then probe off and leave it a few seconds with no cell, so VCC really collapses | Verify passes, and it still talks. A flash doesn't power-cycle the chip, and what Anduril left in the reset flags could otherwise count as a hang | |
 | 4.2 | If the light's dark from here on | `cargo xtask peek <port>` first, since only the first run shows how far the firmware got (see 0.8). Then go back to the [steps in flashing.md](flashing.md#flash-this-firmware) and flash `first-light` again. If `first-light` still works, it's the firmware, and the board's fine | |
 | 4.3 | Cell in, head on, ten times, watching the emitters | No flash, and it's off until clicked. A reset loop would be dark too, so go on to 4.4 | |
 | 4.4 | 1C on, 1C off, a few dozen times, then holds | Same feel as the docs/ui.md rows. The 64 Hz tick has the delta-sigma interrupt running under it now, so sluggish clicks mean the interrupt's eating the loop | |

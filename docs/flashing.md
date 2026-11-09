@@ -60,11 +60,17 @@ The directory holds one chip's backup, and nothing in the files says which chip.
 
 The first thing that goes on a torch is `first-light` and nothing else, the firmware as of commit `9d3b7dc`. It's a 628-byte image that clicks on and off at one dim level. It has no watchdog, no sleep and no interrupts, so there's very little in it to hang, and a light that works shows the pads, the programmer, the boost enable and the PWM all do what this repo thinks they do.
 
+Build it in a second worktree and flash it from main, so the image is `9d3b7dc`'s and the programmer is main's:
+
 ```sh
-git switch --detach 9d3b7dc
-cargo xtask flash /dev/cu.usbserial-XXXX
-git switch -
+git worktree add --detach ../ts26-first-light 9d3b7dc
+(cd ../ts26-first-light && cargo xtask hex)
+cargo xtask flash /dev/cu.usbserial-XXXX ../ts26-first-light/target/wurkkos-ts26-0721.hex
 ```
+
+`cargo xtask hex` in that worktree should report 628 bytes of flash, and it did when I built it on 2026-11-09. Checking out `9d3b7dc` and running `cargo xtask flash` there would flash the same image with that commit's programmer, which is older than main's and doesn't have its later fixes or its clearer errors.
+
+Main's `flash` takes the file because its name has `ts26` in it. It then warns that the image isn't the full 16,384 bytes with a CRC, and that a build of this firmware like that caps itself at level 50. Expect the warning and carry on: `first-light` has no CRC check, so nothing in it does any capping. Keep the worktree until stage 3 has passed, since a torch that goes dark later gets `first-light` again.
 
 The full firmware only goes on once that's proven on the light, which is stage 3 of [bench-plan.md](bench-plan.md#stage-3-first-light-on-the-light). The TS21 went dark straight after a flash that verified, of a firmware with far more going on at start-up, and a firmware hang wasn't ruled out. Starting small means a dark torch here has a short list of causes.
 
@@ -86,7 +92,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 
 If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again.
 
-Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and wrong for a build of this firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
+Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
 A flash doesn't power-cycle the chip, so take the probe off with the cell out and leave it a few seconds, so VCC really collapses, before putting the cell in. Otherwise what the old firmware left in the reset flags could look like a hang.
 
