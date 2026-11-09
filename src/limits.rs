@@ -6,13 +6,17 @@
 //! (`thermal::Thermal`), and runs the light at the lowest of the UI's level,
 //! the thermal ceiling and the battery ceiling. Both ceilings fade
 //! (`gradual::Ceiling`), so a step-down never jumps. A flat cell turns the UI
-//! off.
+//! off, and so does five minutes of a cell that can't be read.
 //!
 //! Garbage readings fail safe. Each side has its own idea of a reading that
 //! can't be real (`battery::plausible`, `thermal::plausible`), lets a few
 //! go, and then drops its ceiling rather than trusting it or turning the
-//! light off: the battery side to [`FAULT_CEILING`], the thermal side to its
-//! floor.
+//! light off there and then: the battery side to [`FAULT_CEILING`], the
+//! thermal side to its floor. A garbage temperature never does more than
+//! that. A garbage voltage means no low-voltage cut-off, so if the light's
+//! been on for five minutes without one reading to believe
+//! (`battery::BLIND_SAMPLES`), the battery side turns it off. A click turns
+//! it on again, still under the ceiling, for another five minutes.
 //!
 //! A failed power-on self-test caps the light at [`FAULT_CEILING`] for as
 //! long as the cell's in.
@@ -39,7 +43,8 @@ const _: () = assert!(FAULT_CEILING <= CEILING);
 pub struct Step {
     /// The level to run at, `0` meaning off.
     pub level: u8,
-    /// The cell's flat: turn the UI off.
+    /// The cell's flat, or it's been five minutes since anything could read
+    /// it: turn the UI off.
     pub off: bool,
 }
 
@@ -378,18 +383,88 @@ mod tests {
         assert_eq!(run.offs, 2);
     }
 
+    /// Five minutes, the time `battery::BLIND_SAMPLES` takes, in seconds.
+    const BLIND_SECS: u32 = (battery::BLIND_SAMPLES / battery::SAMPLES_PER_SECOND) as u32;
+
     #[test]
-    fn garbage_voltages_cap_it_at_the_fault_ceiling_and_never_turn_it_off() {
+    fn garbage_voltages_cap_it_at_the_fault_ceiling_then_turn_it_off_at_five_minutes() {
+        assert_eq!(BLIND_SECS, 5 * 60);
+        let sample = usize::from(CYCLE_TICKS);
         for garbage in [0, 4 * 1023, 1] {
             let mut run = Run::new();
             run.ui = CEILING;
             run.secs(2);
             run.adc.voltage = garbage;
+            // The round's just started, so its reading, two ticks on, is the
+            // first that's garbage, and the last of five minutes' worth
+            // turns it off.
+            let first = run.levels.len() + 2;
+            let off_at = first + (usize::from(battery::BLIND_SAMPLES) - 1) * sample;
             run.secs(1);
             assert_eq!(run.secs(10), FAULT_CEILING, "{garbage}");
-            assert_eq!(run.secs(600), FAULT_CEILING, "{garbage}");
-            assert_eq!(run.offs, 0);
+            run.secs(BLIND_SECS);
+            let capped = &run.levels[first + 10 * usize::from(TICKS_PER_SECOND)..off_at];
+            assert!(capped.iter().all(|&l| l == FAULT_CEILING), "{garbage}");
+            assert!(run.levels[off_at..].iter().all(|&l| l == 0), "{garbage}");
+            assert_eq!(run.offs, 1, "{garbage}");
         }
+    }
+
+    #[test]
+    fn one_good_voltage_reading_starts_the_five_minutes_again() {
+        let mut run = Run::new();
+        run.adc.voltage = 0;
+        run.ui = CEILING;
+        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
+        // One round, so one reading, at 3.1 V: too low to lift the ceiling
+        // and too high to count as low.
+        run.adc.voltage = voltage_reading(310);
+        run.ticks(u32::from(CYCLE_TICKS));
+        run.adc.voltage = 0;
+        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
+        assert_eq!(run.offs, 0);
+        assert_eq!(run.secs(2), 0);
+        assert_eq!(run.offs, 1);
+    }
+
+    #[test]
+    fn garbage_voltages_never_count_while_off() {
+        let mut run = Run::new();
+        run.adc.voltage = 0;
+        // Off but still read, as it is while the switch is held down.
+        assert_eq!(run.secs(2 * BLIND_SECS), 0);
+        assert_eq!(run.offs, 0);
+        // On, capped from the first tick, with its whole five minutes to go.
+        run.ui = CEILING;
+        assert_eq!(run.ticks(1), FAULT_CEILING);
+        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
+        assert_eq!(run.offs, 0);
+        assert_eq!(run.secs(2), 0);
+        assert_eq!(run.offs, 1);
+    }
+
+    #[test]
+    fn on_again_after_five_minutes_blind_is_capped_and_gets_five_more() {
+        let mut run = Run::new();
+        run.adc.voltage = 0;
+        run.ui = CEILING;
+        assert_eq!(run.secs(BLIND_SECS + 1), 0);
+        assert_eq!(run.offs, 1);
+        // With the rest `torch::Torch` takes once the light's out, and then
+        // without one, as when the switch is still down.
+        for (rest, offs) in [(true, 2), (false, 3)] {
+            if rest {
+                run.limits.rest();
+            }
+            run.ui = CEILING;
+            assert_eq!(run.ticks(1), FAULT_CEILING, "rest: {rest}");
+            assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING, "rest: {rest}");
+            assert_eq!(run.offs, offs - 1, "rest: {rest}");
+            assert_eq!(run.secs(2), 0, "rest: {rest}");
+            assert_eq!(run.offs, offs, "rest: {rest}");
+        }
+        let mut settled = run.levels.iter().skip(5 * usize::from(TICKS_PER_SECOND));
+        assert!(settled.all(|&l| l <= FAULT_CEILING));
     }
 
     #[test]
@@ -405,12 +480,25 @@ mod tests {
     }
 
     #[test]
+    fn a_garbage_temperature_alone_never_turns_it_off() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.adc.temperature = 0;
+        assert_eq!(run.secs(2 * BLIND_SECS), FLOOR);
+        assert_eq!(run.offs, 0);
+    }
+
+    #[test]
     fn no_result_at_all_is_garbage_too() {
         let mut limits = Limits::new(CALIBRATION, Faults::NONE);
         for _ in 0..30 * TICKS_PER_SECOND {
             limits.tick(CEILING, None);
         }
         assert_eq!(limits.ceilings(), (FAULT_CEILING, FLOOR));
+        // And by the end of five minutes of it, it's asked for off, once.
+        let ticks = (BLIND_SECS - 30) * u32::from(TICKS_PER_SECOND);
+        let offs = (0..ticks).filter(|_| limits.tick(CEILING, None).off);
+        assert_eq!(offs.count(), 1);
     }
 
     #[test]

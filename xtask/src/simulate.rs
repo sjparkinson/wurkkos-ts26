@@ -386,6 +386,17 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_it_cant_read_caps_it_then_turns_it_off_at_five_minutes() {
+        assert_eq!(script("cell:0V 2C wait:299s").level, 50);
+        let run = script("cell:0V 2C wait:301s");
+        assert_eq!(run.level, 0);
+        // The log says when, with nothing clicked to explain it.
+        let off = run.lines.last().unwrap();
+        assert!(off.starts_with("300.") && off.ends_with("→ off"), "{off}");
+        assert_eq!(script("cell:0V 2C wait:301s 1C").level, 50);
+    }
+
+    #[test]
     fn a_click_turns_it_on_and_another_turns_it_off() {
         assert_eq!(script("1C").level, LEVEL);
         assert_eq!(script("1C 1C").level, 0);

@@ -261,6 +261,49 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_it_cant_read_turns_the_ui_off_after_five_minutes_and_a_click_brings_it_back() {
+        let mut torch = Rig::default();
+        clicks(&mut torch, 2);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        torch.adc.voltage = 0;
+        run(&mut torch, false, 10 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), FAULT_CEILING);
+        assert_eq!(torch.ui.output_level(), CEILING, "only the light's capped");
+        // A second short of five minutes, then a second past.
+        run(&mut torch, false, 289 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), FAULT_CEILING);
+        run(&mut torch, false, 2 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), 0);
+        assert_eq!(torch.ui.output_level(), 0, "the UI's off too");
+        assert!(torch.resting());
+        assert_eq!(torch.aux(), Aux::Blue, "off, not locked out");
+        // It comes back at the level it was asked for, still capped, and
+        // goes out again five minutes later.
+        click(&mut torch);
+        assert_eq!(torch.level(), FAULT_CEILING);
+        assert_eq!(torch.ui.output_level(), CEILING);
+        run(&mut torch, false, 299 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), FAULT_CEILING);
+        run(&mut torch, false, 2 * TICKS_PER_SECOND);
+        assert!(torch.resting());
+    }
+
+    #[test]
+    fn five_minutes_blind_puts_out_a_lockout_hold_and_leaves_it_locked() {
+        let mut torch = Rig::default();
+        torch.adc.voltage = 0;
+        clicks(&mut torch, 4);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        run(&mut torch, true, 299 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), FLOOR);
+        run(&mut torch, true, 2 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), 0, "out, with the switch still down");
+        run(&mut torch, false, 1);
+        assert_eq!(torch.aux(), Aux::Red);
+        assert!(torch.resting());
+    }
+
+    #[test]
     fn heat_lowers_the_light_and_leaves_the_ui_where_it_was() {
         let mut torch = Rig::default();
         clicks(&mut torch, 2);

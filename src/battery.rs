@@ -168,6 +168,31 @@ pub fn plausible(centivolts: u16) -> bool {
 /// the worst. The fourth in a row, a second's worth, acts. Unmeasured.
 const GLITCHES: u8 = 3;
 
+/// Implausible samples in a row, with the torch on, that turn it off: five
+/// minutes of a cell [`Protection`] can't read.
+///
+/// With no reading there's no low-voltage cut-off at all, and nothing else
+/// on this board stops a cell being run flat (the module docs say why). So a
+/// torch that can't read its cell can't be left to run for ever.
+///
+/// It's timed rather than immediate because a broken reading isn't evidence
+/// of a flat cell, and going dark the moment the ADC misbehaves would leave
+/// someone without a light when the cell may well be fine.
+/// [`FAULT_CEILING`] is there to keep the drain down in the meantime, and
+/// this bounds how long a torch nobody's attending to can go on like that.
+/// It doesn't lock out. A click turns the torch on again, still under the
+/// ceiling, for another five minutes, so anyone who keeps clicking can still
+/// run a cell down this way.
+///
+/// Five minutes is a judgement: long enough to get somewhere or change the
+/// cell. It's unmeasured too. Nobody's put a meter on what
+/// [`FAULT_CEILING`] draws on this light, so nobody can say what five
+/// minutes of it takes out of a cell that's already low.
+pub const BLIND_SAMPLES: u16 = SAMPLES_PER_SECOND * 60 * 5;
+
+// The ceiling's already down by the time it turns off.
+const _: () = assert!(BLIND_SAMPLES > GLITCHES as u16);
+
 /// Ticks per level as the ceiling fades down, and back up. Down is a level a
 /// tick, quicker than thermal's, since the cell's already under its threshold
 /// by the time it steps: 15 levels takes a quarter of a second, and a drop of
@@ -181,7 +206,8 @@ pub enum Verdict {
     /// The ceiling's heading for this level, [`CEILING`] meaning no limit.
     /// [`Protection::ceiling`] is where it's got to.
     Ceiling(u8),
-    /// Turn off now. The cell's flat.
+    /// Turn off now. The cell's flat, or it's been [`BLIND_SAMPLES`] since
+    /// anything could read it.
     Off,
 }
 
@@ -215,9 +241,17 @@ pub enum Verdict {
 /// count towards stepping back up, and it doesn't restart the holds, so a
 /// flat cell can't hide behind the odd bad reading. More than [`GLITCHES`]
 /// in a row and the ADC can't be trusted to say the cell's fine, so the
-/// ceiling drops to [`FAULT_CEILING`], on or off. It never turns the torch
-/// off, since a broken reading isn't evidence of a flat cell. Good samples
-/// at [`RECOVER_AT`] or above step it back up as usual.
+/// ceiling drops to [`FAULT_CEILING`], on or off. Good samples at
+/// [`RECOVER_AT`] or above step it back up as usual.
+///
+/// A broken reading isn't evidence of a flat cell, so the ceiling is all it
+/// gets at first. It's no evidence of a good one either, so
+/// [`BLIND_SAMPLES`] implausible samples in a row with the torch on, five
+/// minutes without one plausible reading, turn it off. Any plausible sample
+/// starts that count again, and so does a sample with the torch off or a
+/// [`Protection::rest`], so it never counts while the torch is off. Turning
+/// back on gets another five minutes under the same ceiling. There's no
+/// lock-out, since a torch that won't come on tells you nothing.
 #[derive(Clone, Debug)]
 pub struct Protection {
     /// The filtered voltage in sixteenths of a centivolt. Zero until the
@@ -228,6 +262,9 @@ pub struct Protection {
     high_samples: u16,
     /// Implausible samples in a row.
     implausible: u8,
+    /// Implausible samples in a row with the torch on, which turn it off at
+    /// [`BLIND_SAMPLES`].
+    blind_samples: u16,
     ceiling: Ceiling,
     /// Ticks of rest since the last sample, up to [`FORGET_TICKS`].
     rested: u16,
@@ -247,6 +284,7 @@ impl Protection {
             flat_samples: 0,
             high_samples: 0,
             implausible: 0,
+            blind_samples: 0,
             ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
             rested: 0,
         }
@@ -264,12 +302,13 @@ impl Protection {
     }
 
     /// One tick with nothing measuring the cell. The holds start again, as
-    /// they do for any time off, and the ceiling stays, since only good
-    /// readings raise it. The filter stays too, until [`FORGET_TICKS`] have
-    /// gone by.
+    /// they do for any time off, and so does the count to [`BLIND_SAMPLES`].
+    /// The ceiling stays, since only good readings raise it. The filter
+    /// stays too, until [`FORGET_TICKS`] have gone by.
     pub fn rest(&mut self) {
         (self.low_samples, self.flat_samples, self.high_samples) = (0, 0, 0);
         self.implausible = 0;
+        self.blind_samples = 0;
         self.rested = self.rested.saturating_add(1);
         if self.rested >= FORGET_TICKS {
             self.filtered = 0;
@@ -305,9 +344,19 @@ impl Protection {
             if self.implausible > GLITCHES {
                 ceiling = ceiling.min(FAULT_CEILING);
             }
+            // Only time spent lit and blind counts, and off starts it again.
+            self.blind_samples = match level {
+                0 => 0,
+                _ => self.blind_samples + 1,
+            };
+            if self.blind_samples >= BLIND_SAMPLES {
+                self.blind_samples = 0;
+                return Verdict::Off;
+            }
             return Verdict::Ceiling(ceiling);
         }
         self.implausible = 0;
+        self.blind_samples = 0;
         let voltage = self.filter(centivolts);
 
         if voltage >= RECOVER_AT {
@@ -742,15 +791,98 @@ mod tests {
         assert_eq!(lvp.centivolts(), Some(400));
     }
 
+    const FAULT: Verdict = Verdict::Ceiling(FAULT_CEILING);
+
     #[test]
-    fn a_second_of_garbage_drops_to_the_fault_ceiling_and_never_off() {
+    fn a_second_of_garbage_drops_to_the_fault_ceiling() {
         for level in [0, 30, FAULT_CEILING, CEILING] {
             let mut lvp = Protection::new();
             let verdicts = run(&mut lvp, u16::MAX, level, u16::from(GLITCHES));
             assert!(all(&verdicts, NONE), "level {level}");
-            let fault = Verdict::Ceiling(FAULT_CEILING);
-            assert_eq!(lvp.sample(u16::MAX, level), fault);
-            assert!(all(&run(&mut lvp, 0, level, secs(600)), fault));
+            assert_eq!(lvp.sample(u16::MAX, level), FAULT);
+            // And that's all it does, this side of five minutes.
+            assert!(all(&run(&mut lvp, 0, level, secs(60)), FAULT));
+        }
+    }
+
+    #[test]
+    fn five_minutes_of_garbage_turns_it_off_and_not_a_sample_sooner() {
+        assert_eq!(BLIND_SAMPLES, secs(5 * 60));
+        for level in [1, 30, FAULT_CEILING, CEILING] {
+            // A dead ADC, either side of plausible, four saturated
+            // conversions, and a reading the ADC can't give.
+            for garbage in [0, 99, 441, centivolts(MAX_READING), u16::MAX] {
+                let mut lvp = Protection::new();
+                let verdicts = run(&mut lvp, garbage, level, BLIND_SAMPLES - 1);
+                let (glitches, capped) = verdicts.split_at(usize::from(GLITCHES));
+                assert!(all(glitches, NONE), "{garbage} at level {level}");
+                assert!(all(capped, FAULT), "{garbage} at level {level}");
+                let verdict = lvp.sample(garbage, level);
+                assert_eq!(verdict, Verdict::Off, "{garbage} at level {level}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_plausible_sample_starts_the_five_minutes_again() {
+        // Any reading it can believe, good news or not.
+        for good in [*PLAUSIBLE.start(), 310, *PLAUSIBLE.end()] {
+            let mut lvp = Protection::new();
+            run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+            assert_eq!(lvp.sample(good, FAULT_CEILING), FAULT, "{good}");
+            let verdicts = run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+            assert!(all(&verdicts, FAULT), "{good}");
+            assert_eq!(lvp.sample(0, FAULT_CEILING), Verdict::Off, "{good}");
+        }
+    }
+
+    #[test]
+    fn garbage_never_counts_while_the_torch_is_off() {
+        let mut lvp = Protection::new();
+        // Off but still read, as it is while the switch is held down.
+        let verdicts = run(&mut lvp, 0, 0, 3 * BLIND_SAMPLES);
+        assert!(all(&verdicts[usize::from(GLITCHES)..], FAULT));
+        // So on gets its whole five minutes.
+        let verdicts = run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+        assert!(all(&verdicts, FAULT));
+        assert_eq!(lvp.sample(0, FAULT_CEILING), Verdict::Off);
+    }
+
+    #[test]
+    fn turning_off_starts_the_five_minutes_again() {
+        let mut lvp = Protection::new();
+        run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+        // One sample with the light off is enough.
+        assert_eq!(lvp.sample(0, 0), FAULT);
+        let verdicts = run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+        assert!(all(&verdicts, FAULT));
+        assert_eq!(lvp.sample(0, FAULT_CEILING), Verdict::Off);
+    }
+
+    #[test]
+    fn a_rest_starts_the_five_minutes_again() {
+        let mut lvp = Protection::new();
+        run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+        lvp.rest();
+        // The ceiling's kept through the rest, so it's capped from the first
+        // sample, with no glitches let go.
+        let verdicts = run(&mut lvp, 0, FAULT_CEILING, BLIND_SAMPLES - 1);
+        assert!(all(&verdicts, FAULT));
+        assert_eq!(lvp.sample(0, FAULT_CEILING), Verdict::Off);
+    }
+
+    #[test]
+    fn on_again_after_five_minutes_blind_is_still_capped_and_gets_five_more() {
+        let mut lvp = Protection::new();
+        assert_eq!(last(&mut lvp, 0, CEILING, BLIND_SAMPLES), Verdict::Off);
+        // With the rest the torch takes once it's off, and without one.
+        for rest in [true, false, true] {
+            if rest {
+                lvp.rest();
+            }
+            let verdicts = run(&mut lvp, 0, CEILING, BLIND_SAMPLES - 1);
+            assert!(all(&verdicts, FAULT), "rest: {rest}");
+            assert_eq!(lvp.sample(0, CEILING), Verdict::Off, "rest: {rest}");
         }
     }
 

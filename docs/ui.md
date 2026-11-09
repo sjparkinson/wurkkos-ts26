@@ -52,7 +52,7 @@ For pockets and bags.
 
 The light looks after the cell and itself whatever you've asked for. It never flashes to say so: it goes down gently, and the level you asked for comes back once it can.
 
-These scripts have four more words. `cell:2.95V` is the cell's voltage from there on and `heat:80C` the temperature. `fault` starts a torch whose power-on checks failed (on the simulated chip, a fuse that isn't what the firmware expects), and `flash:corrupt` one whose flash doesn't match its checksum. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
+These scripts have four more words. `cell:2.95V` is the cell's voltage from there on and `heat:80C` the temperature. `cell:0V`, like any voltage outside 1.00 to 4.40 V, is a cell the firmware can't read. `fault` starts a torch whose power-on checks failed (on the simulated chip, a fuse that isn't what the firmware expects), and `flash:corrupt` one whose flash doesn't match its checksum. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
 
 | When | Does | Example | Status |
 |---|---|---|---|
@@ -61,6 +61,10 @@ These scripts have four more words. `cell:2.95V` is the cell's voltage from ther
 | Flat cell | Fades down the ramp, then off | `cell:2.80V 2C wait:10s` → off | Done |
 | Flat cell, 1C again | On again at the very bottom | `cell:2.80V 2C wait:10s 1C` → level 1 | Done |
 | Flat cell, 1C again, a second later | Off again | `cell:2.80V 2C wait:10s 1C wait:1.5s` → off | Done |
+| A cell it can't read | Holds the light at level 50 | `cell:0V 2C wait:10s` → level 50 | Done |
+| A cell it can't read, for five minutes | Off, in one step | `cell:0V 2C wait:301s` → off | Done |
+| A cell it can't read, 1C again | On again, still held at level 50, for another five minutes | `cell:0V 2C wait:301s 1C` → level 50 | Done |
+| A cell it can read again | Back up to the level you asked for | `cell:0V 2C wait:10s cell:3.8V wait:30s` → level 120 | Done |
 | Hot | Fades down, no further than level 50 | `heat:80C 2C wait:120s` → level 50 | Done |
 | Hot, at a level under 50 | Nothing | `heat:80C 1H:3s wait:120s` → level 13 | Done |
 | Hot, then cool | Back up to the level you asked for | `heat:80C 2C wait:120s heat:25C wait:120s` → level 120 | Done |
@@ -69,6 +73,8 @@ These scripts have four more words. `cell:2.95V` is the cell's voltage from ther
 | A failed check, at a lower level | Nothing | `fault 1H:3s` → level 13 | Done |
 
 A failed check is flash that doesn't match its checksum, a fuse that isn't what the firmware expects, or the watchdog having reset the chip. The light still works, since one that won't come on tells you nothing.
+
+A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also what an ADC that never answers looks like. After a second of that the light fades down to level 50 and stays there. With no reading there's no low-voltage cut-off, and this cell has no protection of its own, so after five minutes lit without one reading it can believe, the light goes out, in one step and with no fade. It doesn't lock out, for the same reason a failed check doesn't, so each 1C buys another five minutes at level 50. The five minutes only count while the light's on, and one good reading starts them again. Readings that come back at 3.30 V or more step the level back up, as they do after a low cell. Five minutes is a judgement, and unmeasured like every other number here.
 
 ## Always on, in the background
 

@@ -16,9 +16,11 @@
 //!
 //! Some words set the scene, taking no time. `cell:2.95V` is the cell from
 //! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to
-//! start). `fault` starts a torch whose power-on checks failed, so it has to
-//! come before anything that takes time. So does `flash:corrupt`, a byte of
-//! flash that doesn't match its CRC.
+//! start). A cell outside `battery::PLAUSIBLE`, such as `cell:0V`, is one
+//! the firmware can't read, and 0 V is what a dead ADC reads. `fault` starts
+//! a torch whose power-on checks failed, so it has to come before anything
+//! that takes time. So does `flash:corrupt`, a byte of flash that doesn't
+//! match its CRC.
 //!
 //! # docs/ui.md
 //!
@@ -945,6 +947,27 @@ mod tests {
         assert_eq!(word("cell:3.8V"), Ok(Action::Cell(380)));
         assert_eq!(word("cell:3.05V"), Ok(Action::Cell(305)));
         assert_eq!(word("cell:4V"), Ok(Action::Cell(400)));
+    }
+
+    /// docs/ui.md's rows for a cell the firmware can't read lean on this:
+    /// there's no word for a broken reading, only a cell that can't be real.
+    #[test]
+    fn a_cell_outside_the_plausible_range_reads_as_one_the_firmware_cant_believe() {
+        assert_eq!(word("cell:0V"), Ok(Action::Cell(0)));
+        // What a dead ADC gives.
+        assert_eq!(voltage_reading(0), 0);
+        // What the firmware makes of the cell a script sets.
+        let reads = |cell: &'static str| {
+            let script = parse([cell, "wait:1s"]).map(Result::unwrap);
+            let scene = samples(script).last().unwrap().scene;
+            battery::centivolts(scene.reading(Channel::Voltage))
+        };
+        for cell in ["cell:0V", "cell:0.99V", "cell:4.41V", "cell:5V"] {
+            assert!(!battery::plausible(reads(cell)), "{cell}");
+        }
+        for cell in ["cell:1V", "cell:3.8V", "cell:4.4V"] {
+            assert!(battery::plausible(reads(cell)), "{cell}");
+        }
     }
 
     /// The torch tests used to start a fresh bench for `fault`, forgetting the
