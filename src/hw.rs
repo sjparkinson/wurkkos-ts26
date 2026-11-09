@@ -149,18 +149,29 @@ pub fn init() {
     );
 
     // Pull every pin we don't drive up, so nothing floats and leaks current.
-    // PA0 is UPDI. PA1 is analogue, so it keeps its reset setting: input
-    // buffer on, no pull-up to skew the divider. The outputs get no pull-up
-    // either, so PB2 can't creep the boost converter on before it's an
-    // output.
+    // PA0 is UPDI, and nothing here writes its settings. The outputs get no
+    // pull-up either, so PB2 can't creep the boost converter on before it's
+    // an output.
+    //
+    // PA1 is the battery divider, an ADC input at about a quarter of the
+    // cell's voltage. It gets its digital input buffer turned off, as the
+    // datasheet asks for a pin the ADC reads (DS40002204A section 30.3.1.1),
+    // and nothing else: never a pull-up, which would skew the divider. The
+    // ADC still sees the pin, which is the point of the advice: section
+    // 16.3.2.2 says the same of a pin "used as analog input", and Microchip's
+    // own ADC example turns the buffer off on the pin it converts (TB3209B
+    // section 3). PA1's bit in VPORTA.IN stops following the pin (section
+    // 16.5.11's note), and nothing reads that bit. Nobody's compared readings
+    // on a real TS26 with the buffer on and off.
     //
     // PA5 is the switch, and its pull-up is what the switch pulls against.
     // ISC stays at INTDISABLE, its reset value: no interrupt, and the input
-    // buffer on, so VPORTA.IN still reads the pin (DS40002204A sections
-    // 16.3.2.1 and 16.5.11). `wait_for_tick` says why there's no interrupt.
+    // buffer on, so VPORTA.IN still reads the pin (sections 16.3.2.1 and
+    // 16.5.11). `wait_for_tick` says why there's no interrupt.
     for pin in 0..8 {
         let ctrl = match pin {
-            UPDI | BATTERY => continue,
+            UPDI => continue,
+            BATTERY => regs::PORT_ISC_INPUT_DISABLE,
             SWITCH => regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE,
             _ => regs::PORT_PULLUPEN,
         };

@@ -39,7 +39,12 @@
 //! - PB2 is only ever an output with PORTB's other bits clear. It may not go
 //!   high with no duty and nothing to supply one, nor stay high with the
 //!   duty at 0 for longer than the delta-sigma's longest gap, and it has to be
-//!   low in power-down. PB2, PA0 and PA1 never get a pull-up.
+//!   low in power-down. PB2 and PA1 never get a pull-up, and PA0's settings
+//!   are never written at all.
+//! - PA1 is an ADC input, so its digital input buffer has to be off, and
+//!   nothing else set, before AIN1 is converted (§30.3.1.1). The buffer has
+//!   to be off before VPORTA.IN is read too, since a read of the port with it
+//!   on is a digital read of the battery divider.
 //! - RTC.PITCTRLA isn't written while PITSTATUS.CTRLBUSY is set.
 //! - The PIT's flag goes up once a period of simulated time, which counts an
 //!   instruction at a time while the CPU's awake and skips to the next event
@@ -1532,7 +1537,20 @@ impl Chip {
         }
         let muxpos = io(reg::ADC0_MUXPOS);
         let channel = match muxpos {
-            ADC_MUXPOS_AIN1 => Channel::Voltage,
+            ADC_MUXPOS_AIN1 => {
+                // §30.3.1.1: the digital input buffer should be off on the
+                // pin the ADC reads. That and nothing else, so no pull-up.
+                // The reading is the world's either way, since the advice
+                // is for a pin that's still being converted (§16.3.2.2).
+                let pa1 = io(reg::PORTA_PIN0CTRL + BATTERY_PIN);
+                if pa1 != ISC_INPUT_DISABLE {
+                    return Err(format!(
+                        "converts AIN1 with PORTA.PIN1CTRL at {pa1:#04x}: PA1 wants its \
+                         digital input buffer off and nothing else (section 30.3.1.1)"
+                    ));
+                }
+                Channel::Voltage
+            }
             ADC_MUXPOS_TEMPSENSE => {
                 // Section 30.3.2.6: SAMPCAP, and INITDLY and SAMPLEN each at
                 // least 32 µs of ADC clock.
@@ -1770,12 +1788,17 @@ impl Chip {
         if pull_up && a == reg::PORTB_PIN0CTRL + ENABLE_PIN {
             return Err("gives PB2 a pull-up, which could creep the boost converter on".into());
         }
-        if pull_up
-            && (a == reg::PORTA_PIN0CTRL + UPDI_PIN || a == reg::PORTA_PIN0CTRL + BATTERY_PIN)
-        {
+        if a == reg::PORTA_PIN0CTRL + UPDI_PIN {
             return Err(format!(
-                "writes {value:#04x} to {}: PA0 is UPDI and PA1 the battery divider, \
-                 so neither gets a pull-up",
+                "writes {value:#04x} to {}: PA0 is UPDI, and the firmware leaves its \
+                 settings alone",
+                name(a)
+            ));
+        }
+        if pull_up && a == reg::PORTA_PIN0CTRL + BATTERY_PIN {
+            return Err(format!(
+                "writes {value:#04x} to {}: PA1 is the battery divider, and a pull-up \
+                 would skew it",
                 name(a)
             ));
         }
@@ -2108,7 +2131,21 @@ impl Bus for Chip {
             // included (§16.3.2.1, §16.5.11). The pull-up is Anduril's setting
             // for the pin (docs/hardware.md). Nobody's seen whether the board
             // has one of its own, so this takes it that it hasn't.
+            //
+            // A read of the port samples every pin whose buffer is on, and
+            // PA1 is the battery divider, which nothing should read as a
+            // logic level, so its buffer has to be off by now (§30.3.1.1).
+            // Its bit then stops following the pin (§16.5.11's note). What
+            // it's left holding isn't known, and this has it read 1.
             reg::VPORTA_IN => {
+                let pa1 = self.io[reg::PORTA_PIN0CTRL + BATTERY_PIN];
+                if pa1 & PORT_ISC != ISC_INPUT_DISABLE {
+                    return Err(
+                        "reads VPORTA.IN with PA1's digital input buffer on, which reads the \
+                         battery divider as a logic level"
+                            .into(),
+                    );
+                }
                 let ctrl = self.switch_ctrl();
                 if ctrl & PORT_ISC == ISC_INPUT_DISABLE {
                     return Err(
@@ -2377,10 +2414,14 @@ mod tests {
     use super::*;
     use ts26::ui::Aux;
 
-    /// A chip with the ADC set up as `hw::init` and `adc_channel` do.
+    /// PORTA.PIN1CTRL, PA1's settings.
+    const PA1_CTRL: usize = reg::PORTA_PIN0CTRL + BATTERY_PIN;
+
+    /// A chip with PA1 and the ADC set up as `hw::init` and `adc_channel` do.
     fn adc_ready(muxpos: u8) -> Chip {
         let mut chip = Chip::new(Vec::new());
         for (a, value) in [
+            (PA1_CTRL, ISC_INPUT_DISABLE),
             (reg::ADC0_CALIB, ADC_DUTY25),
             (reg::ADC0_CTRLB, ADC_SAMPNUM_ACC4),
             (reg::ADC0_CTRLC, ADC_SAMPCAP | ADC_REFSEL_INTREF | 0x03),
@@ -2415,6 +2456,25 @@ mod tests {
             assert_eq!(convert(&mut chip), UNSETTLED);
             assert_eq!(convert(&mut chip), World::NORMAL.reading(channel));
         }
+    }
+
+    /// §30.3.1.1. The buffer being off changes nothing the ADC reads, which
+    /// `the_first_conversion_after_a_change_is_junk_then_it_reads_the_world`
+    /// shows, since `adc_ready` turns it off.
+    #[test]
+    fn converting_ain1_wants_pa1s_input_buffer_off_and_nothing_else() {
+        let start = |pa1: u8, muxpos: u8| {
+            let mut chip = adc_ready(muxpos);
+            chip.write(PA1_CTRL as u16, pa1).unwrap();
+            chip.write(reg::ADC0_COMMAND as u16, ADC_STCONV)
+        };
+        assert_eq!(start(ISC_INPUT_DISABLE, ADC_MUXPOS_AIN1), Ok(()));
+        for pa1 in [ISC_INTDISABLE, ISC_INPUT_DISABLE | PORT_INVEN] {
+            let err = start(pa1, ADC_MUXPOS_AIN1).unwrap_err();
+            assert!(err.contains("PORTA.PIN1CTRL"), "{err}");
+        }
+        // The temperature sensor isn't on a pin.
+        assert_eq!(start(ISC_INTDISABLE, ADC_MUXPOS_TEMPSENSE), Ok(()));
     }
 
     #[test]
@@ -2657,6 +2717,20 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn pa0s_settings_are_never_written_and_pa1s_take_all_but_a_pull_up() {
+        let mut chip = Chip::new(Vec::new());
+        for value in [0, ISC_INPUT_DISABLE] {
+            let err = chip.write(reg::PORTA_PIN0CTRL as u16, value).unwrap_err();
+            assert!(err.contains("UPDI"), "{err}");
+        }
+        chip.write(PA1_CTRL as u16, ISC_INPUT_DISABLE).unwrap();
+        let err = chip
+            .write(PA1_CTRL as u16, ISC_INPUT_DISABLE | PORT_PULLUPEN)
+            .unwrap_err();
+        assert!(err.contains("skew"), "{err}");
+    }
+
     /// `out a, r`, for an I/O address.
     fn out(a: usize, r: u8) -> u16 {
         0xB800 | (a as u16 & 0x30) << 5 | u16::from(r) << 4 | a as u16 & 0x0F
@@ -2811,12 +2885,15 @@ mod tests {
         );
     }
 
-    /// PA5 as `hw::init` leaves it: the pull-up, and ISC at INTDISABLE.
+    /// PA5 as `hw::init` leaves it: the pull-up, and ISC at INTDISABLE. PA1
+    /// too, with its input buffer off, or the read would sample the divider.
     #[test]
     fn pa5_reads_through_its_pull_up_and_a_press_raises_nothing() {
         let mut chip = Chip::new(Vec::new());
         let ctrl = (reg::PORTA_PIN0CTRL + SWITCH_PIN) as u16;
         let read = |chip: &mut Chip| chip.read(reg::VPORTA_IN as u16);
+        assert!(read(&mut chip).unwrap_err().contains("battery divider"));
+        chip.write(PA1_CTRL as u16, ISC_INPUT_DISABLE).unwrap();
         assert!(read(&mut chip).unwrap_err().contains("pull-up"));
         chip.write(ctrl, PORT_PULLUPEN | ISC_INTDISABLE).unwrap();
         assert_eq!(read(&mut chip), Ok(0xFF));
