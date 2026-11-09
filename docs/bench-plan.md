@@ -1,6 +1,6 @@
 # Bench plan
 
-Every hardware check the roadmap is waiting on, in the order to do them, for a bench with the torch, a Fluke 107, [JLHawaii808's 4.5 V UPDI kit](https://jlhawaii808.com/products/updi-programmer-driver-reflashling-kit) for the torch, and the [spare chip kit](#the-spare-chip-kit): an Adafruit ATtiny1616 breakout, an Adafruit High Voltage UPDI Friend, a breadboard, jumpers, tactile switches and blue LEDs. It's the TS21's plan, rewritten for this board. Nothing here has run on a TS26 yet, so treat each expected result as a prediction. [flashing.md](flashing.md) has how to use the programmer.
+Every hardware check the roadmap is waiting on, in the order to do them, for a bench with the torch, a Fluke 107, [JLHawaii808's 4.5 V UPDI kit](https://jlhawaii808.com/products/updi-programmer-driver-reflashling-kit) for the torch, and the [spare chip kit](#the-spare-chip-kit): an Adafruit ATtiny1616 breakout, an Adafruit High Voltage UPDI Friend, a breadboard, jumpers, tactile switches, blue LEDs, and a 27 kΩ and a 10 kΩ resistor. It's the TS21's plan, rewritten for this board. Nothing here has run on a TS26 yet, so treat each expected result as a prediction. [flashing.md](flashing.md) has how to use the programmer.
 
 The order is the point of it. **The first flash on the torch is `first-light` (commit `9d3b7dc`), and the full firmware only goes on after stage 3 has passed.** The TS21 went dark straight after a verified flash of a much bigger start-up, and I was left unable to say whether that was firmware or hardware. A 628-byte image that clicks on and off keeps those two apart.
 
@@ -44,7 +44,7 @@ The header names are the board's silkscreen. They're from Adafruit's Eagle schem
 | PWM | PB0 | SCL | 10 kΩ pull-up to VCC, and both STEMMA QT sockets |
 | Side switch | PA5 | 1 | Nothing else on it |
 | UPDI pad | PA0 | UPDI | 10 kΩ pull-up to VCC |
-| Battery sense | PA1 | 14 | No cell behind it, and the wiring below leaves it unconnected. The full firmware reads the cell here, so it sees whatever the pin floats at. By `src/battery.rs` that caps it at level 50 or steps it down, unless the pin's held at about 0.75 to 1.09 V, which reads as 3.0 to 4.4 V (my arithmetic at the 4.03 ratio, untried) |
+| Battery sense | PA1 | 14 | No cell behind it, so the wiring below gives it a divider from Vin. The full firmware reads the cell here, and left floating it sees whatever the pin drifts to. By `src/battery.rs` that caps it at level 50, steps it down or turns it off, which rows 0.10 to 0.15 would then blame on something else |
 | Supply pad | VCC | Vin | VCC is Vin, through a cuttable trace on solder jumper SJ1, so the chip runs at whatever goes on Vin. The AP2127K-3.3 regulator only feeds the 3V pin, which is an output, so don't feed it |
 | Boost enable | PB2 | 7 | The schematic's net is TXD, since PB2 is USART0's default TX pin, but the silkscreen says 7 |
 | Aux | PC1, PC2, PC3 | 11, 12, 13 | |
@@ -57,6 +57,7 @@ Wiring, with the Friend's slide switch on 3 V:
 - Friend's UPDI, power and GND to the breakout's UPDI, Vin and G.
 - A tactile switch from pin 1 to G. Mind which legs are joined: the 12 mm ones have four.
 - A blue LED from SCL to G and a second from pin 7 to G, cathodes to G.
+- 27 kΩ from Vin to pin 14 and 10 kΩ from pin 14 to G, to stand in for the cell. At 3.3 V that's about 0.89 V on the pin, which the full firmware should read as about 3.6 V (my arithmetic at the 4.03 ratio, untried). Check it with the meter before 0.9: anything from 0.80 to 1.05 V will do, which reads as 3.2 to 4.2 V, clear of the 3.00 V step-down and of the 4.40 V top of what it takes for a real cell. Other pairs between about 2.2 and 3 to 1 land in that range too. `first-light` never reads the pin, so it can stay wired at the kit's 4.5 V.
 
 At 3.3 V a blue LED's forward voltage does most of the current limiting, so it's fine straight on a pin for this. At 5 V only the pin's own drive limits it, which could pass the 40 mA absolute maximum (DS40002204A table 36-1), so **keep the switch on 3 V** or add 1 kΩ in series. The same goes for the JLHawaii808 kit's 4.5 V in rows 0.16 on, since VCC is whatever's on Vin: LEDs off the pins, or 1 kΩ in series. The header strips come with the board and need soldering.
 
@@ -114,7 +115,7 @@ Rows 0.1 to 0.15 prove `xtask` against a real chip using the Friend. A failure t
 | 0.8 | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | First light | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
 | 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port> backup/breakout`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
 | 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the LED on pin 7 never staying lit | 4.3 |
-| 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so go through the suspects in 6.1 here, where it costs nothing | 6.1 |
+| 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so check pin 14 still reads 0.80 to 1.05 V, then go through the suspects in 6.1 here, where it costs nothing | 6.1 |
 | 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
 | 0.13 | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |
 | 0.14 | Develop T2 here | T2 | Blinks a number you can read | 7.2 |
