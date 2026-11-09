@@ -44,7 +44,7 @@ The header names are the board's silkscreen. They're from Adafruit's Eagle schem
 | PWM | PB0 | SCL | 10 kΩ pull-up to VCC, and both STEMMA QT sockets |
 | Side switch | PA5 | 1 | Nothing else on it |
 | UPDI pad | PA0 | UPDI | 10 kΩ pull-up to VCC |
-| Battery sense | PA1 | 14 | No cell behind it, so the wiring below gives it a divider from Vin. The full firmware reads the cell here, and left floating it sees whatever the pin drifts to. By `src/battery.rs` that caps it at level 50, steps it down or turns it off, which rows 0.10 to 0.15 would then blame on something else |
+| Battery sense | PA1 | 14 | No cell behind it, so the wiring below gives it a divider from Vin. The full firmware reads the cell here, and left floating it sees whatever the pin drifts to. By `src/battery.rs` that steps it down or turns it off as a low cell, or caps it at level 50 and turns it off after five minutes as a cell it can't read, which rows 0.10 to 0.15 would then blame on something else |
 | Supply pad | VCC | Vin | VCC is Vin, through a cuttable trace on solder jumper SJ1, so the chip runs at whatever goes on Vin. The AP2127K-3.3 regulator only feeds the 3V pin, which is an output, so don't feed it |
 | Boost enable | PB2 | 7 | The schematic's net is TXD, since PB2 is USART0's default TX pin, but the silkscreen says 7 |
 | Aux | PC1, PC2, PC3 | 11, 12, 13 | |
@@ -117,6 +117,7 @@ Rows 0.1 to 0.15 prove `xtask` against a real chip using the Friend. A failure t
 | 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the LED on pin 7 never staying lit | 4.3 |
 | 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so check pin 14 still reads 0.80 to 1.05 V, then go through the suspects in 6.1 here, where it costs nothing | 6.1 |
 | 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
+| 0.12a | Light off. Move pin 14's lead from the divider to G, then 2C, with the meter on SCL and a clock running. At the end 1C again, then put the divider back | Main | About 3.6% of VCC within a couple of seconds, which is the level 50 cap for a cell it can't read. Out by itself five minutes after it came on. 1C brings it back, still capped. Back on the divider, 2C reaches 51% again | Nothing on the torch, whose PA1 can't be unplugged. It's the only time anyone sees this shut-off on a chip |
 | 0.13 | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |
 | 0.14 | Develop T2 here | T2 | Blinks a number you can read | 7.2 |
 | 0.15 | T4: power-down straight after a feed. Pick a level away from 52, click off, leave it an hour, then 1C, then 2C and DC volts on SCL | T4 | Comes back at the level you left, and 51% at the top. Back at 52 means the chip reset, and 3.6% means a bite | 6.4 |
@@ -216,7 +217,7 @@ Short bursts above level 75, and the meter comes out at 3 A.
 
 ## Stage 6: faults and the watchdog
 
-There's no proof at power-on here, on purpose, so this is where anyone first sees it work. A fault only shows as the light stopping at level 50, so every check here is about getting above it.
+There's no proof at power-on here, on purpose, so this is where anyone first sees it work. A fault only shows as the light stopping at level 50, so every check here is about getting above it. A cell voltage the firmware can't believe stops it at 50 as well, and that one goes on to turn the light off after five minutes, which no failed check does (0.12a, and [flashing.md](flashing.md#if-its-capped-at-level-50)).
 
 | # | Do | Needs | Expect | Closes |
 |---|---|---|---|---|

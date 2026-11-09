@@ -108,6 +108,8 @@ The firmware quietly holds the light at level 50 if a check at power-on fails: f
 
 The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
 
+One more thing caps the light at level 50, and it isn't a check at power-on: a cell voltage the firmware can't believe, under 1.00 V or over 4.40 V by its own sums, which is also what a dead ADC reads as. It's the only cause that then turns the light off after five minutes and lets a click bring it back for five more. So a light that goes out five minutes after coming on, and comes back with 1C, is this and not dead firmware. On a torch it points at the divider on PA1 or the 1094 calibration, and neither has met a real TS26.
+
 ## Going back
 
 `restore` puts a backup's flash and EEPROM back. It writes every EEPROM page, blank ones included, since with EESAVE set the old contents survive the erase.
