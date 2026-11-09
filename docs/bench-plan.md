@@ -37,23 +37,26 @@ Your eyes are the third instrument. A dark room shows a millisecond flash from t
 
 The breakout is the same chip as the torch with nothing expensive attached, so everything risky happens there first. Its pins are also the one place the meter gets a clean logic signal: on the torch the PWM is buried in the driver, and here it's a header pin.
 
-The first four rows are from the TS21's reading of [the breakout's schematic](https://github.com/adafruit/Adafruit-ATtinyx16-Breakouts-PCB), net by net. The PB2 and PC rows are my guess from Arduino pin numbers, so check all of them against the schematic and the silkscreen before wiring:
+The header names are the board's silkscreen. They're from Adafruit's Eagle schematic and board files at commit `8d8df66` of [the breakout's repo](https://github.com/adafruit/Adafruit-ATtinyx16-Breakouts-PCB), with the silkscreen text read out of the `.brd`, and they agree with megaTinyCore's `variants/txy6/pins_arduino.h`. Confirmed.
 
 | Torch | Chip pin | Breakout header | What's different |
 |---|---|---|---|
-| PWM | PB0 | SCL | 10 kΩ pull-up to VCC, and a STEMMA QT socket |
+| PWM | PB0 | SCL | 10 kΩ pull-up to VCC, and both STEMMA QT sockets |
 | Side switch | PA5 | 1 | Nothing else on it |
 | UPDI pad | PA0 | UPDI | 10 kΩ pull-up to VCC |
-| Supply pad | VCC | VIN | VCC is VIN unless the jumper on the back's been changed. There's no VCC pin as such. 3V is a regulator output, so don't feed it |
-| Boost enable | PB2 | TX (likely) | Check first. PB2 is USART0's default TX pin |
-| Aux | PC1, PC2, PC3 | 11, 12, 13 (likely) | Check first |
-| Ground | GND | GND | |
+| Battery sense | PA1 | 14 | No cell behind it, and the wiring below leaves it unconnected. The full firmware reads the cell here, so it sees whatever the pin floats at. By `src/battery.rs` that caps it at level 50 or steps it down, unless the pin's held at about 0.75 to 1.09 V, which reads as 3.0 to 4.4 V (my arithmetic at the 4.03 ratio, untried) |
+| Supply pad | VCC | Vin | VCC is Vin, through a cuttable trace on solder jumper SJ1, so the chip runs at whatever goes on Vin. The AP2127K-3.3 regulator only feeds the 3V pin, which is an output, so don't feed it |
+| Boost enable | PB2 | 7 | The schematic's net is TXD, since PB2 is USART0's default TX pin, but the silkscreen says 7 |
+| Aux | PC1, PC2, PC3 | 11, 12, 13 | |
+| Ground | GND | G | |
+
+The board has two LEDs of its own, a red one on PC0 (active low) and a green power LED on VCC. Neither is on a pin the torch uses.
 
 Wiring, with the Friend's slide switch on 3 V:
 
-- Friend's UPDI, power and GND to the breakout's UPDI, VIN and GND.
-- A tactile switch from pin 1 to GND. Mind which legs are joined: the 12 mm ones have four.
-- A blue LED from SCL to GND and a second from PB2's pin to GND, cathodes to GND.
+- Friend's UPDI, power and GND to the breakout's UPDI, Vin and G.
+- A tactile switch from pin 1 to G. Mind which legs are joined: the 12 mm ones have four.
+- A blue LED from SCL to G and a second from pin 7 to G, cathodes to G.
 
 At 3.3 V a blue LED's forward voltage does most of the current limiting, so it's fine straight on a pin for this. At 5 V only the pin's own drive limits it, which could pass the 40 mA absolute maximum (DS40002204A table 36-1), so **keep the switch on 3 V** or add 1 kΩ in series. The header strips come with the board and need soldering.
 
@@ -92,7 +95,7 @@ Any firmware problem below is recoverable while the chip still talks: flash and 
 
 ## Stage 0: the breakout
 
-Every step of the first flash, rehearsed on a chip that doesn't matter. Wired as in [the spare chip kit](#the-spare-chip-kit), powered by the Friend, with the LEDs off the pins while the meter's on them, since they'd drag the reading. Volts are against GND, and VCC is whatever the meter reads on VIN.
+Every step of the first flash, rehearsed on a chip that doesn't matter. Wired as in [the spare chip kit](#the-spare-chip-kit), powered by the Friend, with the LEDs off the pins while the meter's on them, since they'd drag the reading. Volts are against G, and VCC is whatever the meter reads on Vin.
 
 The breakout ships running seesaw, so if the chip's locked, 0.2 will say it didn't enter programming mode. Stop there: the programmer won't unlock a chip.
 
@@ -106,10 +109,10 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | 0.4 | Flash `first-light` as in [flashing.md](flashing.md#the-first-flash-is-first-light) | First light | Verify passes. `cargo xtask hex` on that commit says 628 bytes | 2.2 |
 | 0.5 | LEDs on. 1C on, 1C off, a few dozen times | First light | Both LEDs follow the clicks | 3.2 |
 | 0.6 | LEDs off, light on. Meter on frequency on SCL, then DC volts | First light | 19.6 kHz, which is 10 MHz / (2 × 255). A wrong clock is unmistakable. DC volts should be about 3.9% of VCC (duty 10 of 255), about 130 mV at 3.3 V | The 10 MHz clock and dual-slope PWM on silicon |
-| 0.7 | DC volts on PB2's pin, off, then on, then through a power cycle by the Friend | First light | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
+| 0.7 | DC volts on pin 7 (PB2), off, then on, then through a power cycle by the Friend | First light | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
 | 0.8 | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | First light | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
 | 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port>` with `backup-breakout/` put back as `backup/`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
-| 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the PB2 LED never staying lit | 4.3 |
+| 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the LED on pin 7 never staying lit | 4.3 |
 | 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so go through the suspects in 6.1 here, where it costs nothing | 6.1 |
 | 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
 | 0.13 | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |

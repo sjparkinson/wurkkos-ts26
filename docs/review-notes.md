@@ -30,7 +30,6 @@ Things to decide or check once the port from the TS21 is finished. Each has what
 
 - **The Friend on the breakout.** docs/bench-plan.md still uses it on a bare ATtiny1616 breakout, never on the torch. That fits the rule as worded, but say if you want it off the bench altogether.
 - **T3 hangs on purpose.** It's a throwaway build for the breakout only, so a real watchdog bite gets seen once. It's outside the firmware, and easy to drop.
-- **Breakout pins are a guess.** PB2 on TX and PC1-3 on pins 11-13 come from Arduino numbering, labelled likely.
 
 ## Simulator and xtask
 
