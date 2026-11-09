@@ -2,7 +2,7 @@
 
 What's inside a TS26 (Anduril model 0721), and how sure I am about each bit. "Confirmed" means a primary source (Microchip's files, Anduril's hardware definitions, a datasheet, or someone who opened one up) says so. "Likely" means it follows from a sibling light, a reviewer's guess or a convention and nobody's contradicted it. I found no teardown or driver photos of the TS26, so everything about the board is, at best, what Anduril's build for it implies.
 
-Anduril citations are pinned to commit [`71fe301`](https://github.com/ToyKeeper/anduril/tree/71fe3012202e6a31ccb4aaf0a569b324a3c8826c). Anduril is GPL-3.0, so this repo takes facts about the board from it and no code.
+Anduril citations are pinned to commit [`71fe301`](https://github.com/ToyKeeper/anduril/tree/71fe3012202e6a31ccb4aaf0a569b324a3c8826c), which was still trunk when it was rechecked on 2026-11-09. Anduril is GPL-3.0, so this repo takes facts about the board from it and no code.
 
 ## Spotting a model 0721
 
@@ -30,7 +30,7 @@ The product page lists two versions, 519A 5000 K high CRI and TN3535 6000 K, and
 
 PA2 to PA4, PA6, PA7, PB1, PB3 to PB5 and PC0 are unused, and get the pull-up. PA6 is the ATtiny1616's DAC0 pin (the ATDF's `signal function="DAC0" ... pad="PA6"`), unused here. Confirmed. [904a34cde](https://github.com/ToyKeeper/anduril/commit/904a34cde) (June 2026) fixed the switch's sense register from `PIN2CTRL` to `PIN5CTRL` with "no functional change", so the switch has always been PA5.
 
-Anduril's `hwdef_setup()` leaves PA1 and PB2 at their reset values (the pull-up lines for both are commented out) and makes PB2 an output with `VPORTB.DIR`, so it drives the reset value of `OUT`, low. Confirmed. Before that, during reset or a UPDI session, PB2 is a high-impedance input, and the MP3432 datasheet says "Do not leave EN floating". So a pull-down on the board is likely, but nobody's seen one.
+Anduril's `hwdef_setup()` leaves PA1 and PB2 at their reset values (the pull-up lines for both are commented out) and makes PB2 an output with `VPORTB.DIR`, so it drives the reset value of `OUT`, low. Confirmed. Before that, during reset, and for as long as a programmer holds the chip in programming mode, PB2 is a high-impedance input, and the MP3432 datasheet says "Do not leave EN floating". So a pull-down on the board is likely, but nobody's seen one.
 
 ### PWM, not a DAC
 
@@ -100,6 +100,10 @@ Nobody gives their position, labels, order or pitch, and the [reflash reference]
 
 Before pressing a programmer onto them, take the cell out, measure the pitch, and check with a multimeter which pad is continuous with battery negative. That only names ground. Which of the other two is the supply and which is UPDI is unknown as well, and row 1.5 of [bench-plan.md](bench-plan.md#stage-1-the-pads-and-stock) tells them apart with the meter. The prediction it works from is my reasoning from the datasheet, and unmeasured: the supply pad should read low against ground and climb as the board's capacitors charge, and the UPDI pad, with only the chip's pin on it, should read open or very high from the start. VCC on this board comes from a regulator I can't identify, and I don't know what feeding it from a programmer does. Only a plain UPDI adapter goes on these pads, never the 12 V HV Friend ([flashing.md](flashing.md#only-the-plain-adapter-goes-on-this-torch)).
 
+What the programmer's supply reaches is unknown too. With the cell out it feeds the regulator's output, and if that gets back to the cell rail, the MP3432 has an input to start from (2.7 V, as above). The MCU only holds the enable low while firmware's running. PB2 is tri-stated after a reset (DS40002204A §16.3.1), and in programming mode the CPU isn't running to drive it (§33.3.8.2), so it floats for the whole of a backup or a flash unless the board holds it. That's my reading of those two sections together. Anduril also raises it every time it starts: `setup()` blinks the main LEDs once unless `START_AT_MEMORIZED_LEVEL` or `USE_WEAK_BATTERY_PROTECTION` is defined ([`ui/anduril/anduril.c`](https://github.com/ToyKeeper/anduril/blob/71fe3012202e6a31ccb4aaf0a569b324a3c8826c/ui/anduril/anduril.c)), and neither is defined in `ui/anduril/config-default.h`, `hw/wurkkos/anduril.h`, or the TS26's `anduril.h` and `hwdef.h`. Confirmed from those files. So a programmer landing on a stock light starts Anduril, which asks the converter for a blink. Whether anything lights is unmeasured, and [bench-plan.md](bench-plan.md#what-the-adapter-powers) makes the first contact in the dark because of it.
+
+A search on 2026-11-09 of the [BLF TS26 thread](https://budgetlightforum.com/t/wurkkos-ts26-update-ts26-anduril-version-update/230944), the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942), [thefreeman's programmer thread](https://budgetlightforum.com/t/wts-usb-updi-programmers-for-attiny1616-avr32dd20-drivers-sofirn-wurkkos-fireflylite-emisar/71459), [anduril.click](https://anduril.click/drivers/updi.html) and [JLHawaii808's listing](https://jlhawaii808.com/products/updi-programmer-driver-reflashling-kit) found no public report of anyone reflashing a TS26 through its pads. So there's no pad order, pitch or adapter voltage to borrow, and no report either way of a programmer back-feeding a boost driver. JLHawaii808's listing doesn't name the TS26. That's a gap in what's been published, and it says nothing about the board.
+
 ## The MCU
 
 The same ATtiny1616 as the TS21, so the TS21's [MCU notes](https://github.com/sjparkinson/wurkkos-ts21/blob/main/docs/hardware.md#the-mcu) apply: mapped flash at 0x8000, two-word vectors, low byte first on 16-bit registers, `CPU.CCP` for clock changes, never write fuses. What's different:
@@ -128,7 +132,7 @@ Anduril's history for this light (as `hw/wurkkos/ts25/boost` and then `ts26`) ha
 - What turns PB0's PWM into LED current, and with what filter and scaling?
 - What are the real divider resistors on PA1, and is there a diode in the path?
 - What holds PB2 low while the MCU is in reset or being programmed?
-- Where are the pads, how are they labelled, and in what order and pitch? What does VCC do with the cell out and a programmer on?
+- Where are the pads, how are they labelled, and in what order and pitch? What does VCC do with the cell out and a programmer on, and does the programmer's supply reach the cell rail?
 - Which charger chip, and does it have a status pin the MCU could read?
 - How good is the 1094 calibration on other lights, near 3 V and under turbo load?
 - Is the low-end flicker the driver, the delta-sigma, or both, and is it only some lights?
