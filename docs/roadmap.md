@@ -37,4 +37,5 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 
 ## Maybe
 
+- Stop TCA0 while the light's off. It runs for good today, because a timer that stops and restarts is new turn-on behaviour nobody's checked, and what it'd save is small next to the idle after a watchdog feed. Worth a look once that idle has gone
 - Share a crate with the TS21 for the bits that are the same (button decoder, UPDI programmer, toolchain glue), once both have settled. Zero dependencies still applies, so that would be a path dependency in a shared repo, not crates.io
