@@ -26,7 +26,7 @@ The TS26 has flashing pads for a UPDI programmer. Put a plain serial UPDI progra
 
 ```sh
 cargo xtask ping /dev/cu.usbserial-XXXX
-cargo xtask backup /dev/cu.usbserial-XXXX
+cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
 cargo xtask flash /dev/cu.usbserial-XXXX
 ```
 

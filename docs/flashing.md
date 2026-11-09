@@ -49,12 +49,12 @@ This reads the chip's System Information Block and writes no memory, but don't c
 Do this before you flash anything. It's the only copy of Wurkkos's build and its calibration that you'll have.
 
 ```sh
-cargo xtask backup /dev/cu.usbserial-XXXX
+cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
 ```
 
-That puts the chip in programming mode, checks it's an ATtiny1616, and saves `backup/flash.hex` (all 16 KB), `backup/eeprom.hex` and `backup/fuses.hex`. The fuses are there for reference only. It refuses to run if `backup/flash.hex` already exists, so a second run can't overwrite your factory copy with this firmware.
+That puts the chip in programming mode, checks it's an ATtiny1616, and saves `flash.hex` (all 16 KB), `eeprom.hex` and `fuses.hex` into the directory you name. The fuses are there for reference only. It refuses to run if that directory already has a `flash.hex`, so a second run can't overwrite your factory copy with this firmware.
 
-`backup/` is git-ignored. Copy it somewhere safe too.
+The directory holds one chip's backup, and nothing in the files says which chip. Give each chip its own, such as `backup/torch` here and `backup/breakout` for a spare. The path is used as given, so run the command from the repo root for it to land in the repo's `backup/`, which is git-ignored. Copy it somewhere safe too. There's no default: leave the directory off and you get the usage text.
 
 ## The first flash is `first-light`
 
@@ -86,7 +86,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 
 If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again.
 
-Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and wrong for a build of this firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
+Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and wrong for a build of this firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
 A flash doesn't power-cycle the chip, so take the probe off with the cell out and leave it a few seconds, so VCC really collapses, before putting the cell in. Otherwise what the old firmware left in the reset flags could look like a hang.
 
@@ -98,17 +98,19 @@ The firmware quietly holds the light at level 50 if a check at power-on fails: f
 
 1. **A watchdog reset.** Take the cell out, wait a few seconds, and put it back. That's the only one this clears, so if the cap's gone, something bit. It might be a real hang, or the reset flags left over from before a flash, and if it comes back after use, it's the firmware or the watchdog's window, which nobody's seen on a real chip.
 2. **The CRC.** A cap straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
-3. **The fuses.** Compare `backup/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a cap. A capped torch is a working torch.
+3. **The fuses.** Compare `backup/torch/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a cap. A capped torch is a working torch.
 
 The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
 
 ## Going back
 
-`restore` puts your backup's flash and EEPROM back. It writes every EEPROM page, blank ones included, since with EESAVE set the old contents survive the erase.
+`restore` puts a backup's flash and EEPROM back. It writes every EEPROM page, blank ones included, since with EESAVE set the old contents survive the erase.
 
 ```sh
-cargo xtask restore /dev/cu.usbserial-XXXX
+cargo xtask restore /dev/cu.usbserial-XXXX backup/torch
 ```
+
+It writes whichever directory you name and can't tell whose backup that is, so check it's this torch's before you run it.
 
 For current Anduril, download a release zip from [ToyKeeper's releases](https://github.com/ToyKeeper/anduril/releases) and pull the TS26 build out of its `hex/` directory. Anduril's `MODELS` file lists model 0721 as `wurkkos-ts26`, and the hex is named after the release, so in `anduril.r2026-10-26.zip` it's `hex/anduril.r2026-10-26.wurkkos-ts26.hex`. Flash that.
 

@@ -89,9 +89,9 @@ The TS21 was lost on 2026-11-06 after the Friend was hand-held on its pads, and 
 - **Never put the meter in series above 3 A.** Turbo draws more than the meter's 10 A range, and the level that gets to 3 A isn't known yet. Start low and ramp up slowly, and stop at 3 A whatever the level.
 - **Stay with it in short bursts above level 75.** The thermal constants have never met this head, and the cell's unprotected. A hand on the head is the only thermometer here, so stop when it's uncomfortable. `ramp::CEILING` holds the light at level 120 until stage 7 is done.
 - **Don't take the cell under 2.8 V.** The firmware should stop it sooner, but that's one of the things being tested. `first-light` has no protection at all, so don't leave a cell in it.
-- **Keep the two backups apart.** `cargo xtask backup` always writes to `backup/`, and nothing in a backup says which chip it came from. Move the breakout's to `backup-breakout/` before stage 1, or `restore` could put seesaw on the torch.
+- **Keep the two backups apart.** `backup` and `restore` take a directory after the port, and each chip gets its own: `backup/breakout` for the breakout, `backup/torch` for the torch. The path is used as given, so run every command here from the repo root. Nothing in a backup says which chip it came from, and `restore` writes whichever directory it's given, so read the directory in the command before you run it. The wrong one puts seesaw on the torch.
 
-Any firmware problem below is recoverable while the chip still talks: flash and EEPROM are all that ever change, so `cargo xtask restore <port>` puts the stock light back whatever state it's in. A torch that stops talking isn't recoverable by anything in this plan.
+Any firmware problem below is recoverable while the chip still talks: flash and EEPROM are all that ever change, so `cargo xtask restore <port> backup/torch` puts the stock light back whatever state it's in. A torch that stops talking isn't recoverable by anything in this plan.
 
 ## Stage 0: the breakout
 
@@ -104,14 +104,14 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | # | Do | Needs | Expect | Rehearses |
 |---|---|---|---|---|
 | 0.1 | `cargo xtask ping <port>`, ten times | | `found tinyAVR` and the same string every time (a TS21 says `P:0D:0-3`). A first attempt that only works on the retry would be the pulse holding UPDI in reset | 1.7 |
-| 0.2 | `cargo xtask backup <port>`, then rename `backup/` to `backup-breakout/` | | `flash.hex`, `eeprom.hex`, `fuses.hex` | 1.8 |
-| 0.3 | Read `backup-breakout/fuses.hex` against `selftest::Fuses::ok`, as 1.9 | | Seesaw might not use the factory fuses. If it fails, the full firmware caps itself here for a good reason, so 0.11 can't work. Don't write the fuses | 1.9 |
+| 0.2 | `cargo xtask backup <port> backup/breakout` | | `flash.hex`, `eeprom.hex` and `fuses.hex` in `backup/breakout` | 1.8 |
+| 0.3 | Read `backup/breakout/fuses.hex` against `selftest::Fuses::ok`, as 1.9 | | Seesaw might not use the factory fuses. If it fails, the full firmware caps itself here for a good reason, so 0.11 can't work. Don't write the fuses | 1.9 |
 | 0.4 | Flash `first-light` as in [flashing.md](flashing.md#the-first-flash-is-first-light) | First light | Verify passes. `cargo xtask hex` on that commit says 628 bytes | 2.2 |
 | 0.5 | LEDs on. 1C on, 1C off, a few dozen times | First light | Both LEDs follow the clicks | 3.2 |
 | 0.6 | LEDs off, light on. Meter on frequency on SCL, then DC volts | First light | 19.6 kHz, which is 10 MHz / (2 × 255). A wrong clock is unmistakable. DC volts should be about 3.9% of VCC (duty 10 of 255), about 130 mV at 3.3 V | The 10 MHz clock and dual-slope PWM on silicon |
 | 0.7 | DC volts on pin 7 (PB2), off, then on, then through a power cycle by the Friend | First light | 0 V off, VCC on, and never high after a power-up without a click | PB2's order, as far as a meter can |
 | 0.8 | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | First light | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
-| 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port>` with `backup-breakout/` put back as `backup/`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
+| 0.9 | `cargo xtask flash <port>`, then `cargo xtask restore <port> backup/breakout`, then `flash` again | Main | All verify. Seesaw comes back in the middle, which proves `restore` before the torch needs it | 4.1, and `restore`, which nothing else tests |
 | 0.10 | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the LED on pin 7 never staying lit | 4.3 |
 | 0.11 | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so go through the suspects in 6.1 here, where it costs nothing | 6.1 |
 | 0.12 | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
@@ -136,8 +136,8 @@ The last chance to measure Anduril, and the first run of the JLHawaii808 kit on 
 | 1.5 | Continuity from each pad to the battery negative contact, then ohms from each pad to the positive contact | Exactly one pad is ground. Write down the rest. If no pad is ground, stop | "Check their order with a multimeter" |
 | 1.6 | Ohms between each pair of pads, both ways round | Write them down as the baseline. It might drift as something charges from the meter. About 2.5 Ω between all three is what the dead TS21 read, so a reading like that on a healthy torch would be news, and it means stop | |
 | 1.7 | Friend away. `cargo xtask ping <port>`, first with the probe touching nothing, then on the pads | In the air, "no reply from the chip", which proves the port and the adapter's echo with no chip at risk. "Nothing echoed back" in the air means the adapter's the problem. On the pads, `found tinyAVR` and something like `P:0D:0-3`. "Nothing echoed back" on the pads means something's pulling the line down, so stop and measure | First half of "ping, back up and flash" |
-| 1.8 | `cargo xtask backup <port>`, then copy that directory somewhere safe. It's the only copy of this torch's calibration | `flash.hex`, `eeprom.hex`, `fuses.hex` | Second half |
-| 1.9 | Read `backup/fuses.hex` against `selftest::Fuses::ok`. The bytes run `WDTCFG`, `BODCFG`, `OSCCFG`, reserved, `TCD0CFG`, `SYSCFG0`, `SYSCFG1`, `APPEND`, `BOOTEND`, reserved, `LOCKBIT` | `WDTCFG` 0, `OSCCFG.FREQSEL` 20 MHz with `OSCLOCK` clear, `SYSCFG0.RSTPINCFG` UPDI, `APPEND` and `BOOTEND` 0. The TS21's were `00 00 02 FF 00 F6 07 00 00 FF C5` | That the fuse check passes on a real TS26 |
+| 1.8 | `cargo xtask backup <port> backup/torch`, then copy that directory somewhere safe. It's the only copy of this torch's calibration | `flash.hex`, `eeprom.hex` and `fuses.hex` in `backup/torch` | Second half |
+| 1.9 | Read `backup/torch/fuses.hex` against `selftest::Fuses::ok`. The bytes run `WDTCFG`, `BODCFG`, `OSCCFG`, reserved, `TCD0CFG`, `SYSCFG0`, `SYSCFG1`, `APPEND`, `BOOTEND`, reserved, `LOCKBIT` | `WDTCFG` 0, `OSCCFG.FREQSEL` 20 MHz with `OSCLOCK` clear, `SYSCFG0.RSTPINCFG` UPDI, `APPEND` and `BOOTEND` 0. The TS21's were `00 00 02 FF 00 F6 07 00 00 FF C5` | That the fuse check passes on a real TS26 |
 | 1.10 | Read `BODCFG` and `SYSCFG1.SUT` from the same file | The TS21's were `BODCFG` 0x00 and `SUT` 64 ms. This board might differ, and the firmware's hang check wants to know if the BOD's on (see 6.3) | Whether the BOD's on here |
 
 If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signature, and the full firmware would quietly cap itself at level 50. That's worth understanding first.
@@ -168,7 +168,7 @@ The proof that this board does what the repo thinks. In a dark room.
 | 3.7 | Cell out, head off: ohms from PB2 to ground, if you can reach the pin | Tens of kΩ or less means a pull-down, which settles the open question. Open means there isn't one, and 3.1's result is all that stands between a reset and a floating enable | "What holds PB2 low" |
 | 3.8 | Cell out. Ohms between the pads, then `cargo xtask ping <port>` | Same as 1.6, and the chip still talks | |
 
-**Stage 3 is the gate.** All of it passes, or the full firmware doesn't go on. If the light won't come on, `restore` puts Anduril back, and a stock light that works means the fault's in `first-light` and how it reads this board, which is a far smaller place to look than the full firmware.
+**Stage 3 is the gate.** All of it passes, or the full firmware doesn't go on. If the light won't come on, `cargo xtask restore <port> backup/torch` puts Anduril back, and a stock light that works means the fault's in `first-light` and how it reads this board, which is a far smaller place to look than the full firmware.
 
 Write the result in the [table](#results) before going on.
 
