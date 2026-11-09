@@ -58,7 +58,7 @@ Wiring, with the Friend's slide switch on 3 V:
 - A tactile switch from pin 1 to G. Mind which legs are joined: the 12 mm ones have four.
 - A blue LED from SCL to G and a second from pin 7 to G, cathodes to G.
 
-At 3.3 V a blue LED's forward voltage does most of the current limiting, so it's fine straight on a pin for this. At 5 V only the pin's own drive limits it, which could pass the 40 mA absolute maximum (DS40002204A table 36-1), so **keep the switch on 3 V** or add 1 kΩ in series. The header strips come with the board and need soldering.
+At 3.3 V a blue LED's forward voltage does most of the current limiting, so it's fine straight on a pin for this. At 5 V only the pin's own drive limits it, which could pass the 40 mA absolute maximum (DS40002204A table 36-1), so **keep the switch on 3 V** or add 1 kΩ in series. The same goes for the JLHawaii808 kit's 4.5 V in rows 0.16 on, since VCC is whatever's on Vin: LEDs off the pins, or 1 kΩ in series. The header strips come with the board and need soldering.
 
 What the breakout can't tell you: anything about the driver. There's no MP3432, no regulator and no emitters. PB0's pull-up means SCL goes high through a reset where the torch's pin floats, so a glow on that LED at power-on is expected here and says nothing about the torch. And it's a different chip from the torch's, possibly another silicon revision, so a pass here makes a torch pass likely without closing a roadmap item.
 
@@ -95,11 +95,11 @@ Any firmware problem below is recoverable while the chip still talks: flash and 
 
 ## Stage 0: the breakout
 
-Every step of the first flash, rehearsed on a chip that doesn't matter. Wired as in [the spare chip kit](#the-spare-chip-kit), powered by the Friend, with the LEDs off the pins while the meter's on them, since they'd drag the reading. Volts are against G, and VCC is whatever the meter reads on Vin.
+Every step of the first flash, rehearsed on a chip that doesn't matter. Wired as in [the spare chip kit](#the-spare-chip-kit), powered by the Friend until 0.16, with the LEDs off the pins while the meter's on them, since they'd drag the reading. Volts are against G, and VCC is whatever the meter reads on Vin.
 
 The breakout ships running seesaw, so if the chip's locked, 0.2 will say it didn't enter programming mode. Stop there: the programmer won't unlock a chip.
 
-This proves `xtask` against a real chip using the Friend. It doesn't prove the JLHawaii808 kit, whose probe won't fit the breakout's headers. A failure here might also be the Friend's pulse rather than `xtask`, so a flaky result isn't a verdict on the torch's adapter.
+Rows 0.1 to 0.15 prove `xtask` against a real chip using the Friend. A failure there might be the Friend's pulse rather than `xtask`, so a flaky result isn't a verdict on the torch's adapter. Rows 0.16 to 0.20 put the Friend away and run the JLHawaii808 kit against the same chip, so the torch isn't the first chip that adapter ever meets. The kit's probe won't sit on the breakout's headers, so that's on jumper leads, and it proves the adapter and its pin order. It can't prove the probe's fit on the pads, or anything about the torch's board.
 
 | # | Do | Needs | Expect | Rehearses |
 |---|---|---|---|---|
@@ -118,10 +118,15 @@ This proves `xtask` against a real chip using the Friend. It doesn't prove the J
 | 0.13 | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |
 | 0.14 | Develop T2 here | T2 | Blinks a number you can read | 7.2 |
 | 0.15 | T4: power-down straight after a feed. Pick a level away from 52, click off, leave it an hour, then 1C, then 2C and DC volts on SCL | T4 | Comes back at the level you left, and 51% at the top. Back at 52 means the chip reset, and 3.6% means a bite | 6.4 |
+| 0.16 | Unplug the Friend and put it away. Then name the kit's three pins before they touch anything: unplugged, continuity from each to the USB plug's shell, then plugged in, DC volts from the other two to that one. Then its three lines to the breakout's UPDI, Vin and G, on jumper leads, or with its pogo pins held on the header pins. LEDs off the pins, or 1 kΩ in series | | One pin is continuous with the shell, and that's ground (likely, since a USB shell is normally grounded, and I haven't checked this kit's). The other two should both read high, the supply at about 4.5 V and the UPDI line because a serial line idles high, so voltage alone doesn't say which is which. Go by the kit's markings, and 0.17 proves them. On the breakout, about 4.5 V on Vin, and the green power LED lit | The probe's pin order, for 1.7 |
+| 0.17 | `cargo xtask ping <port>`, first with the leads off the breakout, then on it | | Off it, "no reply from the chip", which proves the port and the kit's echo. On it, `found tinyAVR` and the same string as 0.1. That settles 0.16's names too: with the supply and UPDI lines swapped it wouldn't answer (my reasoning), and here that costs nothing | 1.7, with the adapter that goes on the torch |
+| 0.18 | `cargo xtask backup <port> backup/breakout-kit` | | `flash.hex`, `eeprom.hex` and `fuses.hex` in `backup/breakout-kit`. The flash is whatever build the chip holds by now, so it's only proof that `backup` works through this adapter. Its `fuses.hex` should match `backup/breakout/fuses.hex` byte for byte, since nothing here writes fuses | 1.8 |
+| 0.19 | Flash `first-light` from main, as 0.4. Then a click, with the meter on pin 7 | First light | The same warning, and verify passes. 0 V off and about VCC on, so it runs at 4.5 V too | 2.2, with the adapter and the command the torch gets |
+| 0.20 | `cargo xtask restore <port> backup/breakout`, then `ping` | | Verifies, and it still talks. Seesaw's back, and `restore` has run through this adapter | `restore`, before the torch needs it |
 
 Stop at anything unexplained. What goes wrong here would've gone wrong on the torch, except here `flash` puts it right.
 
-Unplug the Friend and put it away before going on.
+The Friend's been away since 0.16. Check it still is before going on.
 
 ## Stage 1: the pads, and stock
 
