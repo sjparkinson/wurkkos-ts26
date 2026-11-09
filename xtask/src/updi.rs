@@ -17,6 +17,7 @@
 //! first can leave it unrecoverable without a high-voltage programmer.
 
 use std::io;
+use std::time::{Duration, Instant};
 
 // NVMCTRL.CTRLA commands and NVMCTRL.STATUS bits.
 use ts26::regs::{
@@ -61,6 +62,13 @@ pub trait Wire {
     /// Holds the line low for two long frames, which resets UPDI's own
     /// state machine (not the chip) so it listens for a fresh SYNC.
     fn double_break(&mut self) -> io::Result<()>;
+    /// The time, which the programmer's timeouts count against. A real
+    /// connection takes the clock's; the fake chip in the tests keeps its
+    /// own, a round trip per reply, so a timeout can't pass on a count of
+    /// polls and the tests don't wait for real.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -110,6 +118,9 @@ const KEY_NVMPROG: &[u8; 8] = b"NVMProg ";
 /// The most a single REPEAT can cover.
 const MAX_BLOCK: usize = 256;
 
+/// How long the chip gets to come out of reset into programming mode.
+const PROGMODE_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub struct Programmer<W: Wire> {
     wire: W,
 }
@@ -158,11 +169,24 @@ impl<W: Wire> Programmer<W> {
             return Err("the chip didn't accept the NVM programming key".into());
         }
 
+        // The chip isn't in programming mode until it's through reset, and
+        // pymcuprog and avrdude both expect it to read as locked until then,
+        // so this waits for both bits. That's timed by the clock, not by a
+        // count of polls, because a poll's round trip depends on the
+        // adapter's USB latency, and a fast adapter could run out of polls
+        // inside the start-up time. FUSE.SYSCFG1's SUT sets that, and 64 ms
+        // is the longest it goes (ATDF), whatever this chip's fuse holds.
+        // avrdude allows 100 ms to unlock and 500 ms more to reach
+        // programming mode; one 500 ms window covers both here.
         self.reset()?;
-        for _ in 0..100 {
+        let deadline = self.wire.now() + PROGMODE_TIMEOUT;
+        loop {
             let status = self.ldcs(ASI_SYS_STATUS)?;
             if status & SYS_STATUS_LOCKSTATUS == 0 && status & SYS_STATUS_NVMPROG != 0 {
                 return Ok(());
+            }
+            if self.wire.now() >= deadline {
+                break;
             }
         }
         Err(
@@ -496,6 +520,41 @@ mod tests {
         p.check_signature().unwrap();
     }
 
+    /// More polls than the old fixed count of 100 allowed, which a fast
+    /// adapter could get through inside a 64 ms start-up time.
+    #[test]
+    fn waits_for_the_chip_to_start_up_on_a_fast_or_slow_adapter() {
+        // SUT is 64 ms at most; 400 ms is near the end of the window. A fast
+        // adapter fits 4,000 polls in that, more than any fixed count this
+        // used to have, and a slow one 25.
+        for round_trip in [Duration::from_micros(100), Duration::from_millis(16)] {
+            let mut tiny = Tiny::new();
+            tiny.start_up = Duration::from_millis(400);
+            tiny.round_trip = round_trip;
+            let mut p = Programmer::connect(tiny).unwrap();
+            p.enter_progmode()
+                .unwrap_or_else(|e| panic!("{round_trip:?} a round trip: {e}"));
+            p.check_signature().unwrap();
+        }
+    }
+
+    #[test]
+    fn gives_up_on_the_clock_not_a_count_of_polls() {
+        for round_trip in [Duration::from_micros(100), Duration::from_millis(16)] {
+            let mut tiny = Tiny::new();
+            tiny.start_up = Duration::from_millis(600);
+            tiny.round_trip = round_trip;
+            let mut p = Programmer::connect(tiny).unwrap();
+            let before = p.wire.elapsed;
+            assert!(p.enter_progmode().unwrap_err().contains("programming mode"));
+            let waited = p.wire.elapsed - before;
+            assert!(
+                (PROGMODE_TIMEOUT..PROGMODE_TIMEOUT + 4 * round_trip).contains(&waited),
+                "{round_trip:?} a round trip: gave up after {waited:?}"
+            );
+        }
+    }
+
     #[test]
     fn refuses_another_chip() {
         let mut tiny = Tiny::new();
@@ -683,6 +742,18 @@ mod tests {
             pub breaks: usize,
             pub updi_disabled: bool,
             pub in_reset: bool,
+            /// How long after a reset the chip's still starting up, reading
+            /// as locked and not in programming mode.
+            pub start_up: Duration,
+            /// How long each reply takes to come back: the adapter's USB
+            /// latency, near enough. The fake clock moves on by this much
+            /// per `recv`.
+            pub round_trip: Duration,
+            /// The fake clock, as time since `clock_start`.
+            pub elapsed: Duration,
+            clock_start: Instant,
+            /// When the start-up after the last reset ends.
+            started_at: Duration,
             /// The EESAVE fuse: EEPROM survives a chip erase.
             pub eesave: bool,
             /// A chip erase that silently does nothing.
@@ -715,6 +786,13 @@ mod tests {
                     breaks: 0,
                     updi_disabled: false,
                     in_reset: false,
+                    start_up: Duration::ZERO,
+                    // A full-speed USB adapter's frame, about the best a
+                    // round trip gets.
+                    round_trip: Duration::from_millis(1),
+                    elapsed: Duration::ZERO,
+                    clock_start: Instant::now(),
+                    started_at: Duration::ZERO,
                     eesave: false,
                     ignores_chip_erase: false,
                     page_writes: 0,
@@ -849,6 +927,7 @@ mod tests {
                 match reg {
                     CS_STATUSA => 0x30, // UPDI revision 3
                     ASI_KEY_STATUS => self.key_status,
+                    ASI_SYS_STATUS if self.elapsed < self.started_at => SYS_STATUS_LOCKSTATUS,
                     ASI_SYS_STATUS => {
                         let lock = if self.locked {
                             SYS_STATUS_LOCKSTATUS
@@ -869,6 +948,7 @@ mod tests {
                     ASI_RESET_REQ if value == RESET_REQ_APPLY => self.in_reset = true,
                     ASI_RESET_REQ => {
                         self.in_reset = false;
+                        self.started_at = self.elapsed + self.start_up;
                         self.progmode = self.key_status & KEY_STATUS_NVMPROG != 0 && !self.locked;
                         self.key_status = 0;
                     }
@@ -964,6 +1044,7 @@ mod tests {
             }
 
             fn recv(&mut self, buf: &mut [u8]) -> io::Result<()> {
+                self.elapsed += self.round_trip;
                 if self.asleep {
                     self.replies.clear();
                     self.expect = Expect::Sync;
@@ -984,6 +1065,10 @@ mod tests {
                 self.expect = Expect::Sync;
                 self.replies.clear();
                 Ok(())
+            }
+
+            fn now(&self) -> Instant {
+                self.clock_start + self.elapsed
             }
         }
     }
