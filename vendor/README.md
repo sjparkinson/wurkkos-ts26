@@ -12,4 +12,4 @@ Microchip's device description for the ATtiny1616. It's the source for every reg
 
 The rest of the pack is C and assembler support (headers, startup objects, linker specs) and MPLAB device files, all generated from the same data, so it isn't vendored. `include/avr/iotn1616.h` is handy if you want the avr-libc names for something.
 
-To update: the latest version is in the `Microchip.ATtiny_DFP.pdsc` entry of [the pack index](https://packs.download.microchip.com/index.idx). An `.atpack` is a zip. Replace the file with `atdf/ATtiny1616.atdf` from the new pack, update the version and both hashes above, and run `cargo test --workspace`, which checks every constant in the repo against it.
+To update, the latest version is in the `Microchip.ATtiny_DFP.pdsc` entry of [the pack index](https://packs.download.microchip.com/index.idx). An `.atpack` is a zip. Replace the file with `atdf/ATtiny1616.atdf` from the new pack, update the version and both hashes above, and run `cargo test --workspace`, which checks every constant in the repo against it.

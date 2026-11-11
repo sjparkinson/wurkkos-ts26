@@ -13,7 +13,7 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 - [ ] Find the flashing pads on a real TS26 and check their order with a multimeter
 - [ ] Ping, back up and flash a real TS26, with only the plain UPDI adapter, and `first-light` (commit `9d3b7dc`) first
 - [ ] Disassemble `backup/torch` and check what docs/hardware.md takes from the stock firmware's source against what the stock build really writes to the pins, TCA0 and the ADC
-- [ ] Check the boost enable and PWM sequencing on a real light: does it come on cleanly at duty 10, with no flash at turn-on?
+- [ ] Check the boost enable and PWM sequencing on a real light. Does it come on cleanly at duty 10, with no flash at turn-on?
 - [ ] Measure what PWM duty does to output on the MP3432, so the ramp has something to stand on
 
 ## 2. It's safe to leave a cell in
@@ -25,7 +25,7 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 - [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. The firmware reads it with the stock firmware's slope of 1094. Still needs checking against a multimeter
 - [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge. A cell it can't read holds the light at level 50 and turns it off after five minutes
 - [x] Thermal regulation from the internal temperature sensor. Firmware only, and every constant's unmeasured. `ramp::CEILING` holds the light at level 120 until it's been run on a real light
-- [x] A watchdog, so a hang can't leave the boost converter running. Firmware only: a plain window, with no proof at power-on, so nobody's seen it bite. The simulator can't show that either, since it doesn't model resets. The watchdog shares the tick's oscillator, so a tick that stops while the light's on has its own deadline, a count of PWM cycles, which turns the light off and powers down for good
+- [x] A watchdog, so a hang can't leave the boost converter running. Firmware only, with a plain window and no proof at power-on, so nobody's seen it bite. The simulator can't show that either, since it doesn't model resets. The watchdog shares the tick's oscillator, so a tick that stops while the light's on has its own deadline, a count of PWM cycles, which turns the light off and powers down for good
 - [x] Check flash against its CRC, and read the fuses back, at power-on. Firmware only. A failure, or a watchdog reset, caps the light at level 50. Neither check has seen a real chip
 
 ## 3. It's nice to use
@@ -33,8 +33,8 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 - [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on my own curve
 - [x] The RGB aux LEDs on PC1 to PC3. Firmware only
 - [x] Remember the level in RAM, which a cell swap or any reset loses. Firmware only
-- [x] A simulator: `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
-- ~~Battery check~~ Struck: no magic flashes, so no 3C voltage blink (docs/ui.md)
+- [x] A simulator. `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
+- ~~Battery check~~ Struck. No magic flashes, so no 3C voltage blink (docs/ui.md)
 
 ## Maybe
 

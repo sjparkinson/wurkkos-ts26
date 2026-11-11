@@ -4,7 +4,7 @@
 
 ## Only the plain adapter goes on this torch
 
-Only a non-high-voltage UPDI adapter ever goes on the TS26's pads. Adafruit's High Voltage UPDI Friend never does, and that includes trying to recover a torch that's stopped talking. There's no exception for a torch that's already dead: if UPDI's gone, the torch is gone.
+Only a non-high-voltage UPDI adapter ever goes on the TS26's pads. Adafruit's High Voltage UPDI Friend never does, and that includes trying to recover a torch that's stopped talking. There's no exception for a torch that's already dead. If UPDI's gone, the torch is gone.
 
 I lost the TS21 on 2026-11-06 after hand-holding the Friend on its pads. It then measured about 2.5 Ω between all three pads. I think 12 V or a slipped probe did it, and I can't prove either.
 
@@ -56,13 +56,13 @@ That puts the chip in programming mode, checks it's an ATtiny1616, and saves `fl
 
 If it warns that the serial number can't tell one chip from another (all FF or all 00), the backup is saved all the same, but `restore` will refuse it. Stop there, before anything goes over the factory firmware.
 
-The directory holds one chip's backup. Give each chip its own, such as `backup/torch` here and `backup/breakout` for a spare. The path is used as given, so run the command from the repo root for it to land in the repo's `backup/`, which is git-ignored. Copy it somewhere safe too. There's no default: leave the directory off and you get the usage text.
+The directory holds one chip's backup. Give each chip its own, such as `backup/torch` here and `backup/breakout` for a spare. The path is used as given, so run the command from the repo root for it to land in the repo's `backup/`, which is git-ignored. Copy it somewhere safe too. There's no default. Leave the directory off and you get the usage text.
 
 ## The first flash is `first-light`
 
 The first thing that goes on a torch is `first-light` and nothing else, the firmware as of commit `9d3b7dc`. It's a 628-byte image that clicks on and off at one dim level. It has no watchdog, no sleep and no interrupts, so there's very little in it to hang, and a light that works shows the pads, the programmer, the boost enable and the PWM all do what this repo thinks they do.
 
-Build it in a second worktree and flash it from main, so the image is `9d3b7dc`'s and the programmer is main's:
+Build it in a second worktree and flash it from main, so the image is `9d3b7dc`'s and the programmer is main's.
 
 ```sh
 git worktree add --detach ../ts26-first-light 9d3b7dc
@@ -72,7 +72,7 @@ cargo xtask flash /dev/cu.usbserial-XXXX ../ts26-first-light/target/wurkkos-ts26
 
 `cargo xtask hex` in that worktree should report 628 bytes of flash, and it did when I built it on 2026-11-09. Checking out `9d3b7dc` and running `cargo xtask flash` there would flash the same image with that commit's programmer, which is older than main's and doesn't have its later fixes or its clearer errors.
 
-Main's `flash` takes the file because its name has `ts26` in it. It then warns that the image isn't the full 16,384 bytes with a CRC, and that a build of this firmware like that caps itself at level 50. Expect the warning and carry on: `first-light` has no CRC check, so nothing in it does any capping. Keep the worktree until stage 3 has passed, since a torch that goes dark later gets `first-light` again.
+Main's `flash` takes the file because its name has `ts26` in it. It then warns that the image isn't the full 16,384 bytes with a CRC, and that a build of this firmware like that caps itself at level 50. Expect the warning and carry on. `first-light` has no CRC check, so nothing in it does any capping. Keep the worktree until stage 3 has passed, since a torch that goes dark later gets `first-light` again.
 
 The full firmware only goes on once that's proven on the light, which is stage 3 of [breakout.md](breakout.md#stage-3-first-light-on-the-light). The TS21 went dark straight after a flash that verified, of a firmware with far more going on at start-up, and a firmware hang wasn't ruled out. Starting small means a dark torch here has a short list of causes.
 
@@ -92,7 +92,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 4. reads all 16 KB back and compares
 5. resets the chip and turns UPDI off, so the new firmware starts
 
-If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, for a `backup` whose read fails and for a `restore` that's refused: the programmer resets the chip and turns UPDI off before it reports the error.
+If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, for a `backup` whose read fails and for a `restore` that's refused, because the programmer resets the chip and turns UPDI off before it reports the error.
 
 Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for the stock firmware and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
@@ -102,7 +102,7 @@ If the light goes dark after a flash that verified, run `cargo xtask peek /dev/c
 
 ## If it's capped at level 50
 
-The firmware quietly holds the light at level 50 if a check at power-on fails: flash doesn't match its CRC, the fuses aren't what it expects, or the watchdog reset the chip. It doesn't flash or tell you which, and it still works, so all you'll see is the ramp stopping low and turbo looking dim. None of the three has met a real TS26, so suspect the checks before the torch. In this order:
+The firmware quietly holds the light at level 50 if a check at power-on fails (flash doesn't match its CRC, the fuses aren't what it expects, or the watchdog reset the chip). It doesn't flash or tell you which, and it still works, so all you'll see is the ramp stopping low and turbo looking dim. None of the three has met a real TS26, so suspect the checks before the torch, in this order.
 
 1. **A watchdog reset.** Take the cell out, wait a few seconds, and put it back. That's the only one this clears, so if the cap's gone, something bit. It might be a real hang, or the reset flags left over from before a flash, and if it comes back after use, it's the firmware or the watchdog's window, which nobody's seen on a real chip.
 2. **The CRC.** A cap straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
@@ -110,7 +110,7 @@ The firmware quietly holds the light at level 50 if a check at power-on fails: f
 
 The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
 
-One more thing caps the light at level 50, and it isn't a check at power-on: a cell voltage the firmware can't believe, under 1.00 V or over 4.40 V by its own sums, which is also what a dead ADC reads as. It's the only cause that then turns the light off after five minutes and lets a click bring it back for five more. So a light that goes out five minutes after coming on, and comes back with 1C, is this and not dead firmware. On a torch it points at the divider on PA1 or the 1094 calibration, and neither has met a real TS26.
+One more thing caps the light at level 50, and it isn't a check at power-on. It's a cell voltage the firmware can't believe, under 1.00 V or over 4.40 V by its own sums, which is also what a dead ADC reads as. It's the only cause that then turns the light off after five minutes and lets a click bring it back for five more. So a light that goes out five minutes after coming on, and comes back with 1C, is this and not dead firmware. On a torch it points at the divider on PA1 or the 1094 calibration, and neither has met a real TS26.
 
 ## Going back
 

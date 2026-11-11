@@ -30,9 +30,9 @@ The rustc book says `avr-none` needs avr-gcc "because a couple of intrinsics (li
 rust-lld: error: undefined symbol: __mulsi3
 ```
 
-The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. I checked this in the TS21 repo on the nightly-2026-09-23 build: `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
+The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. I checked this in the TS21 repo on the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
 
-What does work: 8- and 16-bit multiplication compile to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
+What does work is 8- and 16-bit multiplication, which compiles to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
 
 So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of two or a runtime value. Host tests won't catch a slip here, since the host has a 32-bit multiply; `cargo xtask hex` will. If something genuinely needs a 32-bit product, these are the options, in order of preference.
 
@@ -63,20 +63,20 @@ Up to nightly-2026-09-23 the TS21 repo also needed `--cfg no_fp_fmt_parse` in `.
 
 ## Looking inside the ELF
 
-For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. It's optional, since nothing in the build needs it, so it isn't in `rust-toolchain.toml`. Add it once to the pinned nightly:
+For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. It's optional, since nothing in the build needs it, so it isn't in `rust-toolchain.toml`. Add it once to the pinned nightly.
 
 ```sh
 rustup component add llvm-tools --toolchain nightly-2026-11-02
 ```
 
-The binaries aren't on your `PATH`. They live in the toolchain's sysroot, under the host triple. Run this from the repo so rustup picks the pinned nightly:
+The binaries aren't on your `PATH`. They live in the toolchain's sysroot, under the host triple. Run this from the repo so rustup picks the pinned nightly.
 
 ```sh
 LLVM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
 ELF=target/avr-none/release/ts26.elf
 ```
 
-Then, after `cargo xtask hex` (it leaves the ELF behind even when its checks fail):
+Then run these after `cargo xtask hex` (it leaves the ELF behind even when its checks fail).
 
 ```sh
 "$LLVM/llvm-objdump" -d --no-show-raw-insn "$ELF"                          # everything, vector table first
