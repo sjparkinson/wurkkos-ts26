@@ -8,7 +8,7 @@ Each check says what it needs:
 
 - **First light**: `first-light`, the firmware as of commit `9d3b7dc`, built in its own worktree and flashed with main's programmer.
 - **Main**: the full firmware on main.
-- **T1**, **T2**, **T3**, **T4**: a [test build](#test-builds).
+- **T1** to **T5**: a [test build](#test-builds).
 
 The Status column says where each row stands: blank until it's been done, then Pass, Fail or Skipped. A Fail isn't always a stop, so read the row's own words for what follows, and put the detail in [Results](#results).
 
@@ -117,8 +117,8 @@ Rows 0.1 to 0.15 prove `xtask` against a real chip using the Friend. A failure t
 | 0.8 | Pass | LED on SCL. 1C on, then `cargo xtask peek <port>` (from main, which has it). Then 1C on again and `cargo xtask ping <port>`. Repeat a few times | First light | `peek` reads before UPDI's turned off, so `VPORTB.OUT` with PB2 (0x04) set shows the chip came through the port opening, the pulse and UPDI's enable without a reset. The datasheet doesn't say either way. Then the light going out as each command ends is the System Reset §33.3.2.2.2 says UPDIDIS issues, so that's the expected result, and the light staying on means that reset doesn't happen here. PB2 clear in `peek` means something earlier reset it, which on this adapter could be the pulse. That only decides how far to trust stage 0's results, since the Friend isn't going near the torch. Write it all down | The pulse, and whether `ping` and `peek` reset a running chip |
 | 0.9 | Pass | `cargo xtask flash <port>`, then `cargo xtask restore <port> backup/breakout`, then `flash` again | Main | All verify, and `restore` says the chip's serial number is the one saved in the directory. Seesaw comes back in the middle, which proves `restore` and its serial check before the torch needs them | 4.1, and `restore`, which nothing else tests |
 | 0.10 |  | Clicks, holds and a dozen power cycles | Main | Same feel as the docs/ui.md rows. Dark from a power-up, no reset loop. A loop shows as the LED on pin 7 never staying lit | 4.3 |
-| 0.11 |  | 2C for the top of the ramp, then DC volts on SCL | Main | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so check pin 14 still reads 0.80 to 1.05 V, then go through the suspects in 6.1 here, where it costs nothing | 6.1 |
-| 0.12 |  | The same build, left off for an hour, then the same check | Main | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
+| 0.11 |  | 2C for the top of the ramp, then DC volts on SCL | Main, or T5 on a breakout that fails 0.3 | About 51% of VCC (level 120, 16,637 of 32,640). About 3.6% would mean it's capped at `limits::FAULT_CEILING`, level 50, so check pin 14 still reads 0.80 to 1.05 V, then go through the suspects in 6.1 here, where it costs nothing | 6.1 |
+| 0.12 |  | The same build, left off for an hour, then the same check | Main, or T5 on a breakout that fails 0.3 | Still 51%. Capped means the watchdog bit while it rested, even with `main` idling the tick after each feed | 6.2 |
 | 0.12a |  | Light off. Move pin 14's lead from the divider to G, then 2C, with the meter on SCL and a clock running. At the end 1C again, then put the divider back | Main | About 3.6% of VCC within a couple of seconds, which is the level 50 cap for a cell it can't read. Out by itself five minutes after it came on. 1C brings it back, still capped. Back on the divider, 2C climbs back to 51% within half a minute | Nothing on the torch, whose PA1 can't be unplugged. It's the only time anyone sees this shut-off on a chip |
 | 0.13 |  | T3: a build that stops feeding the watchdog when you hold the switch for ten seconds | T3 | The light goes out within about 100 ms, comes back off, and won't go over level 50 until power's cycled | Nothing on the torch. T3 never goes there |
 | 0.14 |  | Develop T2 here | T2 | Blinks a number you can read | 7.2 |
@@ -253,6 +253,13 @@ None exist yet, and they should stay on a throwaway branch: they aren't the firm
 **T3, a hang on demand.** A build that stops feeding the watchdog when the switch has been held for ten seconds, so a real bite can be seen once. **Breakout only.** It's the only deliberate reset anywhere in this plan, and it isn't going near the torch: the real firmware doesn't do this at start-up, by choice, because of what happened to the TS21.
 
 **T4, power-down after a feed.** `watchdog::Feeder::power_down` in `src/watchdog.rs` returning `resting` alone, dropping the `&& !self.fed`. The simulator checks the firmware against that same function, so it follows without a change. It's the one test build that goes on the torch, after 0.15 passes, and only to find out if the idle in the real firmware can go. It has the real firmware's protection and nothing else changed.
+
+**T5, no fuse check.** The real firmware with `src/main.rs` setting `fuses: false` in place of `!hw::fuses().ok()`. **Breakout only**, for this breakout's SYSCFG0 of `0xFF` (0.3), which caps the real firmware at level 50 for good and makes 0.11, 0.12 and 0.15 unanswerable here. Writing the fuse back would fix it too, but this plan writes no fuses, so the build changes instead. Use it in place of Main for 0.11 and 0.12, and with T4's change as well for 0.15. It needs two things first:
+
+- **T1's `xtask` change.** `cargo xtask hex` won't write it, because the simulator runs docs/ui.md's `fault 2C` example, and a build that ignores the fuses doesn't cap.
+- **Pin 14's divider in place.** Pin 14 on G is a cell the firmware can't read, which caps it at level 50 all the same.
+
+The torch never gets T5. If its own fuses fail at 1.9, that's a stop, not a reason to skip the check.
 
 ## What this kit can't do
 
