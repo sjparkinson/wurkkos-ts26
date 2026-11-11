@@ -20,7 +20,7 @@ The firmware clippy and the xtask commands rebuild `core` with `-Zbuild-std`. Th
 
 Agents in `.claude/agents/` report back and never edit. Use them rather than doing the same work inline:
 
-- `register-checker`: after touching `src/regs.rs`, `src/hw.rs` or `src/rt.rs`.
+- `register-checker`: after touching `src/regs.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`.
 - `avr-codegen`: when `cargo xtask hex` fails to link, or flash or RAM grows and you want to know why.
 - `hardware-researcher`: before writing a new fact into docs/hardware.md.
 - `microchip-docs`: when you need what the datasheet, errata or an app note says. It searches the local PDFs in `docs/microchip/`, which are gitignored and only exist in the main checkout.
@@ -40,8 +40,8 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 - **Read programmer output for what it really says.** A pulled-down UPDI line reads "nothing echoed back", not "no reply", so that message on the pads can mean a short rather than a bad adapter. Both adapters show as CH340 `1a86:7523`, so ask which one's plugged in. `flash` only checks the signature, and a verify doesn't prove the firmware runs. `ping` and `peek` finish with UPDIDIS, which DS §33.3.2.2.2 says issues a System Reset, so don't call them harmless to a running chip. The TS21's pads measured about 1.75 mm pitch, not 1.27, so measure before trusting a probe.
 - **Never write fuses, and never suggest a command that does.** A wrong `SYSCFG0` disables UPDI, and only a high-voltage programmer gets it back, which this torch never gets, so it would be lost. `cargo xtask flash` writes flash only.
 - **The UPDI programmer never writes fuses, the user row or a locked chip.** Don't add any of that without the user asking for it explicitly.
-- **Every register address and bit mask comes from `src/regs.rs`, which `build.rs` generates from the ATDF** (`vendor/ATtiny1616.atdf`) with `generate` in `xtask/src/atdf.rs`. No bare register numbers in `src/hw.rs` or `src/rt.rs`, and nothing typed by hand that the ATDF names: use the generated constant. A number the ATDF doesn't have, like `ADC_SAMPLEN_32US`, goes in `src/regs.rs` by hand with a comment saying why. Use the `register-checker` agent after touching `src/regs.rs`, `src/hw.rs` or `src/rt.rs`, for what the ATDF can't express.
-- **16-bit peripheral registers: low byte first.** Use `write16` in `src/hw.rs`.
+- **Every register address and bit mask comes from `src/regs.rs`, which `build.rs` generates from the ATDF** (`vendor/ATtiny1616.atdf`) with `generate` in `xtask/src/atdf.rs`. No bare register numbers in `src/avr/hw.rs` or `src/avr/rt.rs`, and nothing typed by hand that the ATDF names: use the generated constant. A number the ATDF doesn't have, like `ADC_SAMPLEN_32US`, goes in `src/regs.rs` by hand with a comment saying why. Use the `register-checker` agent after touching `src/regs.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`, for what the ATDF can't express.
+- **16-bit peripheral registers: low byte first.** Use `write16` in `src/avr/hw.rs`.
 - **The boost converter's enable (PB2) is the dangerous pin.** It's low whenever the light's off, including at reset and in `hw::halt`, which is also the panic handler. Turn on by setting the duty and then raising the enable; turn off by dropping the enable and then zeroing the duty. Never give PB2 a pull-up.
 - **PA1 is analogue (the battery divider) and PA0 is UPDI.** `hw::init` turns PA1's digital input buffer off and writes nothing else to either pin. Don't add a pull-up to either.
 - **Logic goes in the library** (`src/lib.rs` and its modules), which is `no_std`, has no `unsafe`, and is tested on the host. `src/main.rs` stays a thin loop.

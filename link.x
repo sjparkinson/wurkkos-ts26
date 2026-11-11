@@ -31,7 +31,7 @@ SECTIONS {
     __data_end = .;
   } > RAM
 
-  /* Where src/rt.rs copies .data from, as a mapped-flash data address. */
+  /* Where src/avr/rt.rs copies .data from, as a mapped-flash data address. */
   __data_load = LOADADDR(.data) + 0x8000;
 
   .bss (NOLOAD) : {

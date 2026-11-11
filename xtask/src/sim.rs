@@ -216,7 +216,7 @@ const FLASH_SIZE: usize = map::FLASH_SIZE;
 /// fixed pattern makes a byte that should have been written stand out.
 const JUNK: u8 = 0xA5;
 
-// The pins, from `ts26::board`, which src/hw.rs uses too.
+// The pins, from `ts26::board`, which src/avr/hw.rs uses too.
 const SWITCH: u8 = 1 << board::SWITCH; // PA5, active low
 const PWM: u8 = 1 << board::PWM; // PB0, the brightness
 const ENABLE: u8 = 1 << board::ENABLE; // PB2, the boost converter
@@ -702,7 +702,7 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// Where src/rt.rs's startup copies and zeroes, as data-space addresses.
+/// Where src/avr/rt.rs's startup copies and zeroes, as data-space addresses.
 struct Layout {
     data: Range<u16>,
     bss: Range<u16>,
@@ -765,8 +765,8 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
     Ok(())
 }
 
-/// Rewrites the `ldi`s in src/rt.rs's startup that load the .data and .bss
-/// addresses, after checking they're the ones expected, in order.
+/// Rewrites the `ldi`s in src/avr/rt.rs's startup that load the .data and
+/// .bss addresses, after checking they're the ones expected, in order.
 fn patch_startup(
     image: &mut [u8],
     reset: usize,
@@ -808,7 +808,7 @@ fn patch_startup(
     let actual: Vec<(u8, u8)> = found.iter().map(|&(_, r, k)| (r, k)).collect();
     if actual != loads(linked) {
         return Err(
-            "src/rt.rs's startup doesn't load the registers sim.rs expects; update `patch_startup`"
+            "src/avr/rt.rs's startup doesn't load the registers sim.rs expects; update `patch_startup`"
                 .into(),
         );
     }

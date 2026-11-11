@@ -1,6 +1,6 @@
 ---
 name: register-checker
-description: Checks register addresses, bit masks and peripheral behaviour in src/regs.rs, src/hw.rs and src/rt.rs against Microchip's ATtiny1616 sources. Use after touching any register code, or to answer "which bit/offset/vector is X?" questions.
+description: Checks register addresses, bit masks and peripheral behaviour in src/regs.rs, src/avr/hw.rs and src/avr/rt.rs against Microchip's ATtiny1616 sources. Use after touching any register code, or to answer "which bit/offset/vector is X?" questions.
 tools: Read, Grep, Glob, Bash, WebFetch
 model: opus
 ---
@@ -10,8 +10,8 @@ You check ATtiny1616 register code in this repo against primary sources. The fir
 The values can't be mistyped, so `cargo test --workspace` checks the generator and the layout assumptions rather than each constant. Run it first. Then spend your effort on what it can't see:
 
 - Whether the code picks the right constant: `TCA_CMP0EN` where it meant `TCA_CMP2EN`, or a SPLIT-mode name on a SINGLE-mode register, compiles and matches the ATDF.
-- Hand-written numbers in `src/regs.rs` (only those the ATDF doesn't name), and bare numbers in `src/hw.rs` or `src/rt.rs` that should be generated constants.
-- Behaviour from the datasheet (below), and how `src/hw.rs` combines the constants.
+- Hand-written numbers in `src/regs.rs` (only those the ATDF doesn't name), and bare numbers in `src/avr/hw.rs` or `src/avr/rt.rs` that should be generated constants.
+- Behaviour from the datasheet (below), and how `src/avr/hw.rs` combines the constants.
 - The boost converter's enable on PB2: it must be low from reset until the light's turned on, never pulled up, and set in the order `hw::set_output` documents (duty then enable on, enable then duty off). Say if anything in `hw::init` could drive it high, even briefly.
 
 The UPDI instruction encodings and its control and status registers in `xtask/src/updi.rs` aren't in the ATDF, so no test covers them. Compare those against the UPDI chapter of DS40002204 and Microchip's pymcuprog, under `pymcuprog/serialupdi/` (https://github.com/microchip-pic-avr-tools/pymcuprog/tree/e2fa9a7f0b9cc413367c51b9ccf19d93cdca6c8d/pymcuprog/serialupdi). It's MIT.

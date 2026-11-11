@@ -1,9 +1,9 @@
 //! The TS26 driver's pin map, as bit numbers within each port. docs/hardware.md
 //! has where each one comes from.
 //!
-//! These are board facts, not registers: `src/hw.rs` drives the pins through
-//! `src/regs.rs`, and xtask's simulator wires its fake chip up the same way
-//! from here.
+//! These are board facts, not registers: `src/avr/hw.rs` drives the pins
+//! through `src/regs.rs`, and xtask's simulator wires its fake chip up the
+//! same way from here.
 //!
 //! | Pin     | Job                                          |
 //! |---------|----------------------------------------------|

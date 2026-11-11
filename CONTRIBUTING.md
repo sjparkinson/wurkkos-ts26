@@ -12,7 +12,7 @@ cargo clippy --package ts26 --lib --bins --examples --release --target avr-none 
 cargo xtask hex
 ```
 
-The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/hw.rs` and `src/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
+The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
 
 ## The simulator
 
@@ -48,8 +48,8 @@ src/selftest.rs   what the checks at power-on found
 src/testing.rs    a fake ADC, readings and the docs/ui.md script reader, shared by the tests and the simulator
 src/regs.rs       register addresses and bit values, generated from the ATDF by build.rs
 src/main.rs       the firmware loop (a stub on the host)
-src/hw.rs         pins, register access and the interrupt handlers (AVR only)
-src/rt.rs         vector table and startup (AVR only)
+src/avr/hw.rs     pins, register access and the interrupt handlers (AVR only)
+src/avr/rt.rs     vector table and startup (AVR only)
 examples/link.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
 xtask/            hex, the simulator, simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
@@ -61,9 +61,9 @@ Keep logic in the library, where `cargo test` can reach it. `src/main.rs` should
 
 ## Registers
 
-There's no PAC, and nothing to add when you need a register. `build.rs` generates a constant for every register, bitfield, named value, memory segment and vector in `vendor/ATtiny1616.atdf`, and `src/regs.rs` includes them, so use the one you want: `regs::addr::RTC_PITCTRLA`, `regs::RTC_PITEN`, `regs::RTC_PERIOD_CYC512`, `regs::mem::EEPROM_START`, `regs::VECTOR_RTC_PIT`. The names are the ATDF's, and the comment at the top of `src/regs.rs` has the rules. `src/hw.rs` uses the constant, not the number. xtask gets the same constants through `ts26::regs`. The firmware pays nothing for the ones it doesn't use.
+There's no PAC, and nothing to add when you need a register. `build.rs` generates a constant for every register, bitfield, named value, memory segment and vector in `vendor/ATtiny1616.atdf`, and `src/regs.rs` includes them, so use the one you want: `regs::addr::RTC_PITCTRLA`, `regs::RTC_PITEN`, `regs::RTC_PERIOD_CYC512`, `regs::mem::EEPROM_START`, `regs::VECTOR_RTC_PIT`. The names are the ATDF's, and the comment at the top of `src/regs.rs` has the rules. `src/avr/hw.rs` uses the constant, not the number. xtask gets the same constants through `ts26::regs`. The firmware pays nothing for the ones it doesn't use.
 
-The generator is `generate` in `xtask/src/atdf.rs`, which `build.rs` loads by path, and its tests are in that file. Those also check what generating can't: what `src/hw.rs` assumes about the ATDF's layout, and `link.x`. If you need a number that isn't in the ATDF, like `ADC_SAMPLEN_32US`, it goes in `src/regs.rs` by hand, with a comment saying why and a check against whatever the ATDF does say about it. Reset values stay out on purpose, because the ATDF's disagree with the datasheet on `ADC0.CALIB` and the factory `OSCCFG` and `SYSCFG0`.
+The generator is `generate` in `xtask/src/atdf.rs`, which `build.rs` loads by path, and its tests are in that file. Those also check what generating can't: what `src/avr/hw.rs` assumes about the ATDF's layout, and `link.x`. If you need a number that isn't in the ATDF, like `ADC_SAMPLEN_32US`, it goes in `src/regs.rs` by hand, with a comment saying why and a check against whatever the ATDF does say about it. Reset values stay out on purpose, because the ATDF's disagree with the datasheet on `ADC0.CALIB` and the factory `OSCCFG` and `SYSCFG0`.
 
 The ATDF only says so much: addresses, widths, masks and named values. Picking the wrong constant still compiles, and write order, timing and which flags set without their interrupt enabled are in the datasheet, so have someone (or the `register-checker` agent in `.claude/agents/`) read those against it. A wrong register does something to the hardware you didn't ask for.
 
@@ -71,7 +71,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Unsafe
 
-`unsafe_code` is denied across the workspace. Only `src/hw.rs`, `src/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `examples/link.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
+`unsafe_code` is denied across the workspace. Only `src/avr/hw.rs`, `src/avr/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `examples/link.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
 
 ## Bumping the nightly
 

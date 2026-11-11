@@ -5,8 +5,9 @@
 //!
 //! Only plain constants live here, so the file compiles anywhere. It's a
 //! module of the library, where `selftest` checks the fuse fields with it.
-//! The firmware uses it from `src/hw.rs` and `src/rt.rs`, and xtask from its
-//! simulator and UPDI programmer. A constant nothing uses costs nothing.
+//! The firmware uses it from `src/avr/hw.rs` and `src/avr/rt.rs`, and xtask
+//! from its simulator and UPDI programmer. A constant nothing uses costs
+//! nothing.
 //!
 //! The names follow Microchip's C headers, so each is the ATDF's own:
 //!
@@ -24,7 +25,7 @@
 include!(concat!(env!("OUT_DIR"), "/regs.rs"));
 
 /// ADC0.SAMPCTRL.SAMPLEN: 20 more ADC clocks of sampling. Hand-written, since
-/// it's a count we chose rather than a value the ATDF names; src/hw.rs says
-/// why 20.
+/// it's a count we chose rather than a value the ATDF names; src/avr/hw.rs
+/// says why 20.
 pub const ADC_SAMPLEN_32US: u8 = 20;
 const _: () = assert!(ADC_SAMPLEN_32US & !ADC_SAMPLEN == 0);

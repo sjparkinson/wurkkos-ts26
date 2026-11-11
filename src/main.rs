@@ -8,16 +8,20 @@
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 
+// The AVR-only code: the hardware layer and the startup code.
 #[cfg(target_arch = "avr")]
-mod hw;
+mod avr {
+    pub mod hw;
+    mod rt;
+}
+#[cfg(target_arch = "avr")]
+use avr::hw;
 // The library owns src/regs.rs, since its self-tests check fuse fields with
 // the same masks; hw.rs and rt.rs reach it as `crate::regs`.
 #[cfg(target_arch = "avr")]
 use ts26::regs;
-#[cfg(target_arch = "avr")]
-mod rt;
 
-// src/rt.rs calls `main` by name once memory is set up.
+// src/avr/rt.rs calls `main` by name once memory is set up.
 #[cfg(target_arch = "avr")]
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]

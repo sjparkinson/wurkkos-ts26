@@ -8,8 +8,8 @@ repository = "https://github.com/sjparkinson/wurkkos-ts26"
 license = "MIT"
 
 [workspace.lints.rust]
-# Only src/hw.rs, src/rt.rs, the #[unsafe(no_mangle)] on main and the no_mangle
-# items in examples/link.rs may opt back in.
+# Only src/avr/hw.rs, src/avr/rt.rs, the #[unsafe(no_mangle)] on main and the
+# no_mangle items in examples/link.rs may opt back in.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
@@ -37,7 +37,7 @@ name = "ts26"
 test = false
 bench = false
 
-# Checks link.x and src/rt.rs with real statics. Never flashed.
+# Checks link.x and src/avr/rt.rs with real statics. Never flashed.
 [[example]]
 name = "link"
 test = false

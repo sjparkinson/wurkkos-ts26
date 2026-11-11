@@ -6,7 +6,7 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's 
 
 - rustc's built-in `avr-none` target with `-C target-cpu=attiny1616`.
 - A pinned nightly (`rust-toolchain.toml`), because `core` has to be rebuilt for AVR with `-Zbuild-std=core`, and inline assembly on AVR still needs `#![feature(asm_experimental_arch)]`.
-- Linked by the `rust-lld` that rustup ships, against this repo's own linker script (`link.x`) and startup code (`src/rt.rs`).
+- Linked by the `rust-lld` that rustup ships, against this repo's own linker script (`link.x`) and startup code (`src/avr/rt.rs`).
 - Register constants generated from Microchip's ATDF at build time, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
 - The UPDI programmer and the simulator live in `xtask`, so rustup is the only thing to install.
 
@@ -16,7 +16,7 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's 
 
 `avr-none` defaults to linking with `avr-gcc`, which brings avr-libc's startup files and linker scripts along. That's three more things to install (on macOS, via a Homebrew tap) for maybe 60 bytes of startup code. Writing that code here means
 
-- the vector table is in `src/rt.rs`, where you can read it
+- the vector table is in `src/avr/rt.rs`, where you can read it
 - `.data` and `.bss` set-up is twenty lines of assembly in the same file
 - the memory layout is in `link.x`, including the bit avr-gcc's default scripts handle awkwardly, where read-only data stays in flash and is read through the mapped-flash window at 0x8000
 
@@ -38,7 +38,7 @@ So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of
 
 1. Split one operand into bytes so each partial product fits 16 bits. When the result is shifted right by 8 anyway (a calibration scale, say), the low byte's product only needs its top half and the whole thing stays in 16 bits.
 2. Do it as 16 × 16 → 32 in a small shift-and-add helper in the library, tested on the host.
-3. Write `__mulsi3` in `src/rt.rs`. libgcc's version uses a non-standard calling convention (fewer clobbered registers), so a Rust function with the C ABI isn't a safe drop-in. It would need to be assembly that matches libgcc's contract.
+3. Write `__mulsi3` in `src/avr/rt.rs`. libgcc's version uses a non-standard calling convention (fewer clobbered registers), so a Rust function with the C ABI isn't a safe drop-in. It would need to be assembly that matches libgcc's contract.
 4. Give in and link libgcc from avr-gcc.
 
 If the link ever fails with an undefined `__*` symbol, this is why.
@@ -54,7 +54,7 @@ Each has a comment where it lives. Remove it when a nightly makes it unnecessary
 | Where | What | Why |
 |---|---|---|
 | `src/main.rs` | `#![feature(asm_experimental_arch)]` | `asm!` and `global_asm!` on AVR aren't stable. |
-| `src/main.rs` | `#![feature(abi_avr_interrupt)]` | `extern "avr-interrupt"`, which the handlers in `src/hw.rs` use, isn't stable. |
+| `src/main.rs` | `#![feature(abi_avr_interrupt)]` | `extern "avr-interrupt"`, which the handlers in `src/avr/hw.rs` use, isn't stable. |
 | `Cargo.toml` | `panic = "abort"` in both profiles | AVR can't unwind. |
 | Library code | No runtime `u32`/`u64` multiplication, and no `u16` division by a constant that isn't a power of two | There's no `__mulsi3` without libgcc. See above. |
 | `xtask` | Its own ELF-to-HEX conversion | The `rust-objcopy` in the toolchain directory is rustc's private copy and won't run on its own. `llvm-tools` has a working `llvm-objcopy`, but that's one more thing to install for every flash, and `xtask` needs to parse the ELF to program it anyway. |
@@ -89,7 +89,7 @@ Then, after `cargo xtask hex` (it leaves the ELF behind even when its checks fai
 
 ## Host builds
 
-`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/hw.rs` and `src/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
+`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/avr/hw.rs` and `src/avr/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
 
 ## First build
 

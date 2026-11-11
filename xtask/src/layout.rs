@@ -1,7 +1,8 @@
-//! Checks on the linked firmware for things src/rt.rs, src/hw.rs and link.x
-//! assume but no compiler or linker error would catch: the vector table's
-//! shape, where the startup code copies and zeroes memory, and that every
-//! unlock of a protected register is followed straight away by the write.
+//! Checks on the linked firmware for things src/avr/rt.rs, src/avr/hw.rs and
+//! link.x assume but no compiler or linker error would catch: the vector
+//! table's shape, where the startup code copies and zeroes memory, and that
+//! every unlock of a protected register is followed straight away by the
+//! write.
 //!
 //! `build()` in main.rs runs these, so `size`, `hex` and `flash` all refuse
 //! an image that fails, and CI runs them through `size`.
@@ -35,8 +36,8 @@ pub fn check(elf: &Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// The checks that are about link.x and src/rt.rs rather than the firmware,
-/// which the link probe (examples/link.rs) gets too.
+/// The checks that are about link.x and src/avr/rt.rs rather than the
+/// firmware, which the link probe (examples/link.rs) gets too.
 pub fn memory(elf: &Elf) -> Result<(), String> {
     let symbol = |name| {
         elf.symbol(name)
@@ -90,7 +91,7 @@ fn vectors(image: &[u8], reset: u32, unhandled: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// The symbols src/rt.rs's startup loops use, from link.x.
+/// The symbols src/avr/rt.rs's startup loops use, from link.x.
 struct Ram {
     data_start: u32,
     data_end: u32,
@@ -100,8 +101,8 @@ struct Ram {
     data_load: u32,
 }
 
-/// .data then .bss, in order, inside SRAM. The loops in src/rt.rs stop when
-/// the pointer equals the end, so an end below its start would run through
+/// .data then .bss, in order, inside SRAM. The loops in src/avr/rt.rs stop
+/// when the pointer equals the end, so an end below its start would run through
 /// all of data space. And .data's initial values have to sit where
 /// `__data_load` says, or the copy fills SRAM with the wrong bytes.
 fn ram(r: &Ram, segments: &[Segment]) -> Result<(), String> {
@@ -173,8 +174,8 @@ fn mapped(segments: &[Segment]) -> Result<(), String> {
 }
 
 /// Every `out CCP, rN` is followed at once by `st Z, rM`, the pairing
-/// `protected_write` in src/hw.rs relies on: the chip only accepts the write
-/// within four instructions of the key. Also insists there's at least one,
+/// `protected_write` in src/avr/hw.rs relies on: the chip only accepts the
+/// write within four instructions of the key. Also insists there's at least one,
 /// since `hw::init` sets the clock prescaler that way.
 fn protected_writes(text: &[u8]) -> Result<usize, String> {
     let mut found = 0;

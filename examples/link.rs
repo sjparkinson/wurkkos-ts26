@@ -1,7 +1,8 @@
 //! Not firmware: a program with one static of each kind, for `cargo xtask`
-//! to check link.x and src/rt.rs against. The torch firmware has no statics
-//! yet, so as linked its .rodata, .data and .bss are all empty and nothing
-//! real reads through the mapped-flash window or relies on the startup copy.
+//! to check link.x and src/avr/rt.rs against. The torch firmware has no
+//! statics yet, so as linked its .rodata, .data and .bss are all empty and
+//! nothing real reads through the mapped-flash window or relies on the
+//! startup copy.
 //!
 //! `main` copies a const table (.rodata, read through the mapped-flash
 //! window) and a static with non-zero starting values (.data, which the
@@ -20,7 +21,7 @@
 #[cfg(target_arch = "avr")]
 use ts26::regs;
 #[cfg(target_arch = "avr")]
-#[path = "../src/rt.rs"]
+#[path = "../src/avr/rt.rs"]
 mod rt;
 
 /// rt.rs's vector table jumps to these by name. The probe never enables an
@@ -58,7 +59,7 @@ mod probe {
     #[unsafe(no_mangle)]
     static LINK_PROBE_COPY: [AtomicU8; 7] = [const { AtomicU8::new(0) }; 7];
 
-    // src/rt.rs calls `main` by name once memory is set up.
+    // src/avr/rt.rs calls `main` by name once memory is set up.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     extern "C" fn main() -> ! {

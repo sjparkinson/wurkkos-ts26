@@ -4,7 +4,7 @@ Third-party files kept in the repo so register checks work offline and against a
 
 ## ATtiny1616.atdf
 
-Microchip's device description for the ATtiny1616. It's the source for every register address, bit mask, interrupt vector and fuse default in `src/hw.rs`, `src/rt.rs` and `xtask/src/updi.rs`.
+Microchip's device description for the ATtiny1616. It's the source for every register address, bit mask, interrupt vector and fuse default in `src/avr/hw.rs`, `src/avr/rt.rs` and `xtask/src/updi.rs`.
 
 - From Microchip's ATtiny device pack, [`Microchip.ATtiny_DFP.3.4.278.atpack`](https://packs.download.microchip.com/Microchip.ATtiny_DFP.3.4.278.atpack) (released 2026-04-11, SHA-256 `41f09d5825abaa764c9000f4488f8ba3fab152afe6229b359de4a5efe9a21eda`), file `atdf/ATtiny1616.atdf`, unchanged.
 - SHA-256 `dda9db31c3a2942d0ecc0e7ed53254597c8f9eaa15c5225b8417dbaddca56f29`.

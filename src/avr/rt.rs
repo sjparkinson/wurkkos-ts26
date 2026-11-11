@@ -168,9 +168,9 @@ global_asm!(
     "  rjmp 5b",
     // The unhandled slots around the handled ones. Slot 0 is reset.
     before_pit = const regs::VECTOR_RTC_PIT - 1,
-    rtc_pit = sym crate::hw::rtc_pit,
+    rtc_pit = sym super::hw::rtc_pit,
     before_ovf = const regs::VECTOR_TCA0_OVF - regs::VECTOR_RTC_PIT - 1,
-    tca0_ovf = sym crate::hw::tca0_ovf,
+    tca0_ovf = sym super::hw::tca0_ovf,
     after_ovf = const regs::VECTORS - regs::VECTOR_TCA0_OVF - 1,
     // SREG's I/O address, small enough for `out` to reach.
     sreg = const regs::addr::CPU_SREG,

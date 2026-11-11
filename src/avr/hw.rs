@@ -137,7 +137,7 @@ fn protected_write(addr: usize, value: u8) {
 /// the code, and nothing has run it. PB0 stays TCA0's, still carrying the old
 /// PWM into a boost converter that's now off, until [`init`] writes CTRLB and
 /// hands it back to PORT, low. GPIOR1 to 3 and TCA0.INTCTRL keep the lit
-/// torch's level and its overflow interrupt. src/rt.rs clears SREG.I, so
+/// torch's level and its overflow interrupt. rt.rs clears SREG.I, so
 /// [`tca0_ovf`] waits for [`wait_for_tick`]'s first `sei`, then loads the old
 /// duty into a compare that no pin shows, until the first pass's
 /// [`set_output`] clears the lot (`Changes` always reports its first value).

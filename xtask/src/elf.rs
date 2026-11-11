@@ -27,7 +27,7 @@ pub struct Elf {
 
 /// A loadable piece of the image. `vaddr` is where the code expects to find
 /// it, `paddr` where it sits in flash. They differ for .rodata (read through
-/// the mapped-flash window) and .data (copied into SRAM by src/rt.rs).
+/// the mapped-flash window) and .data (copied into SRAM by src/avr/rt.rs).
 pub struct Segment {
     pub vaddr: u32,
     pub paddr: u32,
