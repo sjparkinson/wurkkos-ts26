@@ -59,14 +59,14 @@ Each has a comment where it lives. Remove it when a nightly makes it unnecessary
 | Library code | No runtime `u32`/`u64` multiplication, and no `u16` division by a constant that isn't a power of two | There's no `__mulsi3` without libgcc. See above. |
 | `xtask` | Its own ELF-to-HEX conversion | The `rust-objcopy` in the toolchain directory is rustc's private copy and won't run on its own. `llvm-tools` has a working `llvm-objcopy`, but that's one more thing to install for every flash, and `xtask` needs to parse the ELF to program it anyway. |
 
-Up to nightly-2026-09-23 the TS21 repo also needed `--cfg no_fp_fmt_parse` in `.cargo/config.toml`, because `core`'s float formatting wanted a bignum type that only existed for 32- and 64-bit pointers and wouldn't compile for AVR. `core` builds without it on nightly-2026-11-02, so this repo never had it.
+Up to nightly-2026-09-23 the TS21 repo also needed `--cfg no_fp_fmt_parse` in `.cargo/config.toml`, because `core`'s float formatting wanted a bignum type that only existed for 32- and 64-bit pointers and wouldn't compile for AVR. `core` builds without it on nightly-2026-11-11, so this repo never had it.
 
 ## Looking inside the ELF
 
 For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. It's optional, since nothing in the build needs it, so it isn't in `rust-toolchain.toml`. Add it once to the pinned nightly.
 
 ```sh
-rustup component add llvm-tools --toolchain nightly-2026-11-02
+rustup component add llvm-tools --toolchain nightly-2026-11-11
 ```
 
 The binaries aren't on your `PATH`. They live in the toolchain's sysroot, under the host triple. Run this from the repo so rustup picks the pinned nightly.
