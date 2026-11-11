@@ -10,7 +10,7 @@
 require "json"
 require "open3"
 
-FIRMWARE_ONLY = %w[src/hw.rs src/rt.rs].freeze
+FIRMWARE_ONLY = %w[src/avr/hw.rs src/avr/rt.rs examples/link.rs].freeze
 
 def run(*cmd, chdir:)
   out, status = Open3.capture2e(*cmd, chdir: chdir)
@@ -23,7 +23,8 @@ def rust(path, dir)
   return fmt if fmt
 
   if FIRMWARE_ONLY.include?(relative)
-    run("cargo", "clippy", "-q", "--package", "ts26", "--release", "--target", "avr-none",
+    run("cargo", "clippy", "-q", "--package", "ts26", "--lib", "--bins", "--examples",
+        "--release", "--target", "avr-none",
         "-Zbuild-std=core", "--", "-D", "warnings", chdir: dir)
   else
     run("cargo", "clippy", "--workspace", "--all-targets", "--locked", "-q", "--", "-D", "warnings", chdir: dir)
