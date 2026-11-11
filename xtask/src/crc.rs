@@ -20,6 +20,7 @@
 //!
 //! None of this has been checked against a real chip yet.
 
+use crate::stamp::STAMP_LEN;
 use crate::updi::map::FLASH_SIZE;
 
 /// CRC-16-CCITT as CRCSCAN computes it, with seed 0xFFFF, MSB first and no
@@ -39,18 +40,23 @@ pub fn crc16(bytes: impl IntoIterator<Item = u8>) -> u16 {
 /// Where the checksum goes, in the last two bytes of flash.
 pub const CHECKSUM_AT: usize = FLASH_SIZE - 2;
 
+/// Where the commit stamp goes, in the bytes just before the checksum.
+pub const STAMP_AT: usize = CHECKSUM_AT - STAMP_LEN;
+
 /// The firmware as it's flashed. It's padded to all of flash with 0xFF, which
-/// is what erased flash reads as, and the checksum of everything before it
-/// goes in the last two bytes, high byte first.
-pub fn sign(image: &[u8]) -> Result<Vec<u8>, String> {
-    if image.len() > CHECKSUM_AT {
+/// is what erased flash reads as, with the stamp (`stamp.rs`) just before the
+/// end. The checksum of everything before it goes in the last two bytes, high
+/// byte first, so it covers the stamp too.
+pub fn sign(image: &[u8], stamp: &[u8; STAMP_LEN]) -> Result<Vec<u8>, String> {
+    if image.len() > STAMP_AT {
         return Err(format!(
-            "the image is {} bytes, which leaves no room for the CRC at {CHECKSUM_AT:#06x}",
+            "the image is {} bytes, which leaves no room for the stamp and CRC at {STAMP_AT:#06x}",
             image.len()
         ));
     }
     let mut flash = image.to_vec();
-    flash.resize(CHECKSUM_AT, 0xFF);
+    flash.resize(STAMP_AT, 0xFF);
+    flash.extend(stamp);
     let checksum = crc16(flash.iter().copied());
     flash.extend(checksum.to_be_bytes());
     Ok(flash)
@@ -59,6 +65,7 @@ pub fn sign(image: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stamp;
 
     #[test]
     fn the_checksum_sits_at_the_end_of_16_kb() {
@@ -93,10 +100,10 @@ mod tests {
     #[test]
     fn a_signed_image_fills_flash_and_ends_in_its_checksum() {
         let image = [0x0C, 0x94, 0x3E, 0x00];
-        let flash = sign(&image).unwrap();
+        let flash = sign(&image, &stamp::TEST).unwrap();
         assert_eq!(flash.len(), FLASH_SIZE);
         assert_eq!(flash[..4], image);
-        assert!(flash[4..CHECKSUM_AT].iter().all(|&b| b == 0xFF));
+        assert!(flash[4..STAMP_AT].iter().all(|&b| b == 0xFF));
         let checksum = crc16(flash[..CHECKSUM_AT].iter().copied());
         assert_eq!(
             flash[CHECKSUM_AT..],
@@ -108,10 +115,18 @@ mod tests {
     #[test]
     fn the_whole_of_a_signed_flash_checks_to_zero() {
         for image in [&[][..], &[0x12, 0x34], &[0xAA; 4000]] {
-            let flash = sign(image).unwrap();
+            let flash = sign(image, &stamp::TEST).unwrap();
             assert_eq!(crc16(flash.iter().copied()), 0);
-            // A flipped bit anywhere, the checksum included, doesn't.
-            for at in [0, 1000, CHECKSUM_AT - 1, CHECKSUM_AT, FLASH_SIZE - 1] {
+            // A flipped bit anywhere, the stamp and checksum included,
+            // doesn't.
+            for at in [
+                0,
+                1000,
+                STAMP_AT,
+                CHECKSUM_AT - 1,
+                CHECKSUM_AT,
+                FLASH_SIZE - 1,
+            ] {
                 let mut bad = flash.clone();
                 bad[at] ^= 0x10;
                 assert_ne!(crc16(bad.iter().copied()), 0, "{at}");
@@ -120,9 +135,24 @@ mod tests {
     }
 
     #[test]
+    fn the_stamp_sits_just_before_the_checksum() {
+        assert_eq!(STAMP_AT, CHECKSUM_AT - STAMP_LEN);
+        let flash = sign(&[0x12, 0x34], &stamp::TEST).unwrap();
+        assert_eq!(flash[STAMP_AT..CHECKSUM_AT], stamp::TEST);
+        assert_eq!(stamp::read(&flash).as_deref(), Some("ts26 test"));
+    }
+
+    #[test]
+    fn refuses_an_image_that_reaches_the_stamp() {
+        assert!(sign(&vec![0; STAMP_AT], &stamp::TEST).is_ok());
+        let err = sign(&vec![0; STAMP_AT + 1], &stamp::TEST).unwrap_err();
+        assert!(err.contains("no room for the stamp and CRC"), "{err}");
+    }
+
+    #[test]
     fn refuses_an_image_that_reaches_the_checksum() {
-        assert!(sign(&vec![0; CHECKSUM_AT]).is_ok());
-        let err = sign(&vec![0; CHECKSUM_AT + 1]).unwrap_err();
-        assert!(err.contains("no room for the CRC"), "{err}");
+        let err = sign(&vec![0; CHECKSUM_AT], &stamp::TEST).unwrap_err();
+        assert!(err.contains("no room for the stamp and CRC"), "{err}");
+        assert!(sign(&vec![0; CHECKSUM_AT + 1], &stamp::TEST).is_err());
     }
 }

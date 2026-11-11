@@ -16,6 +16,7 @@ mod serial;
 mod sim;
 mod simulate;
 mod spec;
+mod stamp;
 mod switching;
 mod terminal;
 mod updi;
@@ -70,7 +71,7 @@ fn main() -> ExitCode {
         ["peek", port] => peek(port),
         ["backup", port, dir] => backup(port, Path::new(dir)),
         ["flash", port] => build()
-            .and_then(|(elf, _)| crc::sign(&elf.flash_image()))
+            .and_then(|(elf, _)| crc::sign(&elf.flash_image(), &stamp::current(&root())))
             .and_then(|image| flash(port, &image)),
         ["flash", port, file] => this_boards_hex(Path::new(file))
             .and_then(|()| read_hex(Path::new(file)))
@@ -146,12 +147,12 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
 }
 
 /// Writes the image `flash` would, which is the firmware padded to all of
-/// flash with 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints
-/// flash, RAM, stack, loop and handler use.
+/// flash with 0xFF, a stamp of the commit and its CRC at the end (`crc.rs`).
+/// Then prints flash, RAM, stack, loop and handler use, and the stamp.
 fn hex() -> Result<(), String> {
     let (elf, sim) = build()?;
     let firmware = elf.flash_image();
-    let image = crc::sign(&firmware)?;
+    let image = crc::sign(&firmware, &stamp::current(&root()))?;
     write(&root().join(HEX), &ihex::encode(&image))?;
     eprintln!("wrote {HEX}");
 
@@ -162,6 +163,7 @@ fn hex() -> Result<(), String> {
         "{}",
         row("flash", flash, Some(map::FLASH_SIZE as u64), "bytes")
     );
+    println!("stamp {}", stamp::read(&image).unwrap_or_default());
     println!("{}", row("ram", ram, Some(ram_size), "bytes"));
     println!("{}", row("stack", sim.stack.into(), None, "bytes"));
     println!(
@@ -373,6 +375,7 @@ fn backup_from<W: Wire>(
     // in it until the next power cycle. The first error is the one to report.
     let left = p.leave();
     let chip = read?;
+    report_stamp("the chip's flash", &chip.flash);
 
     fs::create_dir_all(dir).map_err(at(dir))?;
     write(&flash_path, &ihex::encode(&chip.flash))?;
@@ -426,7 +429,19 @@ fn read_chip<W: Wire>(p: &mut Programmer<W>) -> Result<Chip, String> {
     })
 }
 
+/// Says which build `flash` holds, or that it's none of ours.
+fn report_stamp(what: &str, flash: &[u8]) {
+    match stamp::read(flash) {
+        Some(text) => eprintln!("{what} has the stamp `{text}`"),
+        None => eprintln!(
+            "{what} has no stamp, so it isn't a full build from this repo (it may be the \
+             stock firmware, `first-light` or an empty chip)"
+        ),
+    }
+}
+
 fn flash(port: &str, image: &[u8]) -> Result<(), String> {
+    report_stamp("the image", image);
     let connect = || Programmer::connect_for_programming(open(port)?);
     program(connect, image, None)
 }
@@ -569,11 +584,11 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use super::updi::SerialNumber;
     use super::updi::tests::fake::Tiny;
+    use super::updi::{Programmer, SerialNumber};
     use super::{
-        backup_from, commas, crc, ihex, read_hex, restore_onto, row, runs, signed, this_boards_hex,
-        write,
+        backup_from, commas, crc, ihex, program, read_hex, restore_onto, row, runs, signed, stamp,
+        this_boards_hex, write,
     };
 
     /// A directory of the test's own under the system's temporary one, gone
@@ -727,13 +742,38 @@ mod tests {
 
     #[test]
     fn flash_takes_only_a_signed_image() {
-        let image = crc::sign(&[0x12, 0x34, 0x56]).unwrap();
+        let image = crc::sign(&[0x12, 0x34, 0x56], &stamp::TEST).unwrap();
         let round_trip = ihex::decode(&ihex::encode(&image)).unwrap();
         assert!(signed(&round_trip).is_ok());
 
         let mut broken = image.clone();
         broken[1] ^= 1;
         assert!(signed(&broken).is_err());
+    }
+
+    #[test]
+    fn a_stamp_survives_a_flash_and_a_backup() {
+        let scratch = Scratch::new("stamp");
+        let dir = scratch.backup();
+        let image = crc::sign(&[0x12, 0x34, 0x56], &stamp::format("abc1234567", true)).unwrap();
+        let mut tiny = Tiny::new();
+
+        let open = on(&mut tiny);
+        program(
+            || Programmer::connect_for_programming(open()?),
+            &image,
+            None,
+        )
+        .unwrap();
+        assert!(tiny.flash == image, "flash isn't the image");
+
+        backup_from(on(&mut tiny), &dir).unwrap();
+        let saved = read_hex(&dir.join("flash.hex")).unwrap();
+        assert_eq!(
+            stamp::read(&saved).as_deref(),
+            Some("ts26 abc1234567+"),
+            "the backup lost the stamp"
+        );
     }
 
     #[test]

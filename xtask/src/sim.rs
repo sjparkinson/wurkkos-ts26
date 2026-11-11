@@ -133,6 +133,7 @@ use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
 use crate::layout::{jmp_target, word};
 use crate::spec;
+use crate::stamp;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
 use crate::world::{CALIBRATION, FUSE_NAMES, World};
@@ -343,7 +344,7 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     let linked = Linked::of(elf)?;
     let image = elf.flash_image();
     // What `cargo xtask hex` and `flash` write.
-    let signed = crc::sign(&image)?;
+    let signed = crc::sign(&image, &stamp::TEST)?;
     let reset = symbol(elf, "__reset")?;
 
     // A chip that's just had its cell put in, run to the end of startup.
@@ -2659,7 +2660,7 @@ mod tests {
 
     #[test]
     fn the_scan_passes_a_signed_image_and_fails_a_changed_one() {
-        let signed = crc::sign(&[0x12, 0x34]).unwrap();
+        let signed = crc::sign(&[0x12, 0x34], &stamp::TEST).unwrap();
         let mut bad = signed.clone();
         bad[0] ^= 1;
         for (image, want) in [(signed, CRCSCAN_OK), (bad, 0)] {

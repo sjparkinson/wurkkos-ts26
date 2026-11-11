@@ -37,7 +37,7 @@ What covers each hazard, and how well, is in [safety.md](safety.md). These are t
 - [ ] Hold every ADC reading through low-voltage protection and thermal regulation and check where each ends up, plus a randomised property test of `limits::Limits`
 - [ ] Fault injection. Frozen plausible readings, a stuck switch, spurious ADC results, and a dead ADC and stuck switch together, on the simulator
 - [ ] Unhandled interrupts go to `hw::halt` instead of `reti`
-- [ ] A commit stamp in flash, just before the CRC, shown by `flash` and `backup`
+- [x] A commit stamp in flash, just before the CRC, shown by `flash` and `backup`
 
 ## 3. It's nice to use
 

@@ -88,7 +88,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 
 1. puts the chip in programming mode and checks its signature (1E 94 21)
 2. chip-erases it, which wipes flash and, unless the EESAVE fuse is set (Microchip ships it unset), EEPROM
-3. writes the image a 64-byte page at a time, skipping blank pages (the erase already left them blank). The image is padded to all 16 KB with a CRC in the last two bytes, which the firmware checks at power-on, so the last page always gets written
+3. writes the image a 64-byte page at a time, skipping blank pages (the erase already left them blank). The image is padded to all 16 KB, with a 16-byte stamp of the commit (`ts26 <hash>`, and a `+` if the tree was dirty) just before a CRC in the last two bytes, which the firmware checks at power-on, so the last page always gets written. `flash` prints the stamp it's about to write, and `backup` the one it found
 4. reads all 16 KB back and compares
 5. resets the chip and turns UPDI off, so the new firmware starts
 

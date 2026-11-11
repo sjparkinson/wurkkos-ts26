@@ -10,7 +10,7 @@ How Rust gets onto an ATtiny1616 here, and why it's put together this way.
 - Register constants generated from Microchip's ATDF at build time, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
 - The UPDI programmer and the simulator live in `xtask`, so rustup is the only thing to install.
 
-`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, checks its layout, runs it on the simulator, pads the image to 16 KB with a CRC in the last two bytes, writes that as Intel HEX at `target/wurkkos-ts26-0721.hex`, and reports flash, RAM, stack and instruction counts. The simulator's a mistake-finder, not proof, and [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) has what it leaves out.
+`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, checks its layout, runs it on the simulator, pads the image to 16 KB with a stamp of the commit and then a CRC in the last two bytes, writes that as Intel HEX at `target/wurkkos-ts26-0721.hex`, and reports flash, RAM, stack and instruction counts. The simulator's a mistake-finder, not proof, and [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) has what it leaves out.
 
 ## Linking with rust-lld
 
