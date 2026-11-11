@@ -26,12 +26,9 @@ extern "C" fn main() -> ! {
     use ts26::torch::{Changes, Torch};
     use ts26::watchdog::Feeder;
 
-    // PB2 floats from reset until it's an output, so that's first of all.
+    // PB2 floats from reset until it's an output.
     hw::hold_enable_low();
-    // What this reset means comes next, so the flags are clear before
-    // anything can reset the chip again. The checks come before anything's
-    // turned on. A failure doesn't stop the torch, it quietly caps the light
-    // (src/selftest.rs).
+
     let faults = Faults {
         hang: selftest::hung(hw::take_reset_flags()),
         flash: !hw::flash_ok(),
@@ -39,14 +36,11 @@ extern "C" fn main() -> ! {
     };
 
     hw::init();
-    // After the PIT's running, so the first tick comes before the WDT's first
-    // timeout.
     hw::start_watchdog();
 
     let mut torch = Torch::new(hw::temperature_calibration(), faults);
-    let mut changes = Changes::new();
+    let mut output_changes = Changes::new();
     let mut aux_changes = Changes::new();
-    // Beside the torch rather than in it, which costs 150 bytes less flash.
     let mut feeder = Feeder::new();
 
     loop {
@@ -58,16 +52,21 @@ extern "C" fn main() -> ! {
         if !hw::wait_for_tick(feeder.power_down(torch.resting())) {
             hw::halt();
         }
+
         torch.tick(hw::switch_pressed(), hw::adc_result());
+
         if let Some(convert) = torch.convert() {
             hw::adc_start(convert);
         }
-        if let Some(output) = changes.update(torch.output()) {
+
+        if let Some(output) = output_changes.update(torch.output()) {
             hw::set_output(output);
         }
+
         if let Some(aux) = aux_changes.update(torch.aux()) {
             hw::set_aux(aux);
         }
+
         // The only place the running torch feeds the watchdog.
         if feeder.tick() {
             hw::feed_watchdog();
