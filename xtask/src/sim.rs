@@ -95,7 +95,9 @@
 //! 1. Reset to `main` with SRAM full of junk, checking .data and .bss come out
 //!    right, then the same startup code with them moved and given contents.
 //! 2. The reset vector again with PB2 already an output and high, as far as
-//!    the first register write, which has to clear it (`found_lit`).
+//!    the first register write, which has to clear it (`found_lit`). Then
+//!    again as far as the first wait for a tick, checking `main` starts up in
+//!    the order it has to (`boot_order`).
 //! 3. Two seconds lit with every tick at its slowest, which mustn't trip
 //!    `hw::wait_for_tick`'s deadline (`slow_ticks`).
 //! 4. The 32 kHz oscillator stopping with the light on. PB2 has to drop within
@@ -357,6 +359,12 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
         linked.unhandled,
     )?)
     .map_err(|e| format!("starting with PB2 high: {e}"))?;
+    boot_order(Sim::new(
+        signed.clone(),
+        linked.layout.bss.end,
+        linked.unhandled,
+    )?)
+    .map_err(|e| format!("start-up order: {e}"))?;
     let mut clocks = Report::default();
     slow_ticks(power_on()?, &mut clocks).map_err(|e| format!("with the slowest ticks: {e}"))?;
     oscillator_stops(power_on()?, &mut clocks)
@@ -849,6 +857,23 @@ fn found_lit(mut sim: Sim) -> Result<(), String> {
     ))
 }
 
+/// Runs `sim` from reset to the first wait for a tick, and checks `main` got
+/// there in the order it has to. The reset flags are cleared before the
+/// watchdog's on. The CRC scan and the fuse read come before the chip's set up
+/// at all. The PIT's on before the watchdog. `found_lit` checks what comes
+/// before all of these.
+fn boot_order(mut sim: Sim) -> Result<(), String> {
+    for _ in 0..BOOT_BUDGET {
+        if sim.chip.tick_polled {
+            return sim.chip.boot.in_order();
+        }
+        sim.step()?;
+    }
+    Err(format!(
+        "didn't wait for a tick within {BOOT_BUDGET} instructions"
+    ))
+}
+
 /// A bit for each vector whose slot in `image`'s table is a `jmp` to
 /// somewhere other than `unhandled` (a word address). layout.rs checks every
 /// slot is a `jmp`.
@@ -1157,6 +1182,80 @@ fn wdt_clocks(setting: u8) -> u32 {
     }
 }
 
+/// When each step of `main`'s start-up first happened, in `Chip::now`, for
+/// `boot_order`.
+#[derive(Default)]
+struct Boot {
+    /// The first RSTCTRL.RSTFR write, `hw::take_reset_flags`.
+    flags_cleared: Option<u64>,
+    /// The first CRCSCAN.CTRLA write, `hw::flash_ok`.
+    flash_checked: Option<u64>,
+    /// The first fuse read, `hw::fuses`.
+    fuses_read: Option<u64>,
+    /// The first write that isn't one of those or PORTB's, so the start of
+    /// `hw::init`.
+    set_up: Option<u64>,
+    /// The first RTC.PITCTRLA write with PITEN.
+    pit_on: Option<u64>,
+    /// The first WDT.CTRLA write, `hw::start_watchdog`.
+    watchdog_on: Option<u64>,
+}
+
+impl Boot {
+    /// Notes a register write at `now`.
+    fn write(&mut self, now: u64, a: usize, value: u8) {
+        let first = |slot: &mut Option<u64>| _ = slot.get_or_insert(now);
+        match a {
+            reg::RSTCTRL_RSTFR => first(&mut self.flags_cleared),
+            reg::CRCSCAN_CTRLA => first(&mut self.flash_checked),
+            reg::CRCSCAN_CTRLB | reg::VPORTB_OUT | reg::VPORTB_DIR => {}
+            _ => first(&mut self.set_up),
+        }
+        if a == reg::RTC_PITCTRLA && value & RTC_PITEN != 0 {
+            first(&mut self.pit_on);
+        }
+        if a == reg::WDT_CTRLA {
+            first(&mut self.watchdog_on);
+        }
+    }
+
+    fn in_order(&self) -> Result<(), String> {
+        let at = |when: Option<u64>, what: &str| when.ok_or(format!("never {what}"));
+        let flags = at(self.flags_cleared, "cleared RSTCTRL.RSTFR")?;
+        let flash = at(self.flash_checked, "started a CRC scan")?;
+        let fuses = at(self.fuses_read, "read the fuses")?;
+        let set_up = at(self.set_up, "set anything up")?;
+        let pit = at(self.pit_on, "turned the PIT on")?;
+        let watchdog = at(self.watchdog_on, "turned the watchdog on")?;
+        let rules = [
+            (
+                flags < watchdog,
+                "turns the watchdog on before clearing the reset flags, so a bite could \
+                 reset the chip before `main` has read why it last reset",
+            ),
+            (
+                flash < set_up,
+                "sets the chip up before the CRC scan, so code nobody's checked has \
+                 already run",
+            ),
+            (
+                fuses < set_up,
+                "sets the chip up before reading the fuses, so it's run on fuses nobody's \
+                 checked",
+            ),
+            (
+                pit < watchdog,
+                "turns the watchdog on before the PIT, so its first timeout starts before \
+                 there's a tick to feed it on",
+            ),
+        ];
+        match rules.into_iter().find(|&(ok, _)| !ok) {
+            Some((_, why)) => Err(why.into()),
+            None => Ok(()),
+        }
+    }
+}
+
 /// CRCSCAN's state beyond its plain registers.
 struct CrcScan {
     /// The instruction that last wrote ENABLE, and what STATUS read just
@@ -1268,6 +1367,7 @@ struct Chip {
     power_downs: u32,
     /// Writes to anything but SRAM so far.
     register_writes: u32,
+    boot: Boot,
 }
 
 impl Chip {
@@ -1319,6 +1419,7 @@ impl Chip {
             interrupted: None,
             power_downs: 0,
             register_writes: 0,
+            boot: Boot::default(),
         }
     }
 
@@ -2203,7 +2304,10 @@ impl Bus for Chip {
             }),
             reg::SIGROW_TEMPSENSE0 => Ok(CALIBRATION.gain),
             reg::SIGROW_TEMPSENSE1 => Ok(CALIBRATION.offset as u8),
-            _ if self.world.fuse(a).is_some() => Ok(self.world.fuse(a).unwrap_or(0xFF)),
+            _ if self.world.fuse(a).is_some() => {
+                self.boot.fuses_read.get_or_insert(self.now);
+                Ok(self.world.fuse(a).unwrap_or(0xFF))
+            }
             _ if plain(a) || (reg::PORTA_PIN0CTRL..reg::PORTA_PIN0CTRL + 8).contains(&a) => {
                 Ok(self.io[a])
             }
@@ -2224,6 +2328,7 @@ impl Bus for Chip {
             return Ok(());
         }
         self.register_writes += 1;
+        self.boot.write(self.now, a, value);
         match a {
             reg::CPU_CCP => {
                 if value != CCP_IOREG {
