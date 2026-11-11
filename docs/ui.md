@@ -33,7 +33,7 @@ Every row has an example: a script in that notation, starting from a torch that'
 
 The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.7 seconds.
 
-Turbo is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13: Anduril's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
+Turbo is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
 
 The remembered level lives in RAM and never in EEPROM. The torch sleeps rather than losing power, and SRAM is kept through sleep (DS §11.2), so nothing needs writing. It costs this: a cell swap or any reset loses the level, and it comes back on at 52. USB charging should keep it, since the cell stays in, but that's likely and not confirmed.
 
@@ -87,14 +87,3 @@ A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also wha
 The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware.
 
 None of this has met a real light yet, so this isn't firmware to carry. See the [roadmap](roadmap.md).
-
-## Differences from Anduril
-
-On purpose:
-
-- There's one UI and it's this page. No Simple and Advanced split.
-- 2C from off goes to turbo.
-- 1H from off doesn't carry on into a ramp. One hold, one action.
-- No status flashes. This is a torch, so there's no 3C voltage blink and no version blink, and 3C does nothing.
-
-Not here: strobes and blinkies, candle mode, stepped ramping, aux patterns, configurable floor and ceiling, a factory-reset gesture.

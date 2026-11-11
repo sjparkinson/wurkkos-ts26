@@ -6,38 +6,38 @@
 //! [`Ceiling`], so a step-down is a fade of at most one level every other
 //! tick, never a jump.
 //!
-//! The approach follows the one Anduril describes in `fsm/adc.c` and
-//! `ui/anduril/ramp-mode.c` (facts only, it's GPL-3.0):
+//! The approach follows the stock firmware's (facts only, it's GPL-3.0).
 //!
 //! - Smooth the readings, then predict where the temperature is heading from
 //!   how far it's moved over the last eight samples, times a lookahead of
-//!   four. Anduril uses the same history length and lookahead.
+//!   four. The stock firmware uses the same history length and lookahead.
 //! - If the prediction is over the limit and it isn't already cooling, step
 //!   down. The error adds up over readings and each step spends some of it,
 //!   so a little over steps down now and then and a lot over steps down
-//!   every reading. Anduril's warning threshold works much the same way.
-//! - If the prediction is more than 2 °C under the limit (Anduril's window)
-//!   and it isn't warming up, step back up the same way, but slower and never
-//!   more than a level a reading. In between, hold. That gap, the slow climb
-//!   and the lookahead are what stop it hunting.
-//! - Never step down below a floor. Anduril's TS26 build stops at level 50 of
-//!   150 (`MIN_THERM_STEPDOWN` in `hw/wurkkos/ts26/anduril.h`), so this does
-//!   too, though the same number on our own curve (`src/ramp.rs`) needn't be
-//!   the same brightness.
+//!   every reading. The stock firmware's warning threshold works much the
+//!   same way.
+//! - If the prediction is more than 2 °C under the limit (the stock
+//!   firmware's window) and it isn't warming up, step back up the same way,
+//!   but slower and never more than a level a reading. In between, hold. That
+//!   gap, the slow climb and the lookahead are what stop it hunting.
+//! - Never step down below a floor. The stock firmware's TS26 build stops at
+//!   level 50 of 150, so this does too, though the same number on our own
+//!   curve (`src/ramp.rs`) needn't be the same brightness.
 //!
-//! Only sample while the light's on. Anduril leaves the temperature alone
-//! in standby because the ADC costs about 250 µA against about 20 µA asleep
-//! (`fsm/adc.c`), and the torch will sleep when off. Call [`Thermal::reset`]
-//! when it turns on, so the readings and ceiling from last time don't carry
-//! over. A light that turns on hot then steps down from the first readings.
+//! Only sample while the light's on. The stock firmware leaves the
+//! temperature alone in standby because the ADC costs about 250 µA against
+//! about 20 µA asleep, and the torch will sleep when off. Call
+//! [`Thermal::reset`] when it turns on, so the readings and ceiling from last
+//! time don't carry over. A light that turns on hot then steps down from the
+//! first readings.
 //! - Ignore a reading that's impossible or far from the last one, unless a
 //!   few in a row agree. If the sensor keeps reading impossible values, step
 //!   down to the floor, since a broken sensor can't say it's cool.
 //!
 //! The numbers here are a first guess, carried over from the TS21 where
-//! they aren't Anduril's. None of them has been measured on a TS26, so expect
-//! them to change once one's been run up to temperature. That's why
-//! `ramp::CEILING` holds the light back in the meantime.
+//! they aren't the stock firmware's. None of them has been measured on a
+//! TS26, so expect them to change once one's been run up to temperature.
+//! That's why `ramp::CEILING` holds the light back in the meantime.
 
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
@@ -48,14 +48,14 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The temperature to hold the MCU at, 50 °C, in kelvin. Anduril's figure for
-/// Wurkkos lights (`hw/wurkkos/anduril.h`). Unmeasured here: 1Lumen saw 52 °C
+/// The temperature to hold the MCU at, 50 °C, in kelvin. The stock firmware's
+/// figure for Wurkkos lights. Unmeasured here: 1Lumen saw 52 °C
 /// on the head on one sample, and nobody knows what the MCU reads when the
 /// head's at that.
 pub const LIMIT: u16 = celsius(50);
 
-/// The lowest level thermal regulation steps down to. Anduril's level number,
-/// on our curve. Unmeasured: nobody knows that this level is cool enough to
+/// The lowest level thermal regulation steps down to. The stock firmware's
+/// level number, on our curve. Unmeasured: nobody knows that this level is cool enough to
 /// hold in still air, or what it draws.
 pub const FLOOR: u8 = 50;
 
@@ -64,14 +64,14 @@ const _: () = assert!(FLOOR <= CEILING);
 /// Readings and the smoothed temperature are in sixteenths of a kelvin, which
 /// is what `temp::sixteenths` hands over.
 const FRACTION: i16 = 16;
-/// Samples of history to measure the trend over. Anduril's figure, unmeasured
-/// on this light.
+/// Samples of history to measure the trend over. The stock firmware's figure,
+/// unmeasured on this light.
 const HISTORY: usize = 8;
-/// How many trend-lengths ahead to predict. Anduril's figure, unmeasured on
-/// this light.
+/// How many trend-lengths ahead to predict. The stock firmware's figure,
+/// unmeasured on this light.
 const LOOKAHEAD: i16 = 4;
 /// How far under the limit the prediction has to be before stepping up.
-/// Anduril's figure, unmeasured on this light.
+/// The stock firmware's figure, unmeasured on this light.
 const WINDOW: i16 = 2 * FRACTION;
 /// A trend at least this steep counts as warming up, and blocks stepping up.
 /// Unmeasured.

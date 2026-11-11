@@ -3,10 +3,11 @@
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// The lowest level the UI goes to. Anduril's smooth floor on this light is
-/// 5 of 150, which is 36 in delta-sigma units on its table, and reviewers saw
-/// flicker below that. This curve is flatter at the bottom, so its level 5 is
-/// only 24, and level 13 is the first at 36 or over. Unmeasured.
+/// The lowest level the UI goes to. The stock firmware's smooth floor on this
+/// light is 5 of 150, which is 36 in delta-sigma units on its table, and
+/// reviewers saw flicker below that. This curve is flatter at the bottom, so
+/// its level 5 is only 24, and level 13 is the first at 36 or over.
+/// Unmeasured.
 pub const FLOOR: u8 = 13;
 
 /// Where a fresh torch starts when you click it on: a duty of about 10 of 255.
@@ -184,9 +185,10 @@ mod tests {
         assert_eq!(ui.output_level(), 0);
     }
 
-    /// Anduril's floor is 36 in these units, and the level under ours isn't.
+    /// The stock firmware's floor is 36 in these units, and the level under
+    /// ours isn't.
     #[test]
-    fn the_floor_is_the_first_level_at_anduril_s_smooth_floor() {
+    fn the_floor_is_the_first_level_at_the_stock_smooth_floor() {
         assert!(output(FLOOR).dsm >= 36);
         assert!(output(FLOOR - 1).dsm < 36);
     }

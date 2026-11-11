@@ -301,9 +301,8 @@ const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 /// protection does too.
 ///
 /// It also turns the ADC and its forced reference off. The datasheet gives no
-/// current for either left on in power-down, and Anduril's
-/// `sleep_until_eswitch_pressed` does the same. [`adc_channel`] turns them
-/// back on.
+/// current for either left on in power-down, and the stock firmware does the
+/// same before it sleeps. [`adc_channel`] turns them back on.
 ///
 /// Otherwise it's idle, which stops only the CPU and flash, so TCA0 keeps the
 /// PWM going and the ADC keeps converting. Standby would stop TCA0, which has
@@ -577,8 +576,9 @@ pub fn fuses() -> Fuses {
 /// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up: the
 /// lit channel is an input with its pull-up on, and the trickle through the
 /// pull-up is the low setting, like the TS21's button LED. The others are
-/// outputs at the 0 in OUT, which holds them dark. That this is what Anduril's
-/// low aux setting does on this board is likely, and nobody's measured it here.
+/// outputs at the 0 in OUT, which holds them dark. That this is what the stock
+/// firmware's low aux setting does on this board is likely, and nobody's
+/// measured it here.
 pub fn set_aux(colour: Aux) {
     let lit = board::aux_pin(colour);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);

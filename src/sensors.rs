@@ -27,8 +27,8 @@
 //! 30.3.2.4 and 36.15). Both channels here use the same 1.1 V reference, so
 //! only the ADC's input moves between them, but PA1 sits behind tens of
 //! kilohms of divider (docs/hardware.md), which is slow to pull the sample
-//! capacitor away from whatever the temperature sensor left on it. Anduril
-//! throws the first one away too ("first result is unstable", `fsm/adc.c`).
+//! capacitor away from whatever the temperature sensor left on it. The stock
+//! firmware throws the first one away too ("first result is unstable").
 //! It costs a tick, so it's cheap insurance.
 //!
 //! The temperature is only read when asked for, which the caller does while

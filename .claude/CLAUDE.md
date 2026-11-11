@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Firmware for the Wurkkos TS26 torch (Anduril model 0721) (ATtiny1616, MP3432 boost driver), in Rust, with zero crate dependencies. It's a deliberately small sibling of wurkkos-ts21 and borrows its toolchain and much of its code. Read README.md for what it is, CONTRIBUTING.md for the checks and layout, and docs/ for the hardware, toolchain and UI spec.
+Firmware for the Wurkkos TS26 torch (model 0721) (ATtiny1616, MP3432 boost driver), in Rust, with zero crate dependencies. It's a deliberately small sibling of wurkkos-ts21 and borrows its toolchain and much of its code. Read README.md for what it is, CONTRIBUTING.md for the checks and layout, and docs/ for the hardware, toolchain and UI spec.
 
 ## Commands
 
@@ -47,7 +47,7 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 - **Logic goes in the library** (`src/lib.rs` and its modules), which is `no_std`, has no `unsafe`, and is tested on the host. `src/main.rs` stays a thin loop.
 - **docs/ui.md is the UI spec.** Change it in the same commit as the code, and add a test in `src/ui.rs` or `src/torch.rs` for every row you add.
 - **Tick off docs/roadmap.md** in the commit that does the work.
-- **Anduril is GPL-3.0.** Read it for facts about the hardware (pins, calibration, timings) and cite the file. Don't copy its code or its ramp tables into this MIT repo.
+- **The stock firmware is GPL-3.0.** Read its source for facts about the hardware (pins, calibration, timings), and don't copy its code or its ramp tables into this MIT repo. Docs and comments call it "the stock firmware" and name none of its files, identifiers or commits. README.md's acknowledgements are the only place that names or links it.
 - **No runtime 32- or 64-bit multiplication.** The chip has an 8×8 hardware multiplier, so 8- and 16-bit multiplies compile to `mul` instructions, but there's no libgcc, so anything wider fails to link with `undefined symbol: __mulsi3`. That includes dividing a `u16` by a constant that isn't a power of two (`x / 10`, `x % 10`), which LLVM turns into a 32-bit multiply. Host tests won't catch it; `cargo xtask hex` will. 8-bit maths, 16-bit multiplies, division by a runtime value, and `const fn` maths are fine. docs/toolchain.md has the options.
 - **Flash is 16 KB and RAM is 2 KB.** Check `cargo xtask hex` after changes. No `core::fmt` in the firmware (it pulls in kilobytes), and no floats.
 - **Mark uncertainty.** docs/hardware.md labels facts as confirmed or likely. Keep doing that; don't promote a guess to a fact.

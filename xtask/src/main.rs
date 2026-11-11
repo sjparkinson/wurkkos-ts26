@@ -324,15 +324,14 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
 /// since one that doesn't match would flash and verify cleanly, then cap itself
 /// at level 50 with nothing to say why. `cargo xtask hex` always writes all
 /// 16 KB, so a full image that doesn't check is refused. A shorter one isn't
-/// ours, or wasn't signed: Anduril's hex is like that and needs no CRC, and so
-/// is `first-light`, so it gets a warning and goes ahead. Not for `restore`,
-/// since a factory backup has
-/// no CRC of ours.
+/// ours, or wasn't signed: the stock firmware's hex is like that and needs no
+/// CRC, and so is `first-light`, so it gets a warning and goes ahead. Not for
+/// `restore`, since a factory backup has no CRC of ours.
 fn signed(image: &[u8]) -> Result<(), String> {
     if image.len() < map::FLASH_SIZE {
         eprintln!(
             "warning: the image isn't the full {} bytes with a CRC, so it isn't a signed build \
-             of the full firmware. That's right for Anduril and for `first-light`, which check \
+             of the full firmware. That's right for the stock firmware and for `first-light`, which check \
              no CRC. If it's a build from main, it'll cap itself at level 50 on every boot, so \
              flash the file `cargo xtask hex` writes instead",
             map::FLASH_SIZE
@@ -738,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn flash_still_takes_a_short_image_such_as_anduril() {
+    fn flash_still_takes_a_short_image_such_as_the_stock_firmware() {
         assert!(signed(&[0x12, 0x34, 0x56]).is_ok());
     }
 
@@ -754,7 +753,7 @@ mod tests {
     fn flash_takes_this_boards_hex_and_refuses_the_ts21s() {
         for good in [
             "target/wurkkos-ts26-0721.hex",
-            "anduril.wurkkos-ts26.hex",
+            "release.wurkkos-ts26.hex",
             "WURKKOS-TS26.HEX",
         ] {
             assert!(this_boards_hex(Path::new(good)).is_ok(), "{good}");

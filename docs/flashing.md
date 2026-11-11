@@ -94,7 +94,7 @@ That builds the firmware, refuses it if the simulator finds a mistake, and then
 
 If a write or the compare fails, step 5 still runs, so the chip isn't left in programming mode. Whatever was half-written then runs, but with the cell out it's powered by the programmer alone. Run the command again. The same goes for step 1, for a `backup` whose read fails and for a `restore` that's refused: the programmer resets the chip and turns UPDI off before it reports the error.
 
-Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for Anduril and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
+Step 1 is the only check on the chip before the erase, and the signature only says it's an ATtiny1616. A TS21 passes it, so does a chip whose fuses this firmware can't live with, and `flash` never looks at the fuses. Read `backup/torch/fuses.hex` yourself first, and make sure you're in the right repo for the torch on the bench. `flash` with a file refuses a name without `ts26` or `0721` in it, but that's the name and nothing more. It also refuses a full 16 KB image whose CRC doesn't check, since that would cap itself at level 50, and warns about a shorter one, which is right for the stock firmware and for `first-light`, and wrong for a build of the full firmware. Step 4 only says the bytes arrived, and says nothing about whether they run.
 
 A flash doesn't power-cycle the chip, so take the probe off with the cell out and leave it a few seconds, so VCC really collapses, before putting the cell in. Otherwise what the old firmware left in the reset flags could look like a hang.
 
@@ -122,10 +122,10 @@ cargo xtask restore /dev/cu.usbserial-XXXX backup/torch
 
 The check says which chip a backup came from and nothing about which build it holds, so a later backup of the same chip passes too. Read the directory in the command before you run it. `flash` has no such check, since it has no backup to compare.
 
-For current Anduril, download a release zip from [ToyKeeper's releases](https://github.com/ToyKeeper/anduril/releases) and pull the TS26 build out of its `hex/` directory. Anduril's `MODELS` file lists model 0721 as `wurkkos-ts26`, and the hex is named after the release, so in `anduril.r2026-10-26.zip` it's `hex/anduril.r2026-10-26.wurkkos-ts26.hex`. Flash that.
+To go back to the stock firmware without a backup, download its latest release zip (the [README](../README.md#acknowledgements) links the project) and pull the TS26 build out of its `hex/` directory. Model 0721 is `wurkkos-ts26`, so it's the file ending in `.wurkkos-ts26.hex`. Flash that.
 
 ```sh
-cargo xtask flash /dev/cu.usbserial-XXXX path/to/anduril.r2026-10-26.wurkkos-ts26.hex
+cargo xtask flash /dev/cu.usbserial-XXXX path/to/release.wurkkos-ts26.hex
 ```
 
 Unlike the TS21, which runs a Sofirn SP36 build, the TS26 has a build of its own, so there's no guessing which one to pick. I haven't flashed one onto a TS26 myself.

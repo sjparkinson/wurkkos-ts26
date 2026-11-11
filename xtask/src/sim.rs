@@ -206,8 +206,8 @@ const CRC_BUSY_READS: u8 = 2;
 /// conversion finds it isn't ready.
 const CONVERSION_INSTRUCTIONS: u64 = 165 * 16;
 /// What the first conversion after a change of input reads. The datasheet
-/// doesn't promise it's wrong, but Anduril finds it unstable, so the model makes
-/// it as wrong as it gets.
+/// doesn't promise it's wrong, but the stock firmware finds it unstable, so
+/// the model makes it as wrong as it gets.
 const UNSETTLED: u16 = 0;
 
 /// Where flash appears in data space, and how much of it there is.
@@ -2229,8 +2229,8 @@ impl Bus for Chip {
         }
         match a {
             // Every ISC but INPUT_DISABLE leaves the input buffer on, INTDISABLE
-            // included (§16.3.2.1, §16.5.11). The pull-up is Anduril's setting
-            // for the pin (docs/hardware.md). Nobody's seen whether the board
+            // included (§16.3.2.1, §16.5.11). The pull-up is the stock
+            // firmware's setting for the pin (docs/hardware.md). Nobody's seen whether the board
             // has one of its own, so this takes it that it hasn't.
             //
             // A read of the port samples every pin whose buffer is on, and

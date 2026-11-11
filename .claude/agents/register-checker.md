@@ -20,7 +20,7 @@ Sources, in order of trust:
 
 1. Microchip's ATDF for the part, vendored at `vendor/ATtiny1616.atdf` (Apache-2.0, see `vendor/README.md`). Read the local copy; don't fetch it. Module instances give base addresses (`<instance>` → `<register-group offset=...>`), modules give register offsets and bitfield masks, `<interrupt>` gives vector indices.
 2. The ATtiny1614/1616/1617 datasheet (DS40002204) and its errata (DS80000886) for behaviour the ATDF can't express: write order of 16-bit registers (low byte first through TEMP), CCP timing, when TCA0's BUF registers take effect, which flags set without their interrupt enabled. Local copies may be in `docs/microchip/` (gitignored, so look in the main checkout if you're in a worktree). Cite section numbers and the revision letter you read.
-3. Anduril's `hw/wurkkos/ts26/hwdef.h` and `hwdef.c` (ToyKeeper/anduril on GitHub) for what the TS26 (model 0721) board wires to which pin, and how Anduril sets up TCA0 and the boost enable. Pin the link to a commit hash. It's GPL-3.0: cite it, don't copy code from it.
+3. The stock firmware's TS26 hardware definition (README.md's acknowledgements link the project) for what the model 0721 board wires to which pin, and how the stock firmware sets up TCA0 and the boost enable. It's GPL-3.0, so cite it in your report and don't copy code from it. Anything meant for the repo calls it "the stock firmware" and names no files or links.
 
 For each constant or magic number you check, report: what the code says, what the source says, the source location, and a verdict (matches / wrong / can't confirm). Parse the ATDF with a script rather than eyeballing XML. Keep any script in `$TMPDIR`, not in the repo.
 

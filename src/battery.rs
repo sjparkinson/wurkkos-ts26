@@ -11,10 +11,9 @@
 //! ```
 //!
 //! which in centivolts comes to `reading × 473 / (4 × SLOPE)`. Those are the
-//! facts of `mcu_vdivider_raw2cooked16` in Anduril's `arch/attiny1616.c` and
-//! `VOLTAGE_SLOPE` in `hw/wurkkos/ts26/hwdef.h`. The effective ratio is
-//! 4.3 × 1024 / 1094, about 4.03, so the ADC runs out at about 4.42 V
-//! (docs/hardware.md).
+//! facts of the stock firmware's voltage sums and its slope for this board.
+//! The effective ratio is 4.3 × 1024 / 1094, about 4.03, so the ADC runs out
+//! at about 4.42 V (docs/hardware.md).
 //!
 //! `reading × 473` needs 21 bits, and there's no runtime 32-bit multiply on
 //! this chip (docs/toolchain.md). So this splits the reading into its high
@@ -40,10 +39,10 @@ use crate::limits::FAULT_CEILING;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
 
-/// Anduril's `VOLTAGE_SLOPE` for this board, against its default of 1024,
-/// higher reading lower. Calibrated on one of ToyKeeper's samples, and
-/// unmeasured on any light of ours. `VOLTAGE_OFFSET` is 0 here, so there's no
-/// offset to carry.
+/// The stock firmware's voltage slope for this board, against its default of
+/// 1024, higher reading lower. Calibrated on one of ToyKeeper's samples, and
+/// unmeasured on any light of ours. Its offset is 0 here, so there's no offset
+/// to carry.
 pub const SLOPE: u16 = 1094;
 
 /// 1.1 V in centivolts times the 4.3 that a slope of 1024 stands for.
@@ -98,8 +97,8 @@ pub const STEP_DOWN_BELOW: u16 = 300;
 /// Below this many centivolts, held for [`HOLD_SAMPLES`], the ceiling drops
 /// [`FLAT_STEP`] levels, and at level 1 the torch turns off.
 ///
-/// It's Anduril's default `VOLTAGE_LOW` (`fsm/adc.h`), which the TS26's build
-/// doesn't override. Wurkkos quotes 2.8 V, but with an unprotected cell the
+/// It's the stock firmware's default low-voltage threshold, which the TS26's
+/// build doesn't override. Wurkkos quotes 2.8 V, but with an unprotected cell the
 /// higher figure is the one to have. It also leaves 0.2 V, about 7%, over the
 /// MP3432's 2.7 V start-up, so a light that's cut out can start again, and
 /// that 7% has to cover the 1.1 V reference's tolerance and a divider ratio
@@ -126,8 +125,8 @@ pub const HOLD_SAMPLES: u16 = SAMPLES_PER_SECOND;
 
 /// How long it has to stay under [`STEP_DOWN_BELOW`] for each step down: five
 /// seconds. Long enough for the cell to recover a little after the last step,
-/// the way Anduril waits about six seconds between its low-voltage
-/// step-downs. Unmeasured.
+/// the way the stock firmware waits about six seconds between its
+/// low-voltage step-downs. Unmeasured.
 pub const STEP_SAMPLES: u16 = SAMPLES_PER_SECOND * 5;
 
 /// How long it has to stay at [`RECOVER_AT`] or above for each step back up:

@@ -135,7 +135,7 @@ The Friend's been away since 0.16. Check it still is before going on.
 
 ## Stage 1: the pads, and stock
 
-The last chance to measure Anduril, and the first run of the JLHawaii808 kit on any TS26. [hardware.md](hardware.md#the-flashing-pads) knows there are three pads and nothing else about them, so this stage finds out.
+The last chance to measure the stock firmware, and the first run of the JLHawaii808 kit on any TS26. [hardware.md](hardware.md#the-flashing-pads) knows there are three pads and nothing else about them, so this stage finds out.
 
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
@@ -156,9 +156,9 @@ If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signa
 
 With the cell out, the adapter feeds the regulator's output through the supply pad. Whether that reaches the cell rail, where the MP3432's input is, is unknown, and the converter only needs 2.7 V there to start. 1.5's reading against battery positive is the only evidence there is before contact.
 
-It matters because the chip doesn't hold the boost enable low for the whole time the probe's on. After a reset every output is tri-stated (DS40002204A §16.3.1), so PB2 floats until firmware drives it. In programming mode, which is all of `backup`, `flash` and `restore`, the chip's been reset and the CPU isn't running (§33.3.8.2), so PB2 floats for as long as the command takes. That's my reading of the two sections together, and [hardware.md](hardware.md#the-driver) has why a pull-down on the board is likely and unseen. `ping` and `peek` don't enter programming mode, so the firmware runs and drives PB2 itself. But stock Anduril turns the main output on for one blink every time it starts (`blink_once()` in `setup()`, [`ui/anduril/anduril.c`](https://github.com/ToyKeeper/anduril/blob/71fe3012202e6a31ccb4aaf0a569b324a3c8826c/ui/anduril/anduril.c)), and it starts when the probe lands and again when `ping` ends in a reset.
+It matters because the chip doesn't hold the boost enable low for the whole time the probe's on. After a reset every output is tri-stated (DS40002204A §16.3.1), so PB2 floats until firmware drives it. In programming mode, which is all of `backup`, `flash` and `restore`, the chip's been reset and the CPU isn't running (§33.3.8.2), so PB2 floats for as long as the command takes. That's my reading of the two sections together, and [hardware.md](hardware.md#the-driver) has why a pull-down on the board is likely and unseen. `ping` and `peek` don't enter programming mode, so the firmware runs and drives PB2 itself. But the stock firmware turns the main output on for one blink every time it starts ([hardware.md](hardware.md#the-flashing-pads)), and it starts when the probe lands and again when `ping` ends in a reset.
 
-So if the cell rail is fed, the emitters could light with the adapter as their only supply. I found no report of that on a boost driver, and no report of anyone flashing a TS26 at all ([hardware.md](hardware.md#the-flashing-pads)), so the first contact is the test. Any glow or warmth in 1.7 or 1.8 is a stop. A single blink as the probe lands would be Anduril's own, and it's still a stop, because it means the adapter is running the converter.
+So if the cell rail is fed, the emitters could light with the adapter as their only supply. I found no report of that on a boost driver, and no report of anyone flashing a TS26 at all ([hardware.md](hardware.md#the-flashing-pads)), so the first contact is the test. Any glow or warmth in 1.7 or 1.8 is a stop. A single blink as the probe lands would be the stock firmware's own, and it's still a stop, because it means the adapter is running the converter.
 
 ## Stage 2: first flash
 
@@ -178,7 +178,7 @@ The proof that this board does what the repo thinks. In a dark room.
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
 | 3.1 |  | Put the cell in and do up the head, watching the emitters. Repeat ten times | No flash at all. PB2 floats through reset until `hw::init` drives it, so a flash here means nothing's holding it low: stop, and look at 3.7 | The open question on what holds PB2 low, by eye |
-| 3.2 |  | 1C on, 1C off, a few dozen times | Dim, steady, and dark again every time. No flash at turn-on, no blip at turn-off. Well clear of Anduril's floor of 20, at 1,280 in its units | "Does it come on cleanly at duty 10, with no flash at turn-on?" |
+| 3.2 |  | 1C on, 1C off, a few dozen times | Dim, steady, and dark again every time. No flash at turn-on, no blip at turn-off. Well clear of the stock firmware's floor of 20, at 1,280 in its units | "Does it come on cleanly at duty 10, with no flash at turn-on?" |
 | 3.3 |  | Tail current, on | Write it down. It's the first number for what duty does on this driver | Part of "measure what PWM duty does" |
 | 3.4 |  | Tail current, off | A few mA: `first-light` doesn't sleep, and the chip alone is about 3 mA. Much more and something's on that shouldn't be. Anything over the chip's 3 mA is the rest of the driver, which nobody's measured, so write it down | |
 | 3.5 |  | Meter on frequency across the current path, on | 19.6 kHz if it triggers. No reading isn't a failure, since the ripple may be too small | The 10 MHz clock, on the torch |
@@ -186,7 +186,7 @@ The proof that this board does what the repo thinks. In a dark room.
 | 3.7 |  | Cell out, head off: ohms from PB2 to ground, if you can reach the pin | Tens of kΩ or less means a pull-down, which settles the open question. Open means there isn't one, and 3.1's result is all that stands between a reset and a floating enable | "What holds PB2 low" |
 | 3.8 |  | Cell out. Ohms between the pads, then `cargo xtask ping <port>` | Same as 1.6, and the chip still talks | |
 
-**Stage 3 is the gate.** All of it passes, or the full firmware doesn't go on. If the light won't come on, `cargo xtask restore <port> backup/torch` puts Anduril back, and a stock light that works means the fault's in `first-light` and how it reads this board, which is a far smaller place to look than the full firmware.
+**Stage 3 is the gate.** All of it passes, or the full firmware doesn't go on. If the light won't come on, `cargo xtask restore <port> backup/torch` puts the stock firmware back, and a stock light that works means the fault's in `first-light` and how it reads this board, which is a far smaller place to look than the full firmware.
 
 Write the result in the [table](#results) before going on.
 
@@ -194,12 +194,12 @@ Write the result in the [table](#results) before going on.
 
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
-| 4.1 |  | From main, `cargo xtask flash <port>` with no file, then `ping`, then probe off and leave it a few seconds with no cell, so VCC really collapses | Verify passes, and it still talks. A flash doesn't power-cycle the chip, and what Anduril left in the reset flags could otherwise count as a hang | |
+| 4.1 |  | From main, `cargo xtask flash <port>` with no file, then `ping`, then probe off and leave it a few seconds with no cell, so VCC really collapses | Verify passes, and it still talks. A flash doesn't power-cycle the chip, and what the stock firmware left in the reset flags could otherwise count as a hang | |
 | 4.2 |  | If the light's dark from here on | `cargo xtask peek <port>` first, since only the first run shows how far the firmware got (see 0.8). Then go back to the [steps in flashing.md](flashing.md#flash-this-firmware) and flash `first-light` again. If `first-light` still works, it's the firmware, and the board's fine | |
 | 4.3 |  | Cell in, head on, ten times, watching the emitters | No flash, and it's off until clicked. A reset loop would be dark too, so go on to 4.4 | |
 | 4.4 |  | 1C on, 1C off, a few dozen times, then holds | Same feel as the docs/ui.md rows. The 64 Hz tick has the delta-sigma interrupt running under it now, so sluggish clicks mean the interrupt's eating the loop | |
 | 4.5 |  | Tail current, off, on the 4 A range | Reads 0.000 to 0.003 once it's asleep. Anything steadily over about 5 mA isn't a sleeping chip, or it's a reset loop | The rough version of the off current |
-| 4.6 |  | Aux, off, in lockout (4C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from Anduril, so the wrong colour means that's wrong here | "Likely" on the aux pins |
+| 4.6 |  | Aux, off, in lockout (4C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from the stock firmware, so the wrong colour means that's wrong here | "Likely" on the aux pins |
 | 4.7 |  | An hour on at a low level, in sight | Stays on and doesn't move. Going out five minutes after it came on, and coming back with 1C, is a cell voltage it can't read ([flashing.md](flashing.md#if-its-capped-at-level-50)). Going out at any other time is the watchdog biting, or the tick deadline, which ends in the same reset while the oscillator's alive | "It never trips in normal use", in part |
 | 4.8 |  | Leave it off overnight, then 1C | Comes on at once. 6.2 is the real test | |
 
@@ -210,12 +210,12 @@ Short bursts above level 75, and the meter comes out at 3 A.
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
 | 5.1 |  | 1H from off, for the lowest level, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
-| 5.2 |  | The bottom few levels from 13 up, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2. Level 13 was picked to clear that flicker, from a figure on Anduril's curve that nobody's checked on this one | "Is the low-end flicker the driver, the delta-sigma, or both" |
+| 5.2 |  | The bottom few levels from 13 up, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2. Level 13 was picked to clear that flicker, from a figure on the stock firmware's curve that nobody's checked on this one | "Is the low-end flicker the driver, the delta-sigma, or both" |
 | 5.3 |  | Ramp slowly end to end | Smooth, no steps that jump, no blip, each direction. The curve's my own cubic, so an ugly spot is a finding, not a surprise | |
 | 5.4 |  | T1 at levels 25, 50, 75, 100: tail current, and stop at 3 A. Those are duties of about 0.5%, 3.6%, 12% and 29% | Plot current against duty. That's the first picture of what turns PB0 into current, filtered reference or otherwise | "Measure what PWM duty does to output" |
 | 5.5 |  | Ear to the head at low and middle levels | Any whine, compared with 1.2 | |
 | 5.6 |  | Top of the ramp, a few seconds: cell volts across the cell | Write down the sag. Level 120 is a duty of 51%, and nobody knows what current that is | |
-| 5.7 |  | Same run, in the dark, off and on a few times | No blip on either edge. Anduril's note that this driver can't pulse under 2 ms suggests a slow start. A visible lag is fine and a flash isn't | |
+| 5.7 |  | Same run, in the dark, off and on a few times | No blip on either edge. The stock firmware's note that this driver can't pulse under 2 ms suggests a slow start. A visible lag is fine and a flash isn't | |
 
 ## Stage 6: faults and the watchdog
 
