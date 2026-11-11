@@ -66,7 +66,7 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
             0x01 => return Ok(image),
             0x02 if len == 2 => base = usize::from(u16::from_be_bytes([data[0], data[1]])) << 4,
             0x04 if len == 2 => base = usize::from(u16::from_be_bytes([data[0], data[1]])) << 16,
-            0x03 | 0x05 => {} // start addresses: meaningless for AVR flash
+            0x03 | 0x05 => {} // start addresses mean nothing for AVR flash
             kind => return Err(at(&format!("unsupported record type {kind:02X}"))),
         }
     }

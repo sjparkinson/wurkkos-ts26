@@ -1,7 +1,7 @@
 //! Checks on the linked firmware for things src/avr/rt.rs, src/avr/hw.rs and
-//! link.x assume but no compiler or linker error would catch: the vector
-//! table's shape, where the startup code copies and zeroes memory, and that
-//! every unlock of a protected register is followed straight away by the
+//! link.x assume but no compiler or linker error would catch. That's the
+//! vector table's shape, where the startup code copies and zeroes memory, and
+//! that every unlock of a protected register is followed straight away by the
 //! write.
 //!
 //! `build()` in main.rs runs these, so `size`, `hex` and `flash` all refuse
@@ -22,7 +22,7 @@ const CPU_CCP: u16 = addr::CPU_CCP as u16;
 /// Where tinyAVR maps flash into data space, and how much of it there is.
 const MAPPED_FLASH: u32 = map::FLASH as u32;
 const FLASH_SIZE: u32 = map::FLASH_SIZE as u32;
-/// `reti`: 1001 0101 0001 1000.
+/// `reti` is 1001 0101 0001 1000.
 const RETI: u16 = 0x9518;
 
 pub fn check(elf: &Elf) -> Result<(), String> {
@@ -174,9 +174,9 @@ fn mapped(segments: &[Segment]) -> Result<(), String> {
 }
 
 /// Every `out CCP, rN` is followed at once by `st Z, rM`, the pairing
-/// `protected_write` in src/avr/hw.rs relies on: the chip only accepts the
-/// write within four instructions of the key. Also insists there's at least one,
-/// since `hw::init` sets the clock prescaler that way.
+/// `protected_write` in src/avr/hw.rs relies on, because the chip only accepts
+/// the write within four instructions of the key. Also insists there's at
+/// least one, since `hw::init` sets the clock prescaler that way.
 fn protected_writes(text: &[u8]) -> Result<usize, String> {
     let mut found = 0;
     let mut at = 0;
@@ -214,12 +214,12 @@ pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
     Some((high | u32::from(w1)) * 2)
 }
 
-/// The I/O address an `out A, Rr` writes: 1011 1AAr rrrr AAAA.
+/// The I/O address an `out A, Rr` writes. The encoding is 1011 1AAr rrrr AAAA.
 fn out_address(w: u16) -> Option<u16> {
     (w & 0xF800 == 0xB800).then_some((w >> 5) & 0x30 | w & 0x0F)
 }
 
-/// `st Z, Rr`: 1000 001r rrrr 0000.
+/// `st Z, Rr` is 1000 001r rrrr 0000.
 fn is_st_z(w: u16) -> bool {
     w & 0xFE0F == 0x8200
 }
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn rejects_a_short_table() {
-        // One slot short: the last slot is the `reti` and the `nop`.
+        // One slot short, so the last slot is the `reti` and the `nop`.
         let mut img = image(standard);
         img.drain(..4);
         assert!(vectors(&img, 0x7A, 0x78).is_err());
@@ -383,7 +383,8 @@ mod tests {
 
     #[test]
     fn skips_the_address_word_of_two_word_instructions() {
-        // `lds r24, 0xBF84`: the address happens to encode `out 0x34, r24`.
+        // `lds r24, 0xBF84` has an address that happens to encode `out 0x34,
+        // r24`.
         let text = bytes(&[0x9180, OUT_CCP_R24, NOP, OUT_CCP_R24, ST_Z_R25]);
         assert_eq!(protected_writes(&text), Ok(1));
         // And a `call` whose address does the same.

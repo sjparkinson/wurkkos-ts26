@@ -1,9 +1,9 @@
 //! The checksum the chip's CRCSCAN checks flash against at power-on.
 //!
-//! DS40002204A §27.2: CRC-16-CCITT (x¹⁶ + x¹² + x⁵ + 1, so 0x1021), the
+//! DS40002204A §27.2 has CRC-16-CCITT (x¹⁶ + x¹² + x⁵ + 1, so 0x1021), the
 //! checksum register starting at 0xFFFF, each byte fed in most significant
 //! bit first. That's the parameter set usually called CRC-16/CCITT-FALSE
-//! (or CRC-16/IBM-3740): no reflection and no final XOR. §27.3.2.1 and
+//! (or CRC-16/IBM-3740), with no reflection and no final XOR. §27.3.2.1 and
 //! table 27-1 put the checksum for a whole-flash scan in the last two bytes
 //! of flash, high byte at FLASHEND - 1.
 //!
@@ -14,7 +14,7 @@
 //! repeating it.
 //!
 //! Microchip's AN2521A ("CRCSCAN on devices in the tinyAVR 1-series", not
-//! in docs/microchip/) agrees: its whole-flash post-build step (§5) is
+//! in docs/microchip/) agrees. Its whole-flash post-build step (§5) is
 //! `srec_cat ... -fill 0xFF ... -CRC16_Big_Endian <end-2> -broken`, where
 //! `-broken` is this CRC, and §6 says a signed section scans to 0x0000.
 //!
@@ -22,8 +22,8 @@
 
 use crate::updi::map::FLASH_SIZE;
 
-/// CRC-16-CCITT as CRCSCAN computes it: seed 0xFFFF, MSB first, no final
-/// XOR.
+/// CRC-16-CCITT as CRCSCAN computes it, with seed 0xFFFF, MSB first and no
+/// final XOR.
 pub fn crc16(bytes: impl IntoIterator<Item = u8>) -> u16 {
     bytes.into_iter().fold(0xFFFF, |crc, byte| {
         (0..8).fold(crc ^ u16::from(byte) << 8, |crc, _| {
@@ -36,12 +36,12 @@ pub fn crc16(bytes: impl IntoIterator<Item = u8>) -> u16 {
     })
 }
 
-/// Where the checksum goes: the last two bytes of flash.
+/// Where the checksum goes, in the last two bytes of flash.
 pub const CHECKSUM_AT: usize = FLASH_SIZE - 2;
 
-/// The firmware as it's flashed: padded to all of flash with 0xFF, which is
-/// what erased flash reads as, and the checksum of everything before it in
-/// the last two bytes, high byte first.
+/// The firmware as it's flashed. It's padded to all of flash with 0xFF, which
+/// is what erased flash reads as, and the checksum of everything before it
+/// goes in the last two bytes, high byte first.
 pub fn sign(image: &[u8]) -> Result<Vec<u8>, String> {
     if image.len() > CHECKSUM_AT {
         return Err(format!(
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn matches_the_crc_16_ccitt_false_check_value() {
-        // The standard check: the ASCII digits 1 to 9.
+        // The standard check input is the ASCII digits 1 to 9.
         assert_eq!(crc16(*b"123456789"), 0x29B1);
         assert_eq!(crc16([]), 0xFFFF, "the seed");
     }

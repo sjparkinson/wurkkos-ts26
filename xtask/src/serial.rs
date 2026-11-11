@@ -2,7 +2,7 @@
 //!
 //! Configuring a port properly means termios, which means libc or a serial
 //! crate. `stty` is on every Mac and Linux box already and does the same
-//! job: we open the port, hand the open file to `stty` as its stdin, and the
+//! job. We open the port, hand the open file to `stty` as its stdin, and the
 //! settings stick for as long as we hold it open. Windows isn't supported.
 
 use std::fs::{File, OpenOptions};
@@ -23,7 +23,8 @@ const BREAK_BAUD: u32 = 300;
 /// second that `stty time` counts in. Long enough for any reply.
 const READ_TIMEOUT: u8 = 10;
 
-/// The same while draining: 100 ms of quiet means nothing else is coming.
+/// The same while draining, where 100 ms of quiet means nothing else is
+/// coming.
 const DRAIN_TIMEOUT: u8 = 1;
 
 /// Reads of junk before deciding the line will never go quiet.
@@ -86,8 +87,8 @@ impl Port {
 
     fn configure(&self, baud: u32, timeout: u8) -> io::Result<()> {
         let status = Command::new("stty")
-            // `raw` first: on macOS it's cfmakeraw, which also resets the
-            // character size and parity that the later flags set.
+            // `raw` goes first because on macOS it's cfmakeraw, which also
+            // resets the character size and parity that the later flags set.
             .args(["raw", "-echo", "clocal", "-crtscts", "-ixon", "-ixoff"])
             // UPDI frames are 8 data bits, even parity and two stop bits.
             .args(["cs8", "parenb", "-parodd", "cstopb"])
@@ -109,9 +110,9 @@ impl Port {
     /// echo byte for byte, so one stale byte (noise from the probe landing,
     /// or a run stopped part way) would otherwise fail the first instruction
     /// with a misleading "echo didn't match". avrdude drains on open and after
-    /// a double break for the same reason: adapters were seen echoing a break
-    /// late enough to shift every reply after it by a byte (avrdude issue
-    /// #874).
+    /// a double break for the same reason, since adapters were seen echoing a
+    /// break late enough to shift every reply after it by a byte (avrdude
+    /// issue #874).
     fn drain(&mut self) -> io::Result<()> {
         self.configure(BAUD, DRAIN_TIMEOUT)?;
         read_until_quiet(&mut self.file)?;

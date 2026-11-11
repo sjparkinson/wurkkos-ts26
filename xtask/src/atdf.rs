@@ -5,17 +5,17 @@
 //! calls [`generate`]. xtask compiles it for its tests only (`main.rs` declares
 //! it under `#[cfg(test)]`), which is where the parser and the generator get
 //! tested, because a build script can't have tests of its own. The tests also
-//! check what generating can't: what the firmware assumes about the ATDF's
-//! layout, and that `link.x` agrees with it. So nothing outside them may name
-//! `crate::` or `ts26::`, which `build.rs` doesn't have.
+//! check what generating can't, which is what the firmware assumes about the
+//! ATDF's layout, and that `link.x` agrees with it. So nothing outside them
+//! may name `crate::` or `ts26::`, which `build.rs` doesn't have.
 //!
-//! The parser handles what ATDF files contain: elements, double- or
+//! The parser handles what ATDF files contain, which is elements, double- or
 //! single-quoted attributes, comments and the XML declaration. Text content
 //! is skipped, since the ATDF keeps everything in attributes.
 
 use std::collections::BTreeMap;
 
-/// One XML element: its name, attributes and child elements.
+/// One XML element, with its name, attributes and child elements.
 struct Element {
     name: String,
     attrs: Vec<(String, String)>,
@@ -253,8 +253,8 @@ fn doc(path: String, element: &Element) -> String {
 /// includes it, and describes the names.
 ///
 /// Only addresses, masks, named values, segments, vectors and the signature.
-/// The `initval`s stay out on purpose: they disagree with the datasheet on
-/// ADC0.CALIB and the factory OSCCFG and SYSCFG0.
+/// The `initval`s stay out on purpose, because they disagree with the
+/// datasheet on ADC0.CALIB and the factory OSCCFG and SYSCFG0.
 pub fn generate(xml: &str) -> String {
     let document = parse(xml);
     let file = document.child("avr-tools-device-file");
@@ -549,7 +549,7 @@ mod tests {
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     }
 
-    /// Just enough of a GNU ld script: the (name, origin, length) of each
+    /// Enough of a GNU ld script to get the (name, origin, length) of each
     /// MEMORY region, and the hex numbers anywhere after MEMORY. Comments
     /// are dropped first.
     fn linker_script(script: &str) -> (Vec<(String, u32, u32)>, Vec<u32>) {

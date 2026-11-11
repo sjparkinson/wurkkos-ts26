@@ -1,4 +1,4 @@
-//! Just enough ELF32 to pull the flash image, RAM use and the symbols
+//! Enough ELF32 to pull the flash image, RAM use and the symbols
 //! `layout.rs` checks out of the firmware.
 
 use std::ops::Range;
@@ -67,7 +67,8 @@ impl Elf {
                 r.u32(at + 16)?,
             );
             // Loadable bytes with a flash load address are what gets
-            // programmed: .text, .rodata and .data's initial values.
+            // programmed, which means .text, .rodata and .data's initial
+            // values.
             if kind == PT_LOAD && filesz > 0 && paddr < DATA_SPACE {
                 let data = r.slice(offset as usize, filesz as usize)?.to_vec();
                 segments.push(Segment { vaddr, paddr, data });
@@ -200,7 +201,7 @@ impl Reader<'_> {
 mod tests {
     use super::*;
 
-    /// Builds a minimal AVR ELF: two loadable segments, a .bss section, a
+    /// Builds a minimal AVR ELF with two loadable segments, a .bss section, a
     /// debug section and a symbol table.
     fn sample() -> Vec<u8> {
         const PHNUM: usize = 2;

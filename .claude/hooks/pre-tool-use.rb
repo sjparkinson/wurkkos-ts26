@@ -42,7 +42,8 @@ input = JSON.parse($stdin.read)
 command = input.dig("tool_input", "command").to_s
 exit 0 unless COMMIT.match?(command)
 
-# No inline message (-F, --amend --no-edit, the editor): nothing to check.
+# With no inline message (-F, --amend --no-edit, the editor) there's nothing
+# to check.
 msg = message(command)
 if msg
   reason = problem(msg)

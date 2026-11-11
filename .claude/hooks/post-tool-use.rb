@@ -2,9 +2,9 @@
 # PostToolUse hook on Edit and Write. Lints the file that changed and, on a
 # problem, exits 2 so stderr goes back to Claude to fix.
 #
-#   .rs  rustfmt --check, then clippy: the host's, and the AVR target's too for
-#        files with code the host never compiles (src/avr/, which gets only
-#        the AVR's, and the firmware and link probe mains)
+#   .rs  rustfmt --check, then the host's clippy. The firmware and link probe
+#        mains get the AVR target's clippy too, and src/avr/ gets only the
+#        AVR's, since the host never compiles that code.
 #   .rb  ruby -wc
 #   .github/workflows/*.yml  gh actions-lock --verify-local (lockfile coverage)
 

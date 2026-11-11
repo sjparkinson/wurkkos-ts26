@@ -1,4 +1,4 @@
-//! Just enough terminal for `cargo xtask simulate`: keys one at a time,
+//! Enough terminal for `cargo xtask simulate`. Keys arrive one at a time,
 //! without echo.
 //!
 //! Raw mode properly means termios, and termios means libc or `unsafe`, so

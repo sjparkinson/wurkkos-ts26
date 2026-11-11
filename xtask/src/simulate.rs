@@ -1,8 +1,8 @@
-//! `cargo xtask simulate`: the UI in `src/ui.rs`, run on your machine.
+//! `cargo xtask simulate` runs the UI in `src/ui.rs` on your machine.
 //!
 //! It drives `ts26::torch::Torch`, the same loop body the firmware runs, one
 //! switch sample per 64 Hz tick. Give it a script in Anduril's notation and
-//! it prints what each click and hold did:
+//! it prints what each click and hold did, like this.
 //!
 //! ```text
 //! cargo xtask simulate 1C 2H:1.5s wait:1s 3C
@@ -73,10 +73,10 @@ pub fn script(words: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// Turns ticks into log lines: one per click, one per hold (when it ends,
-/// not every tick it's held), and one for any change of level that no
-/// click or hold explains. A run of one-level steps a tick apart, all the
-/// same way, is a fade, and gets one line when it stops.
+/// Turns ticks into log lines, with one per click, one per hold (when it ends,
+/// not every tick it's held), and one for any change of level that no click
+/// or hold explains. A run of one-level steps a tick apart, all the same
+/// way, is a fade, and gets one line when it stops.
 #[derive(Default)]
 struct Log {
     level: u8,
@@ -86,7 +86,7 @@ struct Log {
     fade: Option<Fade>,
 }
 
-/// A fade in progress: the tick of its first and latest steps, and the
+/// A fade in progress, with the tick of its first and latest steps, and the
 /// level before it and now.
 struct Fade {
     start: u32,
@@ -103,8 +103,9 @@ impl Fade {
 }
 
 impl Log {
-    /// The lines this tick ends up with: usually none, sometimes a fade that
-    /// just stopped and the thing that stopped it.
+    /// The lines this tick ends up with. Usually there are none, but
+    /// sometimes there's a fade that just stopped and the thing that stopped
+    /// it.
     fn note(&mut self, now: u32, event: Option<Event>, level: u8) -> Vec<String> {
         let before = std::mem::replace(&mut self.level, level);
         let quiet = event.is_none() && self.hold.is_none();
@@ -182,7 +183,7 @@ impl Log {
     }
 }
 
-/// Ticks shown as seconds: `  1.50 s` for 96 ticks.
+/// Ticks shown as seconds, so 96 ticks is `  1.50 s`.
 struct Seconds(u32);
 
 impl fmt::Display for Seconds {
@@ -192,8 +193,8 @@ impl fmt::Display for Seconds {
     }
 }
 
-/// A level as people read it: `off` or `level 50/150`, or with `{:#}`, the
-/// shorter `50/150`.
+/// A level as people read it, which is `off` or `level 50/150`, or with
+/// `{:#}` the shorter `50/150`.
 struct Level(u8);
 
 impl fmt::Display for Level {
@@ -267,7 +268,8 @@ enum Command {
     Quit,
 }
 
-/// A live session, minus the terminal: keys in, ticks, a status line out.
+/// A live session, minus the terminal. Keys go in, and ticks and a status
+/// line come out.
 #[derive(Default)]
 struct Live {
     /// The torch, with a 3.8 V cell at 25 °C.
@@ -339,8 +341,8 @@ impl Live {
     }
 }
 
-/// How much of the bar a level fills: none when off, at least one block
-/// when on, and all of it at the top.
+/// How much of the bar a level fills. None when off, at least one block when
+/// on, and all of it at the top.
 fn lit(level: u8) -> usize {
     (usize::from(level) * BAR).div_ceil(usize::from(LEVELS))
 }

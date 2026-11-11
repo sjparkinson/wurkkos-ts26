@@ -12,9 +12,9 @@
 //! ATtiny1616 ATDF in `vendor/`, through `ts26::regs`. The UPDI instruction
 //! set isn't in the ATDF, so those stay hand-written.
 //!
-//! What this deliberately can't do: write fuses, write the user row, or
-//! unlock a locked chip. None of those are needed to flash a TS26, and the
-//! first can leave it unrecoverable without a high-voltage programmer.
+//! This deliberately can't write fuses, write the user row or unlock a locked
+//! chip. None of those are needed to flash a TS26, and the first can leave it
+//! unrecoverable without a high-voltage programmer.
 
 use std::fmt;
 use std::io;
@@ -47,14 +47,14 @@ pub mod map {
     /// What the signature reads.
     pub const ATTINY1616: [u8; 3] = regs::SIGNATURE;
 
-    /// The chip's serial number, SIGROW.SERNUM0 to SERNUM9: the ten bytes
-    /// of the signature row straight after the signature (DS §6.10.2.2).
-    /// Read only: UPDI can't write the signature row (DS table 6-5), and
+    /// The chip's serial number, SIGROW.SERNUM0 to SERNUM9, which is the ten
+    /// bytes of the signature row straight after the signature (DS §6.10.2.2).
+    /// Read only, since UPDI can't write the signature row (DS table 6-5), and
     /// nothing here tries.
     pub const SERIAL: u16 = addr::SIGROW_SERNUM0 as u16;
     pub const SERIAL_SIZE: usize = addr::SIGROW_SERNUM9 - addr::SIGROW_SERNUM0 + 1;
 
-    /// The fuses (0x1280..0x128A) and the lock byte (0x128A). Read only:
+    /// The fuses (0x1280..0x128A) and the lock byte (0x128A). Read only, and
     /// nothing here writes them.
     pub const FUSES: u16 = mem::FUSES_START as u16;
     pub const FUSES_SIZE: usize = mem::LOCKBITS_END - mem::FUSES_START;
@@ -130,11 +130,11 @@ const MAX_BLOCK: usize = 256;
 /// How long the chip gets to come out of reset into programming mode.
 const PROGMODE_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// A chip's serial number: SIGROW.SERNUM0 to SERNUM9, in that order.
+/// A chip's serial number, SIGROW.SERNUM0 to SERNUM9 in that order.
 ///
 /// The datasheet's words are "Each device has an individual serial number,
 /// representing a unique ID" (DS §6.10.2.2). That sentence is all there is to
-/// go on: it doesn't say how the number's made up, and nobody here has
+/// go on, since it doesn't say how the number's made up, and nobody here has
 /// compared two chips'. `backup` saves it beside the images, and `restore`
 /// checks it before it erases anything, so a backup only goes back onto the
 /// chip it was read from.
@@ -227,7 +227,7 @@ impl<W: Wire> Programmer<W> {
     /// If the second try fails too, this gives up without sending UPDIDIS,
     /// though the chip may have heard enough to turn UPDI on. That's been
     /// looked at and left. By then the line has failed to answer twice, and
-    /// it gets no more bytes sent down it: for one that's held low,
+    /// it gets no more bytes sent down it. For one that's held low,
     /// docs/flashing.md says to stop and measure. What's left behind is UPDI
     /// and its clock request staying on, which costs power (DS §33.3.2.2.2),
     /// and only while the chip has any. The cell's out, so the adapter is its
@@ -250,7 +250,7 @@ impl<W: Wire> Programmer<W> {
     ///
     /// Leaving is a reset request and UPDIDIS, both writes to UPDI's own
     /// registers, which is all a locked chip accepts (DS §33.3.8.1). Neither
-    /// erases anything: that takes the chip erase key, which this never
+    /// erases anything, since that takes the chip erase key, which this never
     /// sends.
     pub fn connect_for_programming(wire: W) -> Result<Self> {
         let mut p = Self::connect(wire)?;
@@ -267,7 +267,7 @@ impl<W: Wire> Programmer<W> {
     /// As [`Self::connect_for_programming`], for `restore`. It then reads
     /// the chip's serial number and refuses any chip but the one the backup
     /// in `dir` was read from, whose serial number is `saved`. That's after
-    /// the signature check and before anything's erased: there's no
+    /// the signature check and before anything's erased, so there's no
     /// programmer to erase with until the two match. A chip that's refused is
     /// left the way [`Self::leave`] does it, with a reset and then UPDI off.
     ///
@@ -298,7 +298,7 @@ impl<W: Wire> Programmer<W> {
         }
     }
 
-    /// The System Information Block: 16 bytes of ASCII naming the chip
+    /// The System Information Block, 16 bytes of ASCII naming the chip
     /// family and UPDI version. Readable without any key.
     pub fn sib(&mut self) -> Result<[u8; 16]> {
         self.send(&[SYNC, KEY | KEY_SIB | SIB_16])?;
@@ -396,7 +396,7 @@ impl<W: Wire> Programmer<W> {
     /// page instead of two. Erases EEPROM too unless EESAVE is set.
     ///
     /// The erase and the write stay in one call because a page write can only
-    /// clear bits: over flash that isn't blank, it ANDs the new data into the
+    /// clear bits, so over flash that isn't blank it ANDs the new data into the
     /// old. Follow with [`Self::verify`], which catches an erase that didn't
     /// take. Refuses an image bigger than flash before erasing anything.
     pub fn erase_and_write_flash(&mut self, data: &[u8]) -> Result<()> {
@@ -494,8 +494,8 @@ impl<W: Wire> Programmer<W> {
     /// polls where [`Self::enter_progmode`] goes by the clock. That's been
     /// looked at and left. A count is only wrong when a fast adapter can get
     /// through it before the chip's done, and this one is an upper bound with
-    /// room to spare: the datasheet's typical times are 2 ms for a page write
-    /// and 4 ms for a page erase-write or a chip erase (DS §36.22, table
+    /// room to spare, since the datasheet's typical times are 2 ms for a page
+    /// write and 4 ms for a page erase-write or a chip erase (DS §36.22, table
     /// 36-38, which gives no maximum), and 10,000 polls take a second even at
     /// 0.1 ms a round trip. `serial.rs` can't be that quick. A poll is five
     /// 12-bit frames, about 0.5 ms at 115,200 baud before any USB latency, so
@@ -790,9 +790,10 @@ pub(crate) mod tests {
         tiny
     }
 
-    /// Checks a chip that was refused was let go the way `leave` does it:
-    /// reset a second time, then UPDI off, with the chip out of programming
-    /// mode and the flash and EEPROM [`with_contents`] gave it as they were.
+    /// Checks a chip that was refused was let go the way `leave` does it,
+    /// which is reset a second time, then UPDI off, with the chip out of
+    /// programming mode and the flash and EEPROM [`with_contents`] gave it as
+    /// they were.
     fn assert_let_go(tiny: &Tiny) {
         assert_eq!(tiny.resets, 2, "one reset to enter and one to leave");
         assert!(!tiny.in_reset, "the chip was left in reset");
@@ -960,7 +961,7 @@ pub(crate) mod tests {
 
         assert_eq!(&tiny.flash[..image.len()], &image[..]);
         assert!(tiny.flash[image.len()..].iter().all(|&b| b == 0xFF));
-        // One erase per page, the chip erase's: 1000 bytes is 16 pages.
+        // One erase per page, the chip erase's, and 1000 bytes is 16 pages.
         assert_eq!(tiny.page_writes, 16);
         assert_eq!(tiny.page_erase_writes, 0);
         assert!(tiny.updi_disabled);
@@ -1054,10 +1055,11 @@ pub(crate) mod tests {
         p.write(map::EEPROM, map::EEPROM_PAGE, &eeprom).unwrap();
         p.verify(map::EEPROM, &eeprom).unwrap();
         let fuses = p.read(map::FUSES, map::FUSES_SIZE).unwrap();
-        assert_eq!(fuses[2], 0x02); // OSCCFG: 20 MHz
+        assert_eq!(fuses[2], 0x02); // OSCCFG says 20 MHz
 
         // EEPROM kept its old contents through the chip erase, so it needs
-        // erase-write: 256 bytes is 8 pages. The flash page is a plain write.
+        // erase-write, and 256 bytes is 8 pages. The flash page is a plain
+        // write.
         let tiny = p.leave().unwrap();
         assert_eq!(tiny.page_erase_writes, 8);
         assert_eq!(tiny.page_writes, 1);
@@ -1113,7 +1115,7 @@ pub(crate) mod tests {
             pub flash: Vec<u8>,
             pub eeprom: Vec<u8>,
             pub signature: [u8; 3],
-            /// SIGROW.SERNUM0 to SERNUM9. The bytes are made up: nobody
+            /// SIGROW.SERNUM0 to SERNUM9. The bytes are made up, since nobody
             /// here has read a real chip's.
             pub serial: [u8; map::SERIAL_SIZE],
             pub locked: bool,
@@ -1130,8 +1132,8 @@ pub(crate) mod tests {
             /// How long after a reset the chip's still starting up, reading
             /// as locked and not in programming mode.
             pub start_up: Duration,
-            /// How long each reply takes to come back: the adapter's USB
-            /// latency, near enough. The fake clock moves on by this much
+            /// How long each reply takes to come back, which is the adapter's
+            /// USB latency, near enough. The fake clock moves on by this much
             /// per `recv`.
             pub round_trip: Duration,
             /// The fake clock, as time since `clock_start`.
@@ -1139,7 +1141,7 @@ pub(crate) mod tests {
             clock_start: Instant,
             /// When the start-up after the last reset ends.
             started_at: Duration,
-            /// The EESAVE fuse: EEPROM survives a chip erase.
+            /// The EESAVE fuse, which makes EEPROM survive a chip erase.
             pub eesave: bool,
             /// A chip erase that silently does nothing.
             pub ignores_chip_erase: bool,
@@ -1412,7 +1414,7 @@ pub(crate) mod tests {
                         } else {
                             // Flash erases the whole page. EEPROM erases only
                             // the bytes loaded into the page buffer (DS40001893A,
-                            // 9.3.1.2: byte granularity on erase-write).
+                            // 9.3.1.2, byte granularity on erase-write).
                             for (cell, (&b, &loaded)) in cells.zip(bytes) {
                                 if base == map::FLASH || loaded {
                                     *cell = b;

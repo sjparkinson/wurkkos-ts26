@@ -1,4 +1,4 @@
-//! `cargo xtask <command>`: the AVR build and the steps around it that cargo
+//! `cargo xtask <command>` is the AVR build and the steps around it that cargo
 //! can't do.
 //!
 //! No dependencies beyond the firmware's own library. ELF reading, Intel HEX,
@@ -133,8 +133,8 @@ fn build() -> Result<(elf::Elf, sim::Report), String> {
     Ok((elf, report))
 }
 
-/// The link probe is only worth checking if it really has something in
-/// each section: `layout::memory` passes an empty .data without looking.
+/// The link probe is only worth checking if it really has something in each
+/// section, because `layout::memory` passes an empty .data without looking.
 fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
     for name in [".rodata", ".data", ".bss"] {
         match elf.section(name) {
@@ -145,9 +145,9 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes the image `flash` would: the firmware padded to all of flash with
-/// 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints flash, RAM,
-/// stack, loop and handler use.
+/// Writes the image `flash` would, which is the firmware padded to all of
+/// flash with 0xFF and its CRC in the last two bytes (`crc.rs`). Then prints
+/// flash, RAM, stack, loop and handler use.
 fn hex() -> Result<(), String> {
     let (elf, sim) = build()?;
     let firmware = elf.flash_image();
@@ -194,7 +194,7 @@ fn hex() -> Result<(), String> {
     Ok(())
 }
 
-/// One line of the size report, in columns: used, out of, percent, unit.
+/// One line of the size report, in columns for used, out of, percent and unit.
 fn row(label: &str, used: u64, of: Option<u64>, unit: &str) -> String {
     let (of, percent) = match of {
         Some(of) => (
@@ -245,12 +245,12 @@ fn ping(port: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads what the running firmware has left behind, without a write: UPDI
-/// reaches data space while the CPU runs. Turning UPDI off afterwards should
-/// reset the chip (DS §33.3.2.2.2), so a second read sees a fresh boot, not what
-/// the first one saw. Only `hw::init` sets the
-/// clock, the pin directions and the PIT, so those say whether it ran.
-/// VPORTB.OUT says whether the boost converter's on.
+/// Reads what the running firmware has left behind, without a write, since
+/// UPDI reaches data space while the CPU runs. Turning UPDI off afterwards
+/// should reset the chip (DS §33.3.2.2.2), so a second read sees a fresh
+/// boot, not what the first one saw. Only `hw::init` sets the clock, the pin
+/// directions and the PIT, so those say whether it ran. VPORTB.OUT says
+/// whether the boost converter's on.
 ///
 /// The addresses are the firmware's own, from src/regs.rs. src/regs.rs has no
 /// stack pointer, since the firmware never touches it, so that comes from the
@@ -324,7 +324,7 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
 /// since one that doesn't match would flash and verify cleanly, then cap itself
 /// at level 50 with nothing to say why. `cargo xtask hex` always writes all
 /// 16 KB, so a full image that doesn't check is refused. A shorter one isn't
-/// ours, or wasn't signed: the stock firmware's hex is like that and needs no
+/// ours, or wasn't signed. The stock firmware's hex is like that and needs no
 /// CRC, and so is `first-light`, so it gets a warning and goes ahead. Not for
 /// `restore`, since a factory backup has no CRC of ours.
 fn signed(image: &[u8]) -> Result<(), String> {
@@ -466,8 +466,8 @@ struct Backup {
 }
 
 /// Reads the backup in `dir`, the serial number first, since without one
-/// that can tell chips apart the rest won't be written. Fuses aren't read:
-/// nothing writes them back.
+/// that can tell chips apart the rest won't be written. Fuses aren't read,
+/// because nothing writes them back.
 fn read_backup(dir: &Path) -> Result<Backup, String> {
     let serial_path = dir.join("serial.hex");
     if !serial_path.try_exists().map_err(at(&serial_path))? {

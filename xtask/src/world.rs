@@ -1,5 +1,6 @@
-//! What the simulated chip sees: a script's scene, which `ts26::testing`'s
-//! `Rig` sees too, plus the fuse bytes, which only the firmware reads.
+//! What the simulated chip sees. That's a script's scene, which
+//! `ts26::testing`'s `Rig` sees too, plus the fuse bytes, which only the
+//! firmware reads.
 
 use ts26::regs::addr as reg;
 use ts26::selftest::{Faults, Fuses};
@@ -20,10 +21,10 @@ pub const FUSE_NAMES: [&str; FUSE_BYTES] = [
     "WDTCFG", "BODCFG", "OSCCFG", "", "TCD0CFG", "SYSCFG0", "SYSCFG1", "APPEND", "BOOTEND",
 ];
 
-/// The fuses the firmware expects, as the datasheet has a factory chip: no
-/// watchdog from the fuse, BOD off, 20 MHz, UPDI on the reset pin, no CRC at
-/// start-up and no boot or application section. The datasheet, the errata and
-/// the ATDF disagree on OSCCFG and SYSCFG0's spare bits, which is why the
+/// The fuses the firmware expects, as the datasheet has a factory chip. That's
+/// no watchdog from the fuse, BOD off, 20 MHz, UPDI on the reset pin, no CRC
+/// at start-up and no boot or application section. The datasheet, the errata
+/// and the ATDF disagree on OSCCFG and SYSCFG0's spare bits, which is why the
 /// firmware only checks fields.
 pub const FACTORY_FUSES: [u8; FUSE_BYTES] = [0x00, 0x00, 0x02, 0xFF, 0x00, 0xC4, 0x07, 0x00, 0x00];
 
@@ -62,7 +63,7 @@ impl World {
     }
 
     /// A world whose fuses fail the firmware's read-back, which is what a
-    /// script's `fault` means: OSCCFG asks for 16 MHz.
+    /// script's `fault` means. OSCCFG asks for 16 MHz.
     pub fn with_bad_fuse(mut self) -> Self {
         self.fuses[OSCCFG] = 0x01;
         self.scene.fault = true;
