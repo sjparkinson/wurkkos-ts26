@@ -7,8 +7,8 @@ xtask = "run --quiet --package xtask --"
 rustflags = [
   "-C", "target-cpu=attiny1616",
   # Link with the rust-lld that ships with the toolchain, against our own
-  # linker script and vector table (link.x, src/rt.rs), so there's no avr-gcc
-  # or avr-libc anywhere in the build. build.rs passes -Tlink.x.
+  # linker script and vector table (link.x, src/avr/rt.rs), so there's no
+  # avr-gcc or avr-libc anywhere in the build. build.rs passes -Tlink.x.
   "-C", "linker=rust-lld",
   "-C", "linker-flavor=ld.lld",
   "-C", "relocation-model=static",
