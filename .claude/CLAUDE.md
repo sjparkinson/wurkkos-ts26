@@ -8,7 +8,7 @@ Firmware for the Wurkkos TS26 torch (Anduril model 0721) (ATtiny1616, MP3432 boo
 cargo fmt --check                                          # formatting, as CI runs it
 cargo test --workspace --locked -q                         # host tests, run these constantly
 cargo clippy --workspace --all-targets --locked -- -D warnings   # host lints
-cargo clippy --package ts26 --release --target avr-none -Zbuild-std=core -- -D warnings   # firmware lints: the only place hw.rs and rt.rs get linted
+cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings   # firmware lints: the only place hw.rs and rt.rs get linted
 cargo xtask hex                                            # firmware ELF and hex, plus flash/RAM use, after any firmware change
 ```
 

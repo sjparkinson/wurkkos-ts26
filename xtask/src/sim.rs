@@ -110,8 +110,8 @@
 //!
 //! All but the first two drive `ts26::torch` alongside the firmware and check
 //! the pins show the library's output on every tick, the fourth until the
-//! oscillator stops. `probe` separately runs src/bin/link_probe.rs, which has
-//! real statics.
+//! oscillator stops. `probe` separately runs examples/link.rs, which has real
+//! statics.
 
 use std::iter;
 use std::ops::Range;
@@ -671,7 +671,7 @@ fn in_step(
     Ok(finished.then(|| rig.level()))
 }
 
-/// What src/bin/link_probe.rs's `main` leaves in `LINK_PROBE_COPY`: its
+/// What examples/link.rs's `main` leaves in `LINK_PROBE_COPY`: its
 /// .rodata table, then its .data static's starting values, then a byte it
 /// doesn't touch.
 const PROBE_EXPECTED: [u8; 7] = [0x12, 0x34, 0x56, 0x9A, 0xBC, 0xDE, 0];

@@ -89,7 +89,7 @@ Then, after `cargo xtask hex` (it leaves the ELF behind even when its checks fai
 
 ## Host builds
 
-`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/hw.rs` and `src/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
+`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/hw.rs` and `src/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
 
 ## First build
 

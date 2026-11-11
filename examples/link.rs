@@ -20,7 +20,7 @@
 #[cfg(target_arch = "avr")]
 use ts26::regs;
 #[cfg(target_arch = "avr")]
-#[path = "../rt.rs"]
+#[path = "../src/rt.rs"]
 mod rt;
 
 /// rt.rs's vector table jumps to these by name. The probe never enables an

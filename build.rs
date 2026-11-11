@@ -24,4 +24,6 @@ fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     println!("cargo::rustc-link-search={dir}");
     println!("cargo::rustc-link-arg-bins=-Tlink.x");
+    // examples/link.rs, which checks link.x.
+    println!("cargo::rustc-link-arg-examples=-Tlink.x");
 }

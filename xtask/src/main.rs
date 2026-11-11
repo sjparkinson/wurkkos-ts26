@@ -56,8 +56,8 @@ or /dev/ttyUSB0 on Linux. <dir> names one chip's backup, e.g. backup/torch.
 ";
 
 const ELF: &str = "target/avr-none/release/ts26.elf";
-/// src/bin/link_probe.rs, which `build` builds alongside the firmware.
-const PROBE: &str = "target/avr-none/release/link-probe.elf";
+/// examples/link.rs, which `build` builds alongside the firmware.
+const PROBE: &str = "target/avr-none/release/examples/link.elf";
 const HEX: &str = "target/wurkkos-ts26-0721.hex";
 
 fn main() -> ExitCode {
@@ -110,6 +110,9 @@ fn build() -> Result<(elf::Elf, sim::Report), String> {
         "build",
         "--package",
         "ts26",
+        "--bins",
+        "--example",
+        "link",
         "--release",
         "--target",
         "avr-none",

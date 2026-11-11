@@ -8,11 +8,11 @@ CI runs these on every pull request, so run them before you push.
 cargo fmt --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-cargo clippy --package ts26 --release --target avr-none -Zbuild-std=core -- -D warnings
+cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings
 cargo xtask hex
 ```
 
-The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/hw.rs` and `src/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `src/bin/link_probe.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
+The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/hw.rs` and `src/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume (`xtask/src/layout.rs`: the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
 
 ## The simulator
 
@@ -50,7 +50,7 @@ src/regs.rs       register addresses and bit values, generated from the ATDF by 
 src/main.rs       the firmware loop (a stub on the host)
 src/hw.rs         pins, register access and the interrupt handlers (AVR only)
 src/rt.rs         vector table and startup (AVR only)
-src/bin/link_probe.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
+examples/link.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
 xtask/            hex, the simulator, simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
 docs/             hardware, flashing, bench plan, toolchain, UI spec, roadmap
@@ -71,7 +71,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Unsafe
 
-`unsafe_code` is denied across the workspace. Only `src/hw.rs`, `src/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `src/bin/link_probe.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
+`unsafe_code` is denied across the workspace. Only `src/hw.rs`, `src/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `examples/link.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
 
 ## Bumping the nightly
 
