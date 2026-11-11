@@ -633,6 +633,56 @@ mod tests {
         assert!(run.levels.iter().all(|&l| l <= FAULT_CEILING));
     }
 
+    /// A million ticks of random UI levels and ADC results, checking every
+    /// step against `cap` and the UI.
+    fn throw_noise_at(mut limits: Limits, cap: u8, seed: u32) {
+        let mut rng = crate::testing::Rng::new(seed);
+        let mut ticks = 0_u32;
+        while ticks < 1_000_000 {
+            // The UI holds a level for a run of ticks, so the ceilings have
+            // time to move. Some runs are off, and some ask for more than
+            // the ramp has.
+            let ui = match rng.next_u16() % 8 {
+                0 => 0,
+                1 => 255,
+                _ => rng.next_u16() as u8,
+            };
+            let run = 1 + u32::from(rng.next_u16() % 4000);
+            // What the ADC says for this run. Anything at all, a believable
+            // reading, or one believable reading over and over.
+            let mode = rng.next_u16() % 3;
+            let held = rng.next_u16() % (4 * 1023 + 1);
+            for _ in 0..run {
+                let result = match (rng.next_u16() % 4, mode) {
+                    (0, _) => None,
+                    (_, 0) => Some(rng.next_u16()),
+                    (_, 1) => Some(rng.next_u16() % (4 * 1023 + 1)),
+                    _ => Some(held),
+                };
+                let step = limits.tick(ui, result);
+                assert!(
+                    step.level <= ui.min(cap),
+                    "ui {ui}, result {result:?}: level {}",
+                    step.level
+                );
+                assert!(step.level <= CEILING, "level {}", step.level);
+                assert!(!step.off || step.level == 0, "off at level {}", step.level);
+                assert_eq!(limits.level(), step.level);
+            }
+            ticks += run;
+        }
+    }
+
+    #[test]
+    fn random_readings_never_lift_the_level_over_the_ui_or_the_cap() {
+        throw_noise_at(Limits::new(CALIBRATION, Faults::NONE), CEILING, 0x5EED_0001);
+    }
+
+    #[test]
+    fn random_readings_never_lift_a_failed_self_tests_level_over_the_fault_ceiling() {
+        throw_noise_at(Limits::new(CALIBRATION, FAILED), FAULT_CEILING, 0x5EED_0002);
+    }
+
     #[test]
     fn a_failed_self_test_shows_nothing_from_off() {
         let mut run = Run::with(FAILED);

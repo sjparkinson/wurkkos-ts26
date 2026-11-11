@@ -742,12 +742,45 @@ fn read(example: &str) -> Option<(&str, Expect)> {
     Some((script, expect.trim().parse().ok()?))
 }
 
+/// A small, fixed-seed random number generator (xorshift32), so tests can
+/// throw varied readings at the firmware's logic and still fail the same way
+/// every time. It's no good for anything else.
+#[derive(Clone, Debug)]
+pub struct Rng(u32);
+
+impl Rng {
+    /// Starts from `seed`. Xorshift never leaves zero, so a seed of zero
+    /// becomes 1.
+    pub const fn new(seed: u32) -> Self {
+        Self(if seed == 0 { 1 } else { seed })
+    }
+
+    /// The next 16 bits, from the top of the state, which is the better end.
+    pub fn next_u16(&mut self) -> u16 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        (self.0 >> 16) as u16
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
 
     use super::*;
+    use std::collections::BTreeSet;
     use std::string::ToString;
+
+    #[test]
+    fn the_rng_doesnt_get_stuck_at_zero() {
+        for seed in [0, 1, 0xDEAD_BEEF] {
+            let mut rng = Rng::new(seed);
+            let values: BTreeSet<u16> = (0..1000).map(|_| rng.next_u16()).collect();
+            assert!(values.len() > 900, "seed {seed}: {} values", values.len());
+            assert!(values.iter().any(|&value| value > 0xF000));
+        }
+    }
 
     fn convert(channel: Channel) -> Option<Convert> {
         Some(Convert {

@@ -925,4 +925,84 @@ mod tests {
         }
         assert!(verdicts.contains(&Verdict::Off));
     }
+
+    /// Where a voltage held for ever should end up, worked out from the public
+    /// thresholds alone and not by asking [`Protection`].
+    #[derive(Debug, PartialEq)]
+    enum Held {
+        /// A cell that's fine, so no limit at all.
+        Fine,
+        /// A cell that's plausible and flat, so it ends up off.
+        Flat,
+        /// A reading that can't be real, so the fault ceiling, then off once
+        /// it's gone unread for [`BLIND_SAMPLES`].
+        Unreadable,
+    }
+
+    fn held(cv: u16) -> Held {
+        if !PLAUSIBLE.contains(&cv) {
+            Held::Unreadable
+        } else if cv < STEP_DOWN_BELOW {
+            Held::Flat
+        } else {
+            Held::Fine
+        }
+    }
+
+    #[test]
+    fn every_reading_held_ends_where_the_thresholds_say() {
+        let mut ends = [0_u32; 3];
+        for raw in 0..=MAX_READING {
+            let cv = centivolts(raw);
+            let expected = held(cv);
+            let mut lvp = Protection::new();
+            // The UI is at the top and the light follows the ceiling down,
+            // the way `limits` runs it.
+            let mut level = CEILING;
+            let mut off_at = None;
+            for n in 1..=BLIND_SAMPLES + 50 {
+                let verdict = lvp.sample(cv, level);
+                for _ in 0..CYCLE_TICKS {
+                    lvp.tick();
+                }
+                level = CEILING.min(lvp.ceiling());
+                if let Verdict::Ceiling(ceiling) = verdict {
+                    assert!(ceiling <= CEILING, "raw {raw}, sample {n}: {ceiling}");
+                }
+                assert!(lvp.ceiling() <= CEILING, "raw {raw}, sample {n}");
+                let want = match expected {
+                    Held::Fine => Some(NONE),
+                    Held::Unreadable if n <= u16::from(GLITCHES) => Some(NONE),
+                    Held::Unreadable if n < BLIND_SAMPLES => Some(Verdict::Ceiling(FAULT_CEILING)),
+                    Held::Unreadable => Some(Verdict::Off),
+                    Held::Flat => None,
+                };
+                if let Some(want) = want {
+                    assert_eq!(verdict, want, "raw {raw} ({cv} cV), sample {n}");
+                }
+                if verdict == Verdict::Off {
+                    off_at = Some(n);
+                    break;
+                }
+            }
+            match expected {
+                Held::Fine => assert_eq!(off_at, None, "raw {raw} ({cv} cV)"),
+                Held::Flat => {
+                    let at = off_at.unwrap_or_else(|| panic!("raw {raw} ({cv} cV) never off"));
+                    // Several holds, one for each step down the ramp.
+                    assert!(at >= HOLD_SAMPLES, "raw {raw} ({cv} cV) off at {at}");
+                }
+                Held::Unreadable => {
+                    assert_eq!(off_at, Some(BLIND_SAMPLES), "raw {raw} ({cv} cV)");
+                }
+            }
+            ends[match expected {
+                Held::Fine => 0,
+                Held::Flat => 1,
+                Held::Unreadable => 2,
+            }] += 1;
+        }
+        // Every kind turns up, or the classifier isn't being tested.
+        assert!(ends.iter().all(|&count| count > 0), "{ends:?}");
+    }
 }

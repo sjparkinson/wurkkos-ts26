@@ -809,4 +809,49 @@ mod tests {
         let stretch = closed_loop(&mut run, &mut head, ui, 4 * 60 * 20, &mut noise, 1);
         assert_eq!((stretch.lowest, stretch.highest), (ui, ui), "{stretch:?}");
     }
+
+    #[test]
+    fn every_reading_held_ends_where_the_limit_says() {
+        // A steady reading has no trend, so the band under the limit is a
+        // hold and the ceiling can only be where it started.
+        let limit = LIMIT * FRACTION as u16;
+        let mut hot = 0;
+        let mut cool = 0;
+        for sum in 0..=4 * 1023 {
+            let reading = crate::testing::CALIBRATION.sixteenths(sum);
+            let too_hot = !plausible(reading) || reading > limit;
+            let mut thermal = Thermal::new();
+            let mut settled = 0_u32;
+            // The slowest reading to give way is a sixteenth over the limit,
+            // which takes about sixteen seconds a level.
+            for sample in 0..8000_u32 {
+                let level = CEILING.min(thermal.ceiling());
+                thermal.sample(reading, level);
+                for _ in 0..CYCLE_TICKS {
+                    let ceiling = thermal.tick();
+                    assert!(
+                        (FLOOR..=CEILING).contains(&ceiling),
+                        "sum {sum} ({reading}), sample {sample}: {ceiling}"
+                    );
+                }
+                settled = match thermal.ceiling() == if too_hot { FLOOR } else { CEILING } {
+                    true => settled + 1,
+                    false => 0,
+                };
+                // Stop once it's stayed where it should be for a while.
+                if settled >= 50 {
+                    break;
+                }
+            }
+            let want = if too_hot { FLOOR } else { CEILING };
+            assert_eq!(thermal.ceiling(), want, "sum {sum} ({reading})");
+            assert!(settled >= 50, "sum {sum} ({reading}) hadn't settled");
+            if too_hot {
+                hot += 1;
+            } else {
+                cool += 1;
+            }
+        }
+        assert!(hot > 0 && cool > 0, "{hot} hot, {cool} cool");
+    }
 }
