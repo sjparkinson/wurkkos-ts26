@@ -1,6 +1,6 @@
 //! The TS26 driver's pins and the ATtiny1616 registers that drive them.
 //!
-//! No PAC: the register constants are generated from Microchip's ATDF into
+//! No PAC. The register constants are generated from Microchip's ATDF into
 //! `src/regs.rs` at build time. The pin map is `ts26::board`'s.
 
 #![allow(unsafe_code)]
@@ -27,9 +27,9 @@ const PORTB_PINS: u8 = 6;
 const PORTC_OUTPUTS: u8 = AUX_PINS;
 const PORTC_PINS: u8 = 4;
 
-/// TCA0.CTRLB with the light off: dual-slope, PB0 left to PORT.
+/// TCA0.CTRLB with the light off, so dual-slope with PB0 left to PORT.
 const CTRLB_OFF: u8 = regs::TCA_WGMODE_DSBOTTOM;
-/// TCA0.CTRLB with the light on: the same, with WO0 driving PB0.
+/// TCA0.CTRLB with the light on, the same but with WO0 driving PB0.
 const CTRLB_ON: u8 = regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM;
 
 // WO2's pad is PB2, so a CTRLB with CMP2EN would hand the boost enable to
@@ -67,7 +67,7 @@ fn read(addr: usize) -> u8 {
     unsafe { read_volatile(addr as *const u8) }
 }
 
-/// 16-bit peripheral registers go through a shared TEMP byte: write the low
+/// 16-bit peripheral registers go through a shared TEMP byte. Write the low
 /// byte first, then the high byte. Spelling it out keeps the order from
 /// depending on the compiler.
 ///
@@ -179,8 +179,8 @@ pub fn init() {
     // PA1 is the battery divider, an ADC input at about a quarter of the
     // cell's voltage. It gets its digital input buffer turned off, as the
     // datasheet asks for a pin the ADC reads (DS40002204A section 30.3.1.1),
-    // and nothing else: never a pull-up, which would skew the divider. The
-    // ADC still sees the pin, which is the point of the advice: section
+    // and nothing else. Never a pull-up, which would skew the divider. The
+    // ADC still sees the pin, which is the point of the advice. Section
     // 16.3.2.2 says the same of a pin "used as analog input", and Microchip's
     // own ADC example turns the buffer off on the pin it converts (TB3209B
     // section 3). PA1's bit in VPORTA.IN stops following the pin (section
@@ -188,8 +188,8 @@ pub fn init() {
     // on a real TS26 with the buffer on and off.
     //
     // PA5 is the switch, and its pull-up is what the switch pulls against.
-    // ISC stays at INTDISABLE, its reset value: no interrupt, and the input
-    // buffer on, so VPORTA.IN still reads the pin (sections 16.3.2.1 and
+    // ISC stays at INTDISABLE, its reset value, with no interrupt and the
+    // input buffer on, so VPORTA.IN still reads the pin (sections 16.3.2.1 and
     // 16.5.11). `wait_for_tick` says why there's no interrupt.
     for pin in 0..8 {
         let ctrl = match pin {
@@ -213,7 +213,7 @@ pub fn init() {
 
     // PORTB's OUT is zero because `hold_enable_low` cleared it. PORTC's is as
     // reset left it, zero, and nothing in here ever writes it. So these all
-    // come up low: the boost converter off, and the aux LEDs dark.
+    // come up low, with the boost converter off and the aux LEDs dark.
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS);
 
@@ -253,7 +253,7 @@ pub fn init() {
     // needs (errata DS80000886C 2.4.1).
     write(reg::ADC0_CTRLD, regs::ADC_INITDLY_DLY32);
     // 22 ADC clocks of sampling, 35 µs. The temperature sensor needs 32 µs,
-    // and that sets this. PA1 is the other limit: the divider is 25 to 77 kΩ
+    // and that sets this. PA1 is the other limit. The divider is 25 to 77 kΩ
     // depending on which story about its resistors is true (docs/hardware.md),
     // plus the ADC's own 14 kΩ, into 5 pF (table 36-25). At worst that's a
     // time constant of 0.46 µs, and settling to half a bit of 10 takes under
@@ -262,10 +262,11 @@ pub fn init() {
     write(reg::ADC0_SAMPCTRL, regs::ADC_SAMPLEN_32US);
 
     // The RTC's periodic interrupt timer, off the internal 32.768 kHz
-    // oscillator (RTC.CLKSEL's reset value) divided by 512: 64 Hz, with its
-    // interrupt on, in the datasheet's order (section 23.5.1). RTC.CTRLA
-    // stays at its reset value: any write to it stretches the PIT's period,
-    // and clearing RTCEN stops the PIT (errata DS80000886C 2.6.1 and 2.6.2).
+    // oscillator (RTC.CLKSEL's reset value) divided by 512, which is 64 Hz,
+    // with its interrupt on, in the datasheet's order (section 23.5.1).
+    // RTC.CTRLA stays at its reset value, since any write to it stretches the
+    // PIT's period, and clearing RTCEN stops the PIT (errata DS80000886C 2.6.1
+    // and 2.6.2).
     write(reg::RTC_PITINTCTRL, regs::RTC_PI);
     while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}
     write(reg::RTC_PITCTRLA, regs::RTC_PERIOD_CYC512 | regs::RTC_PITEN);
@@ -281,7 +282,7 @@ pub fn init() {
 const TICK: u8 = 1 << 0;
 
 /// The whole steps of PWM duty for [`tca0_ovf`], 0 to 255. Like the tick, the
-/// delta-sigma's state lives in GPIORs: they're zero from reset, and this way
+/// delta-sigma's state lives in GPIORs. They're zero from reset, and this way
 /// the handler reads them in one cycle each, with nothing to save.
 const DSM_DUTY: usize = reg::GPIO_GPIOR1;
 /// The seven bits of `Output::dsm` below the duty.
@@ -297,7 +298,7 @@ const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 ///
 /// Power-down stops TCA0 wherever it is, so it only happens with PB2 low. If
 /// the torch ever says it's resting with the boost converter on, this idles
-/// instead: the light stays as it was, and the loop keeps running, so the
+/// instead. The light stays as it was, and the loop keeps running, so the
 /// protection does too.
 ///
 /// It also turns the ADC and its forced reference off. The datasheet gives no
@@ -308,7 +309,7 @@ const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 /// PWM going and the ADC keeps converting. Standby would stop TCA0, which has
 /// no RUNSTDBY (section 11.3.2.1).
 ///
-/// SEN has to stay set in both: with it clear, `sleep` does nothing.
+/// SEN has to stay set in both, because with it clear, `sleep` does nothing.
 fn prepare_sleep(rest: bool) {
     let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {
         write(reg::ADC0_CTRLA, 0);
@@ -324,10 +325,10 @@ fn prepare_sleep(rest: bool) {
 /// PIT carries on in there (section 23.8 and the errata's table 3-3), so the
 /// loop runs every tick, on or off, and that's how it sees the switch.
 ///
-/// The switch has no interrupt, so a press never wakes the chip: it waits for
+/// The switch has no interrupt, so a press never wakes the chip. It waits for
 /// the next tick, 15.6 ms at most, and the loop reads PA5 then. A press that
 /// comes and goes between two ticks is missed. An interrupt on the pin
-/// wouldn't change either, since the loop only looks once a tick: the chip
+/// wouldn't change either, since the loop only looks once a tick. The chip
 /// would wake and go straight back to sleep. It wouldn't be dependable from
 /// power-down anyway. PA5 is a partially asynchronous pin, so with the clock
 /// stopped a press that's over before the chip has woken can wake it and
@@ -336,7 +337,7 @@ fn prepare_sleep(rest: bool) {
 ///
 /// The PIT interrupt sets [`TICK`]; this checks and clears it with interrupts
 /// off, so a tick can't land between the check and the clear. If it isn't set
-/// yet, `sei` and `sleep` go back to back (AN2515C section 4.5): the
+/// yet, `sei` and `sleep` go back to back (AN2515C section 4.5). The
 /// instruction after `sei` always runs before a pending interrupt, so a tick
 /// that arrived after the check wakes the `sleep` at once rather than being
 /// slept through. The only other interrupt is TCA0's overflow, which wakes it
@@ -421,7 +422,7 @@ pub fn halt() -> ! {
     }
 }
 
-/// RTC_PIT, vector 7: the 64 Hz tick. It clears the PIT's flag and sets
+/// RTC_PIT, vector 7, the 64 Hz tick. It clears the PIT's flag and sets
 /// [`TICK`], and that's all, since the loop only reads or clears that with
 /// interrupts off.
 #[unsafe(no_mangle)]
@@ -514,7 +515,7 @@ pub fn feed_watchdog() {
 }
 
 /// What caused this reset, from `RSTCTRL.RSTFR`, leaving it clear for the
-/// next one. The flags are sticky: writing 1 clears any of them, and a
+/// next one. The flags are sticky. Writing 1 clears any of them, and a
 /// power-on reset clears them all but PORF (section 12.5.1). No other reset
 /// does, so this has to run on every boot before anything could reset the
 /// chip.
@@ -526,7 +527,7 @@ pub fn take_reset_flags() -> u8 {
 
 /// Has CRCSCAN check all of flash against the CRC `cargo xtask hex` puts in
 /// its last two bytes, and says whether it matched. Run it before turning
-/// anything on: the scan stalls the CPU until it's done, 8,192 words at
+/// anything on, since the scan stalls the CPU until it's done, 8,192 words at
 /// three clocks each, about 7 ms at the reset clock of 20 MHz / 6.
 ///
 /// STATUS.OK reads 1 from reset, before any scan, and the scan only starts
@@ -573,7 +574,7 @@ pub fn fuses() -> Fuses {
 
 /// Lights one aux channel, dimly, or none. Safe to call every tick.
 ///
-/// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up: the
+/// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up. The
 /// lit channel is an input with its pull-up on, and the trickle through the
 /// pull-up is the low setting, like the TS21's button LED. The others are
 /// outputs at the 0 in OUT, which holds them dark. That this is what the stock
@@ -594,7 +595,7 @@ pub fn set_aux(colour: Aux) {
 
 /// Whether the switch is down. It pulls PA5 low against the pin's pull-up.
 /// The loop calls this once a tick, and it's all the firmware knows of the
-/// switch: PA5 has no interrupt (see [`wait_for_tick`]).
+/// switch. PA5 has no interrupt (see [`wait_for_tick`]).
 ///
 /// IN stops following the pin in power-down, since the clock that syncs it
 /// has stopped (DS40002204A section 16.3.5), and the datasheet doesn't say
@@ -616,10 +617,10 @@ fn without_interrupts(f: impl FnOnce()) {
     write(reg::CPU_SREG, sreg);
 }
 
-/// TCA0_OVF, vector 8: the bottom of a PWM cycle, 19,600 times a second, and
+/// TCA0_OVF, vector 8, the bottom of a PWM cycle, 19,600 times a second, and
 /// the only thing that writes the compare while the light's on.
 ///
-/// This is a first-order delta-sigma: the fraction piles up in [`DSM_SUM`],
+/// This is a first-order delta-sigma. The fraction piles up in [`DSM_SUM`],
 /// and each time it passes a whole step of duty, this cycle runs one step
 /// brighter and the step comes off the pile. Over 128 cycles the duty averages
 /// out to `dsm / 128`. Both bytes are under 128, so the sum fits in a `u8`,

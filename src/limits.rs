@@ -1,5 +1,5 @@
-//! What the cell and the temperature allow: the UI's level in, the level to
-//! run at out.
+//! What the cell and the temperature allow, with the UI's level in and the
+//! level to run at out.
 //!
 //! Each tick this runs the ADC's [`Schedule`], hands each reading to
 //! low-voltage protection (`battery::Protection`) or thermal regulation
@@ -11,7 +11,7 @@
 //! Garbage readings fail safe. Each side has its own idea of a reading that
 //! can't be real (`battery::plausible`, `thermal::plausible`), lets a few
 //! go, and then drops its ceiling rather than trusting it or turning the
-//! light off there and then: the battery side to [`FAULT_CEILING`], the
+//! light off there and then. The battery side drops to [`FAULT_CEILING`], the
 //! thermal side to its floor. A garbage temperature never does more than
 //! that. A garbage voltage means no low-voltage cut-off, so if the light's
 //! been on for five minutes without one reading to believe
@@ -29,11 +29,11 @@ use crate::temp::Calibration;
 use crate::thermal::{self, Thermal};
 
 /// The highest level the torch runs at when something's wrong that it can't
-/// see past: a failed self-test, or a voltage reading it can't believe. The
-/// TS21 fell back on its 350 mA linear channel. This board has nothing like
-/// that, so this borrows the thermal floor's level, a few per cent of full
-/// duty on our curve. Unmeasured: bright enough to find your way out by,
-/// gentle on the cell as far as anyone can say without a meter on it.
+/// see past, such as a failed self-test or a voltage reading it can't
+/// believe. The TS21 fell back on its 350 mA linear channel. This board has
+/// nothing like that, so this borrows the thermal floor's level, a few per
+/// cent of full duty on our curve. Unmeasured. Bright enough to find your way
+/// out by, gentle on the cell as far as anyone can say without a meter on it.
 pub const FAULT_CEILING: u8 = thermal::FLOOR;
 
 const _: () = assert!(FAULT_CEILING <= CEILING);
@@ -44,7 +44,7 @@ pub struct Step {
     /// The level to run at, `0` meaning off.
     pub level: u8,
     /// The cell's flat, or it's been five minutes since anything could read
-    /// it: turn the UI off.
+    /// it, so turn the UI off.
     pub off: bool,
 }
 
@@ -59,8 +59,8 @@ pub struct Limits {
     /// The level the light's at, as of the last tick.
     level: u8,
     convert: Option<Convert>,
-    /// The highest level the light may ever run at: `ramp::CEILING`, or
-    /// [`FAULT_CEILING`] if a self-test failed.
+    /// The highest level the light may ever run at, which is `ramp::CEILING`,
+    /// or [`FAULT_CEILING`] if a self-test failed.
     cap: u8,
 }
 
@@ -86,7 +86,7 @@ impl Limits {
         self.convert
     }
 
-    /// The level the light's at, `0` meaning off: the last tick's
+    /// The level the light's at, `0` meaning off, which is the last tick's
     /// [`Step::level`].
     pub fn level(&self) -> u8 {
         self.level
@@ -97,7 +97,7 @@ impl Limits {
         (self.protection.ceiling(), self.thermal.ceiling())
     }
 
-    /// A tick in place of [`Limits::tick`] while the torch rests: the light's
+    /// A tick in place of [`Limits::tick`] while the torch rests. The light's
     /// off, and nothing's measured, since the ADC can't run in power-down. A
     /// conversion started now would come back on waking with an invalid
     /// result (DS40002204A §30.3.5). So a battery ceiling only climbs once
@@ -111,7 +111,7 @@ impl Limits {
         self.level = 0;
     }
 
-    /// One tick: `ui` is the level the UI wants (`0` for off) and `result`
+    /// One tick. `ui` is the level the UI wants (`0` for off) and `result`
     /// the ADC's result, if it has one ready.
     pub fn tick(&mut self, ui: u8, result: Option<u16>) -> Step {
         let on = ui != 0;
@@ -416,7 +416,7 @@ mod tests {
         run.adc.voltage = 0;
         run.ui = CEILING;
         assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
-        // One round, so one reading, at 3.1 V: too low to lift the ceiling
+        // One round, so one reading, at 3.1 V, too low to lift the ceiling
         // and too high to count as low.
         run.adc.voltage = voltage_reading(310);
         run.ticks(u32::from(CYCLE_TICKS));
@@ -531,7 +531,7 @@ mod tests {
         run.adc.temperature = celsius(25);
         run.secs(1);
         run.ui = CEILING;
-        // Straight back to the top: last time's heat doesn't carry over.
+        // Straight back to the top, since last time's heat doesn't carry over.
         assert_eq!(run.ticks(1), CEILING);
     }
 

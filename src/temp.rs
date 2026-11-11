@@ -9,7 +9,7 @@
 //!
 //! So the ADC accumulates four conversions, and this works in the sum `s`.
 //! Four conversions are four times the reading, and sixteenths are sixteen
-//! times the kelvin, which leaves:
+//! times the kelvin, so the sum works out like this.
 //!
 //! ```text
 //! sixteenths  ==  ((s - 4 * offset) * gain + 0x20) >> 6
@@ -17,7 +17,7 @@
 //!
 //! The product runs to 21 bits, and there's no runtime 32-bit multiply on
 //! this chip (see docs/toolchain.md). It doesn't need one. Split the
-//! difference `d` into its high and low bytes:
+//! difference `d` into its high and low bytes, and the sum below holds.
 //!
 //! ```text
 //! (d * g + 0x20) >> 6  ==  hi * g * 4 + ((lo * g + 0x20) >> 6)
@@ -27,7 +27,7 @@
 //! shift loses nothing and the answer is exact. `lo * g + 0x20` is at most
 //! 65,057. Four full-scale conversions and the lowest offset make `d` 4,604
 //! at most, but capping it at `MAX_DIFFERENCE` is what keeps every step inside
-//! a `u16` for any reading at all: `hi * g * 4` is then at most 64,260, and
+//! a `u16` for any reading at all. Then `hi * g * 4` is at most 64,260, and
 //! the sum at most 65,276.
 
 /// The factory calibration for this chip's temperature sensor, from

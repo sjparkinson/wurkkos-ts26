@@ -1,4 +1,5 @@
-//! Thermal regulation: temperature readings in, a ceiling on the level out.
+//! Thermal regulation, with temperature readings in and a ceiling on the level
+//! out.
 //!
 //! Feed it a reading from `temp::sixteenths` every [`CYCLE_TICKS`] ticks with
 //! [`Thermal::sample`], call [`Thermal::tick`] every tick, and run the light
@@ -49,14 +50,13 @@ pub const fn celsius(degrees: u8) -> u16 {
 }
 
 /// The temperature to hold the MCU at, 50 °C, in kelvin. The stock firmware's
-/// figure for Wurkkos lights. Unmeasured here: 1Lumen saw 52 °C
-/// on the head on one sample, and nobody knows what the MCU reads when the
-/// head's at that.
+/// figure for Wurkkos lights. Unmeasured here. 1Lumen saw 52 °C on the head
+/// on one sample, and nobody knows what the MCU reads when the head's at that.
 pub const LIMIT: u16 = celsius(50);
 
 /// The lowest level thermal regulation steps down to. The stock firmware's
-/// level number, on our curve. Unmeasured: nobody knows that this level is cool enough to
-/// hold in still air, or what it draws.
+/// level number, on our curve. Unmeasured. Nobody knows that this level is
+/// cool enough to hold in still air, or what it draws.
 pub const FLOOR: u8 = 50;
 
 const _: () = assert!(FLOOR <= CEILING);
@@ -180,7 +180,7 @@ pub struct Thermal {
     smoothed: Option<Smoothed>,
     /// Glitches in a row.
     rejected: u8,
-    /// Error summed over readings: positive pushes the ceiling down,
+    /// Error summed over readings. Positive pushes the ceiling down,
     /// negative pushes it up.
     pressure: i16,
 }
@@ -206,14 +206,14 @@ impl Thermal {
         self.ceiling.level()
     }
 
-    /// Forgets everything: no ceiling, and the next reading starts the
-    /// smoothing and the trend afresh. Call it when the light turns on, since
-    /// nothing's sampled while it's off.
+    /// Forgets everything, so there's no ceiling, and the next reading starts
+    /// the smoothing and the trend afresh. Call it when the light turns on,
+    /// since nothing's sampled while it's off.
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 
-    /// One tick: moves the ceiling a step towards where it's heading and
+    /// One tick. Moves the ceiling a step towards where it's heading and
     /// returns it.
     pub fn tick(&mut self) -> u8 {
         self.ceiling.tick()
@@ -253,7 +253,7 @@ impl Thermal {
         let over = predicted - LIMIT_SIXTEENTHS;
         if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
             // Each step down costs `DOWN_PRESSURE`, so the rate follows how
-            // far over the prediction is: a kelvin over steps once a second,
+            // far over the prediction is. A kelvin over steps once a second,
             // four over steps every reading, and a sixteenth over takes
             // sixteen seconds.
             let pressure = self.pressure.max(0).saturating_add(over);
@@ -275,10 +275,10 @@ impl Thermal {
                 self.pressure = pressure;
             }
         } else if over <= 0 {
-            // Inside the window: hold, and forget the push either way.
+            // Inside the window, so hold and forget the push either way.
             self.pressure = 0;
         }
-        // Over the limit but already cooling: hold, and keep the pressure
+        // Over the limit but already cooling, so hold and keep the pressure
         // for if it turns.
     }
 
@@ -375,7 +375,7 @@ mod tests {
         kelvin.saturating_mul(FRACTION as u16)
     }
 
-    /// A rough head: heat in from the LEDs, out to the air, and the MCU a
+    /// A rough head, with heat in from the LEDs, out to the air, and the MCU a
     /// few seconds behind the head. Nothing about it is measured; it's
     /// there to give the controller something with lag to fight against.
     /// Temperatures are in thousandths of a kelvin.
@@ -750,7 +750,7 @@ mod tests {
         let mut run = Run::new();
         run.hold(celsius(30), CEILING, 20);
         off_and_on(&mut run);
-        // Turned on at the top while still 10 °C over: the first reading has
+        // Turned on at the top while still 10 °C over. The first reading has
         // no history, and it still steps down straight away.
         assert!(run.sample(LIMIT + 10, CEILING) < CEILING);
         let mut samples = 1;

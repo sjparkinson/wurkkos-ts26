@@ -20,9 +20,9 @@
 //!
 //! That's all there is. The TS21 also proves its watchdog at every power-on
 //! with three deliberate resets and a marker in `.noinit`. This firmware
-//! doesn't, by choice: that TS21 went dark straight after a verified flash of
-//! that stack, and a firmware hang wasn't ruled out. So nobody's seen this
-//! watchdog bite on a real chip until docs/breakout.md says so.
+//! doesn't, by choice, because that TS21 went dark straight after a verified
+//! flash of that stack, and a firmware hang wasn't ruled out. So nobody's seen
+//! this watchdog bite on a real chip until docs/breakout.md says so.
 //!
 //! The watchdog can't catch its own oscillator stopping, since the tick stops
 //! with it. [`TICK_DEADLINE_CYCLES`] is for that, and only with the light on.
@@ -52,8 +52,9 @@ const _: () = {
     assert!(CLOCKS_PER_TICK < OPEN_CLOCKS);
 };
 
-/// The main clock in hertz: the 20 MHz oscillator divided by 2, which is what
-/// `hw::init` sets. xtask's simulator holds the firmware to the same number.
+/// The main clock in hertz. It's the 20 MHz oscillator divided by 2, as
+/// `hw::init` sets it, and xtask's simulator holds the firmware to the same
+/// number.
 pub const CLOCK_HZ: u32 = 10_000_000;
 
 /// How many PWM cycles `hw::wait_for_tick` waits for a tick with the light on
@@ -70,7 +71,7 @@ pub const CLOCK_HZ: u32 = 10_000_000;
 /// them. 2,048 is about 104 ms, over six ticks.
 ///
 /// A tick that's only late is the watchdog's to catch. It bites 64 WDT clocks
-/// after a feed has synced, which takes up to three more (§19.3.6): 67 in
+/// after a feed has synced, which takes up to three more (§19.3.6), so 67 in
 /// all, a little over four ticks however slow the oscillator runs. At worst
 /// the 32 kHz oscillator is 30% slow and the 20 MHz one 5% fast (DS40002204A
 /// tables 36-13 and 36-12, over the full operating range, from
@@ -88,12 +89,12 @@ const _: () = {
     let deadline = TICK_DEADLINE_CYCLES as u32 * cycle;
     // About a tenth of a second.
     assert!(deadline > 6 * tick && deadline < 7 * tick);
-    // The slowest tick inside the datasheet's limits: 5% more clocks from the
-    // 20 MHz oscillator, in the 1 / 0.7 of the time the 32 kHz one takes.
+    // The slowest tick inside the datasheet's limits, with 5% more clocks from
+    // the 20 MHz oscillator in the 1 / 0.7 of the time the 32 kHz one takes.
     let slowest = tick * 105 / 70;
-    // The longest the watchdog takes to bite, in WDT clocks from the `wdr`:
-    // three to sync it, then both windows. The deadline counts from the wait
-    // after a tick, which is never before the last feed.
+    // The longest the watchdog takes to bite, in WDT clocks from the `wdr`.
+    // That's three to sync it, then both windows. The deadline counts from the
+    // wait after a tick, which is never before the last feed.
     let bite = (3 + CLOSED_CLOCKS + OPEN_CLOCKS) as u32;
     assert!(deadline * CLOCKS_PER_TICK as u32 > bite * slowest);
 };
@@ -134,8 +135,8 @@ impl Feeder {
     }
 
     /// Whether the sleep after this pass can be power-down, `resting` being
-    /// whether the torch has anything to do. Not straight after a feed: a
-    /// `wdr` takes two or three WDT clocks to sync (§19.3.6), and the
+    /// whether the torch has anything to do. Not straight after a feed, because
+    /// a `wdr` takes two or three WDT clocks to sync (§19.3.6), and the
     /// datasheet doesn't say it gets there with the peripheral clock stopped.
     /// If it didn't, the watchdog would reset a resting torch. That costs an
     /// idle tick in [`FEED_TICKS`] while resting.

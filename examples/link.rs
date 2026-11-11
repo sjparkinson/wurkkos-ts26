@@ -1,4 +1,4 @@
-//! Not firmware: a program with one static of each kind, for `cargo xtask`
+//! Not firmware, but a program with one static of each kind, for `cargo xtask`
 //! to check link.x and src/avr/rt.rs against. The torch firmware has no
 //! statics yet, so as linked its .rodata, .data and .bss are all empty and
 //! nothing real reads through the mapped-flash window or relies on the

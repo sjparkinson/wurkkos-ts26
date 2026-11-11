@@ -5,7 +5,7 @@
 //! waits for, separately going down and going up. A [`Ceiling`] is one with
 //! somewhere to head for, and thermal regulation (`src/thermal.rs`) and
 //! low-voltage protection (`src/battery.rs`) keep one each. UI changes (on,
-//! off, ramping) shouldn't go through it: they want to be instant.
+//! off, ramping) shouldn't go through it, because they want to be instant.
 
 use crate::ramp::CEILING;
 
@@ -96,7 +96,7 @@ impl Ceiling {
         self.target
     }
 
-    /// One tick: moves a step towards the target and returns the ceiling.
+    /// One tick. Moves a step towards the target and returns the ceiling.
     pub fn tick(&mut self) -> u8 {
         self.level.tick(self.target)
     }

@@ -1,4 +1,4 @@
-//! The firmware: sample the switch, step the UI, set the output, 64 times a
+//! The firmware. Sample the switch, step the UI, set the output, 64 times a
 //! second.
 //!
 //! On the host this builds to a stub, so `cargo test` and `cargo clippy`
@@ -8,7 +8,7 @@
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 
-// The AVR-only code: the hardware layer and the startup code.
+// The hardware layer and the startup code, which only the AVR build has.
 #[cfg(target_arch = "avr")]
 mod avr {
     pub mod hw;
@@ -83,7 +83,7 @@ extern "C" fn main() -> ! {
 // feed, about 63 ms, and the next boot comes up off, with the light capped.
 //
 // Spinning here would end the same way while the watchdog runs. `halt` is for
-// when it doesn't, with the 32 kHz oscillator dead: no reset comes then, and
+// when it doesn't, with the 32 kHz oscillator dead. No reset comes then, and
 // a spin would keep the CPU running off the cell for good where `halt`
 // sleeps. Nothing's ever run this. The simulator has no way to make the
 // firmware panic.

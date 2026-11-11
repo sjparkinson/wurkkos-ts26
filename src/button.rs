@@ -1,7 +1,7 @@
 //! Turns one switch sample per tick into clicks and holds.
 //!
-//! Sampling at 64 Hz debounces the switch for free: contact bounce is over
-//! well within the 15.6 ms between samples.
+//! Sampling at 64 Hz debounces the switch for free, since contact bounce is
+//! over well within the 15.6 ms between samples.
 
 use crate::TICKS_PER_SECOND;
 

@@ -3,7 +3,7 @@
 //!
 //! The ADC alternates every 8 ticks, so each gets a reading every 16 ticks
 //! (four a second, what `battery::Protection` and `thermal::Thermal` expect),
-//! the temperature 8 ticks after the voltage. Each turn takes three ticks:
+//! the temperature 8 ticks after the voltage. Each turn takes three ticks.
 //!
 //! ```text
 //! tick 0   set the ADC up for the voltage, start a conversion
@@ -254,17 +254,17 @@ mod tests {
                 .filter_map(|(_, convert)| convert.filter(|c| c.setup).map(|c| c.channel))
                 .collect()
         };
-        // Off: the first voltage turn sets up, the rest don't.
+        // Off, so the first voltage turn sets up and the rest don't.
         let off = run(&mut schedule, 64, Some(1), false);
         assert_eq!(off[0].1, convert(Channel::Voltage, true));
         assert_eq!(off[16].1, convert(Channel::Voltage, false));
         assert_eq!(setups(&off), [Channel::Voltage]);
-        // On: every turn switches channel, so every turn sets up.
+        // On, so every turn switches channel and every turn sets up.
         let on = run(&mut schedule, 64, Some(1), true);
         let alternating = [Channel::Temperature, Channel::Voltage].repeat(4);
         assert_eq!(setups(&on)[..], alternating[..7]);
-        // Off again: the voltage turn after the last temperature one sets up,
-        // and that's all.
+        // Off again, so the voltage turn after the last temperature one sets
+        // up, and that's all.
         let off = run(&mut schedule, 64, Some(1), false);
         assert_eq!(setups(&off), [Channel::Voltage]);
     }

@@ -10,7 +10,7 @@ use crate::ramp::CEILING;
 /// Unmeasured.
 pub const FLOOR: u8 = 13;
 
-/// Where a fresh torch starts when you click it on: a duty of about 10 of 255.
+/// Where a fresh torch starts when you click it on, a duty of about 10 of 255.
 pub const DEFAULT_LEVEL: u8 = 52;
 
 // The top of the UI's ramp, and turbo, is [`CEILING`].
@@ -37,8 +37,8 @@ pub struct Ui {
     mode: Mode,
     /// The level it's at while on, and the one to come back on at otherwise,
     /// since [`Ui::off`] is the only way from on to off and leaves it be.
-    /// RAM only: the torch sleeps rather than losing power, so this outlasts
-    /// sleep and never needs EEPROM. A reset or a cell swap loses it.
+    /// RAM only, since the torch sleeps rather than losing power, so this
+    /// outlasts sleep and never needs EEPROM. A reset or a cell swap loses it.
     level: u8,
     /// The level to drop back to when leaving turbo.
     before_turbo: u8,

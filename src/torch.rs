@@ -1,4 +1,4 @@
-//! One pass of the firmware's loop, minus the hardware: a switch sample and
+//! One pass of the firmware's loop, minus the hardware. A switch sample and
 //! an ADC result in, a level and the next conversion out.
 
 use crate::button::{Clicks, Event};
@@ -46,16 +46,16 @@ impl Torch {
         event
     }
 
-    /// Whether there's nothing to do until the switch moves: the light's off
-    /// and no click is being counted. The firmware powers down between these
-    /// ticks, and a press ends it on the tick that sees the press, in time to
-    /// read the cell before a click can turn the light on.
+    /// Whether there's nothing to do until the switch moves, meaning the
+    /// light's off and no click is being counted. The firmware powers down
+    /// between these ticks, and a press ends it on the tick that sees the
+    /// press, in time to read the cell before a click can turn the light on.
     pub fn resting(&self) -> bool {
         self.clicks.idle() && self.ui.output_level() == 0 && self.limits.level() == 0
     }
 
-    /// The level the LEDs should be at right now, `0` meaning off: what the
-    /// UI wants, as far as the cell and the temperature allow.
+    /// The level the LEDs should be at right now, `0` meaning off. That's what
+    /// the UI wants, as far as the cell and the temperature allow.
     pub fn level(&self) -> u8 {
         self.limits.level()
     }
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(torch.output(), Output::OFF);
     }
 
-    /// Lockout: 1H, to the tick it's let go.
+    /// Lockout (1H), to the tick it's let go.
     #[test]
     fn lockout_lights_at_the_floor_only_while_held() {
         let mut torch = Rig::default();

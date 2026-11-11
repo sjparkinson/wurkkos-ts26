@@ -1,7 +1,7 @@
 //! The TS26 driver's pin map, as bit numbers within each port. docs/hardware.md
 //! has where each one comes from.
 //!
-//! These are board facts, not registers: `src/avr/hw.rs` drives the pins
+//! These are board facts, not registers. `src/avr/hw.rs` drives the pins
 //! through `src/regs.rs`, and xtask's simulator wires its fake chip up the
 //! same way from here.
 //!
@@ -24,7 +24,7 @@ pub const BATTERY: u8 = 1;
 pub const SWITCH: u8 = 5;
 /// PB0.
 pub const PWM: u8 = 0;
-/// PB2, the dangerous one: low whenever the light's off.
+/// PB2, the dangerous one, which is low whenever the light's off.
 pub const ENABLE: u8 = 2;
 /// PC1.
 pub const AUX_BLUE: u8 = 1;

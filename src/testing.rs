@@ -6,12 +6,12 @@
 //!
 //! # Scripts
 //!
-//! A script is Anduril's notation, a word at a time: `1C 2H:1.5s wait:1s`.
+//! A script is Anduril's notation, a word at a time, like `1C 2H:1.5s wait:1s`.
 //! `NC` is N quick clicks. `NH` is N - 1 clicks then a hold (so `2H` is
 //! click, hold), for a second unless it says otherwise (`1H:500ms`).
 //! `wait:2s` leaves the switch alone. Every click or hold is followed by
 //! enough of a pause for it to count, so `1C 1C` is two single clicks,
-//! except a hold that's the script's last word: that one's never let go, so
+//! except a hold that's the script's last word. That one's never let go, so
 //! the script ends with the switch still down.
 //!
 //! Some words set the scene, taking no time. `cell:2.95V` is the cell from
@@ -25,8 +25,8 @@
 //! # docs/ui.md
 //!
 //! Every table with an Action column needs an Example column, and every row
-//! in it an example unless its Status is Planned: a script, then how the
-//! light should be on its last tick, starting from a torch that's just had
+//! in it an example unless its Status is Planned. Each is a script, then how
+//! the light should be on its last tick, starting from a torch that's just had
 //! its battery put in.
 //!
 //! ```text
@@ -56,15 +56,15 @@ use crate::torch::Torch;
 const FULL_SCALE: u16 = 4 * 1023;
 
 /// A temperature sensor calibration for tests and the simulated chip's
-/// signature row. Made up, but in the range real parts have: about 0.55 K a
-/// count, so 25 °C reads 531 a conversion, 2124 over four.
+/// signature row. Made up, but in the range real parts have, at about 0.55 K
+/// a count, so 25 °C reads 531 a conversion, 2124 over four.
 pub const CALIBRATION: Calibration = Calibration {
     offset: -10,
     gain: 141,
 };
 
 /// The accumulated reading of AIN1 for a cell `battery::centivolts` reports
-/// as `cell`: the closest, saturating at four full-scale conversions.
+/// as `cell`, the closest, saturating at four full-scale conversions.
 pub fn voltage_reading(cell: u16) -> u16 {
     closest(cell, battery::centivolts)
 }
@@ -162,7 +162,7 @@ impl Adc {
 const PRESS_TICKS: u16 = 4;
 /// The pause after each scripted click, well inside `RELEASE_TICKS`.
 const GAP_TICKS: u16 = 4;
-/// Released samples after a click or hold before the next action: enough
+/// Released samples after a click or hold before the next action, enough
 /// for `button::Clicks` to send the click (see its `RELEASE_TICKS` check).
 const SETTLE_TICKS: u16 = RELEASE_TICKS + 1;
 /// A hold with no duration lasts a second.
@@ -405,7 +405,7 @@ impl Scene {
     }
 }
 
-/// One tick of a script: the switch, and what the torch sees.
+/// One tick of a script, with the switch and what the torch sees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sample {
     pub pressed: bool,
@@ -461,7 +461,7 @@ fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
 }
 
 /// The library's torch wired to an [`Adc`], the way `src/main.rs` wires it to
-/// the real one: the result of last tick's conversion in, this tick's
+/// the real one, with the result of last tick's conversion in and this tick's
 /// conversion out.
 #[derive(Clone, Debug)]
 pub struct Rig {
@@ -569,7 +569,7 @@ impl FromStr for Expect {
     }
 }
 
-/// Which row of docs/ui.md: its section and its Action (or When) cell.
+/// Which row of docs/ui.md, by its section and its Action (or When) cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Row<'a> {
     pub section: &'a str,
@@ -582,7 +582,7 @@ impl fmt::Display for Row<'_> {
     }
 }
 
-/// A row's example: a script and how the light should be on its last tick.
+/// A row's example, a script and how the light should be on its last tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Example<'a> {
     /// The line it's on, counting from 1.
@@ -806,8 +806,8 @@ mod tests {
         }
     }
 
-    /// The slow way: every raw reading, the closest winning and the smallest
-    /// winning a tie.
+    /// The slow way, with every raw reading tried, the closest winning and the
+    /// smallest winning a tie.
     fn linear(target: u16, read: impl Fn(u16) -> u16) -> u16 {
         (0..=FULL_SCALE)
             .min_by_key(|&raw| (read(raw).abs_diff(target), raw))
@@ -949,8 +949,8 @@ mod tests {
         assert_eq!(word("cell:4V"), Ok(Action::Cell(400)));
     }
 
-    /// docs/ui.md's rows for a cell the firmware can't read lean on this:
-    /// there's no word for a broken reading, only a cell that can't be real.
+    /// docs/ui.md's rows for a cell the firmware can't read lean on this.
+    /// There's no word for a broken reading, only a cell that can't be real.
     #[test]
     fn a_cell_outside_the_plausible_range_reads_as_one_the_firmware_cant_believe() {
         assert_eq!(word("cell:0V"), Ok(Action::Cell(0)));

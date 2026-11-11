@@ -9,22 +9,24 @@
 //! from its simulator and UPDI programmer. A constant nothing uses costs
 //! nothing.
 //!
-//! The names follow Microchip's C headers, so each is the ATDF's own:
+//! The names follow Microchip's C headers, so each is the ATDF's own, in these
+//! shapes.
 //!
-//! - `addr::RTC_PITCTRLA`, an instance and a register: a data-space address.
-//! - `mem::EEPROM_START`, `_SIZE`, `_END` and `_PAGE`: a memory segment.
-//! - `RTC_PITEN`, a module and a bitfield: the field's mask.
-//! - `RTC_PERIOD_CYC512`, a module, a bitfield and a named value: the value,
+//! - `addr::RTC_PITCTRLA`, an instance and a register, is a data-space address.
+//! - `mem::EEPROM_START`, `_SIZE`, `_END` and `_PAGE` describe a memory
+//!   segment.
+//! - `RTC_PITEN`, a module and a bitfield, is the field's mask.
+//! - `RTC_PERIOD_CYC512`, a module, a bitfield and a named value, is the value,
 //!   already shifted into place, so it can be OR'd straight into the register.
 //! - `VECTOR_RTC_PIT`, an instance and an interrupt, and `VECTORS`, how many
 //!   entries the vector table has.
 //!
 //! Masks and values are `u8` unless they don't fit. The ATDF's reset values
-//! aren't here: it disagrees with the datasheet on some of them.
+//! aren't here, since it disagrees with the datasheet on some of them.
 
 include!(concat!(env!("OUT_DIR"), "/regs.rs"));
 
-/// ADC0.SAMPCTRL.SAMPLEN: 20 more ADC clocks of sampling. Hand-written, since
+/// ADC0.SAMPCTRL.SAMPLEN as 20 more ADC clocks of sampling. Hand-written, since
 /// it's a count we chose rather than a value the ATDF names; src/avr/hw.rs
 /// says why 20.
 pub const ADC_SAMPLEN_32US: u8 = 20;

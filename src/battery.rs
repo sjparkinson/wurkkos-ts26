@@ -3,7 +3,7 @@
 //! The MCU runs from a regulator, so unlike the TS21 its own supply says
 //! nothing about the cell. The cell comes in on PA1 (AIN1) through a divider,
 //! and the ADC reads that against the internal 1.1 V reference, four
-//! conversions accumulated:
+//! conversions accumulated.
 //!
 //! ```text
 //! pin  = 1.1 V × reading / (4 × 1024)
@@ -18,7 +18,7 @@
 //! `reading × 473` needs 21 bits, and there's no runtime 32-bit multiply on
 //! this chip (docs/toolchain.md). So this splits the reading into its high
 //! and low bytes, each multiplied by a constant worked out at compile time
-//! that's scaled to keep the product in a `u16`:
+//! that's scaled to keep the product in a `u16`.
 //!
 //! ```text
 //! centivolts = (hi × HIGH + ((lo × LOW) >> 4) + 64) >> 7
@@ -84,7 +84,7 @@ pub fn centivolts(reading: u16) -> u16 {
     (hi * HIGH + ((lo * LOW) >> 4) + 64) >> 7
 }
 
-/// Voltage samples a second: four, one every [`CYCLE_TICKS`].
+/// Four voltage samples a second, one every [`CYCLE_TICKS`].
 pub const SAMPLES_PER_SECOND: u16 = TICKS_PER_SECOND / CYCLE_TICKS as u16;
 
 const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(CYCLE_TICKS as u16));
@@ -109,8 +109,8 @@ pub const OFF_BELOW: u16 = 290;
 
 /// At or above this many centivolts, held for [`RECOVER_SAMPLES`], the
 /// ceiling steps back up. The 0.3 V gap to [`STEP_DOWN_BELOW`] is the
-/// hysteresis: a cell that sags to 2.95 V at a high level and rests at 3.2 V
-/// on a lower one stays put. Unmeasured.
+/// hysteresis, so a cell that sags to 2.95 V at a high level and rests at
+/// 3.2 V on a lower one stays put. Unmeasured.
 pub const RECOVER_AT: u16 = 330;
 
 /// The MP3432's start-up voltage from its datasheet, in centivolts.
@@ -120,16 +120,16 @@ const _: () = assert!(BOOST_START < OFF_BELOW);
 const _: () = assert!(OFF_BELOW < STEP_DOWN_BELOW && STEP_DOWN_BELOW < RECOVER_AT);
 
 /// How long the filtered voltage has to stay under [`OFF_BELOW`] before it
-/// acts: one second. Unmeasured.
+/// acts. One second, and unmeasured.
 pub const HOLD_SAMPLES: u16 = SAMPLES_PER_SECOND;
 
-/// How long it has to stay under [`STEP_DOWN_BELOW`] for each step down: five
+/// How long it has to stay under [`STEP_DOWN_BELOW`] for each step down, five
 /// seconds. Long enough for the cell to recover a little after the last step,
 /// the way the stock firmware waits about six seconds between its
 /// low-voltage step-downs. Unmeasured.
 pub const STEP_SAMPLES: u16 = SAMPLES_PER_SECOND * 5;
 
-/// How long it has to stay at [`RECOVER_AT`] or above for each step back up:
+/// How long it has to stay at [`RECOVER_AT`] or above for each step back up,
 /// four seconds. Unmeasured.
 pub const RECOVER_SAMPLES: u16 = SAMPLES_PER_SECOND * 4;
 
@@ -167,8 +167,8 @@ pub fn plausible(centivolts: u16) -> bool {
 /// the worst. The fourth in a row, a second's worth, acts. Unmeasured.
 const GLITCHES: u8 = 3;
 
-/// Implausible samples in a row, with the torch on, that turn it off: five
-/// minutes of a cell [`Protection`] can't read.
+/// Implausible samples in a row, with the torch on, that turn it off. That's
+/// five minutes of a cell [`Protection`] can't read.
 ///
 /// With no reading there's no low-voltage cut-off at all, and nothing else
 /// on this board stops a cell being run flat (the module docs say why). So a
@@ -183,7 +183,7 @@ const GLITCHES: u8 = 3;
 /// ceiling, for another five minutes, so anyone who keeps clicking can still
 /// run a cell down this way.
 ///
-/// Five minutes is a judgement: long enough to get somewhere or change the
+/// Five minutes is a judgement, long enough to get somewhere or change the
 /// cell. It's unmeasured too. Nobody's put a meter on what
 /// [`FAULT_CEILING`] draws on this light, so nobody can say what five
 /// minutes of it takes out of a cell that's already low.
@@ -194,8 +194,8 @@ const _: () = assert!(BLIND_SAMPLES > GLITCHES as u16);
 
 /// Ticks per level as the ceiling fades down, and back up. Down is a level a
 /// tick, quicker than thermal's, since the cell's already under its threshold
-/// by the time it steps: 15 levels takes a quarter of a second, and a drop of
-/// 30 under half. Unmeasured.
+/// by the time it steps. A drop of 15 levels takes a quarter of a second, and
+/// a drop of 30 under half. Unmeasured.
 const DOWN_EVERY: u8 = 1;
 const UP_EVERY: u8 = 4;
 
@@ -210,7 +210,7 @@ pub enum Verdict {
     Off,
 }
 
-/// Low-voltage protection: feed it each voltage sample (every
+/// Low-voltage protection. Feed it each voltage sample (every
 /// [`CYCLE_TICKS`] ticks), call [`Protection::tick`] every tick, and
 /// [`Protection::ceiling`] says how bright the torch may be. The ceiling
 /// fades rather than jumps, like thermal's.
@@ -294,7 +294,7 @@ impl Protection {
         self.ceiling.level()
     }
 
-    /// One tick: moves the ceiling a step towards where it's heading and
+    /// One tick. Moves the ceiling a step towards where it's heading and
     /// returns it.
     pub fn tick(&mut self) -> u8 {
         self.ceiling.tick()
@@ -322,8 +322,8 @@ impl Protection {
         }
     }
 
-    /// One voltage sample: `centivolts` from [`centivolts`] and the level the
-    /// torch is at (`0` for off).
+    /// One voltage sample, with `centivolts` from [`centivolts`] and the level
+    /// the torch is at (`0` for off).
     pub fn sample(&mut self, centivolts: u16, level: u8) -> Verdict {
         let verdict = self.judge(centivolts, level);
         if let Verdict::Ceiling(target) = verdict {
@@ -906,7 +906,7 @@ mod tests {
         let mut lvp = Protection::new();
         assert_eq!(last(&mut lvp, 295, 50, secs(5)), Verdict::Ceiling(35));
         run(&mut lvp, 340, 35, secs(3));
-        // Every third sample bad: never four good seconds in a row.
+        // Every third sample bad, so never four good seconds in a row.
         for _ in 0..200 {
             lvp.sample(340, 35);
             lvp.sample(340, 35);
@@ -918,7 +918,7 @@ mod tests {
     fn garbage_doesnt_restart_the_hold_on_a_flat_cell() {
         let mut lvp = Protection::new();
         let mut verdicts = Vec::new();
-        // Every other sample bad: the flat ones still add up.
+        // Every other sample bad, but the flat ones still add up.
         for _ in 0..secs(2) {
             verdicts.push(lvp.sample(280, 1));
             verdicts.push(lvp.sample(u16::MAX, 1));

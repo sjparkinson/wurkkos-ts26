@@ -92,7 +92,7 @@ impl Faults {
 mod tests {
     use super::*;
 
-    /// Bytes a factory ATtiny1616 should hold, near enough: the fields the
+    /// Bytes a factory ATtiny1616 should hold, near enough. The fields the
     /// check reads are right, and the rest is as the datasheet has it.
     const GOOD: Fuses = Fuses {
         wdtcfg: 0x00,
