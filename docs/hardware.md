@@ -63,7 +63,7 @@ From the MP3432 datasheet (Rev 1.0, confirmed for the chip), EN turns on at 1.23
 
 ## Battery measurement
 
-Unlike the TS21, the TS26 doesn't read its own supply. The hardware definition says "use a dedicated pin, not VCC, because VCC input is regulated". Confirmed. The stock firmware reads PA1 (AIN1) through a divider against the 1.1 V internal reference, accumulated 4×, with `INITDLY` DLY16, free-running. Here's how its ATtiny1616 code turns that into volts.
+The TS26 doesn't read its own supply. The hardware definition says "use a dedicated pin, not VCC, because VCC input is regulated". Confirmed. The stock firmware reads PA1 (AIN1) through a divider against the 1.1 V internal reference, accumulated 4×, with `INITDLY` DLY16, free-running. Here's how its ATtiny1616 code turns that into volts.
 
 - raw is the accumulated 10-bit result shifted left by 4
 - the voltage in 1/6400 V is raw × 473 / slope + offset × 64, where a slope of 1024 assumes the cell is 4.3 times the divider's output
@@ -85,7 +85,7 @@ The cell is Wurkkos's own unprotected 21700, 5,000 mAh, flat top, quoted at 10 A
 
 ## Temperature
 
-The same sensor as the TS21, inside the MCU on the driver.
+The sensor inside the MCU, on the driver.
 
 - The stock firmware's Wurkkos builds raise its default limit from 45 °C to 50 °C, "higher temperature limit because attiny1616 is more accurate". Confirmed.
 - Its TS26 build stops stepping down at level 50 (of 150), and steps faster above 120. Confirmed.
@@ -97,7 +97,7 @@ The same sensor as the TS21, inside the MCU on the driver.
 
 Wurkkos says the board has them ("Yes, the pads on the PCB does have", 26 November 2025, [BLF](https://budgetlightforum.com/t/wurkkos-ts26-update-ts26-anduril-version-update/230944)), and the product page says "Flashing Pads Available". 1Lumen calls them a "3-pin UPDI pattern" and EDC Tips counts "three flashing pads on the driver". The driver is glued in. Confirmed that there are three.
 
-Nobody gives their position, labels, order or pitch, and the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942) has no TS26 entry. The [Unofficial Guide](https://anduril.click/drivers/updi.html) warns that pad order differs between lights. So the TS21's R, G, V layout is a guess here, not a fact. Don't assume a pitch either. The TS21's own pads measured about 1.75 mm, not the 1.27 mm the standard layout has and I'd written down for it, so that light is no guide, and nor is the standard. A 1.27 mm probe might fit, but until someone measures the pads that's a guess.
+Nobody gives their position, labels, order or pitch, and the [reflash reference](https://budgetlightforum.com/t/anduril-flashlight-reflash-reference-updated-for-2024/216942) has no TS26 entry. The [Unofficial Guide](https://anduril.click/drivers/updi.html) warns that pad order differs between lights. So an R, G, V layout borrowed from another light is a guess here, not a fact. Don't assume a pitch either. An earlier torch's pads measured about 1.75 mm, not the 1.27 mm the standard layout has and I'd written down for it, so the standard is no guide. A 1.27 mm probe might fit, but until someone measures the pads that's a guess.
 
 Before pressing a programmer onto them, take the cell out, measure the pitch, and check with a multimeter which pad is continuous with battery negative. That only names ground. Which of the other two is the supply and which is UPDI is unknown as well, and row 1.5 of [breakout.md](breakout.md#stage-1-the-pads-and-stock) tells them apart with the meter. The prediction it works from is my reasoning from the datasheet, and unmeasured. The supply pad should read low against ground and climb as the board's capacitors charge, and the UPDI pad, with only the chip's pin on it, should read open or very high from the start. VCC on this board comes from a regulator I can't identify, and I don't know what feeding it from a programmer does. Only a plain UPDI adapter goes on these pads, never the 12 V HV Friend ([flashing.md](flashing.md#only-the-plain-adapter-goes-on-this-torch)).
 
@@ -107,10 +107,10 @@ A search on 2026-11-09 of the [BLF TS26 thread](https://budgetlightforum.com/t/w
 
 ## The MCU
 
-The same ATtiny1616 as the TS21, so the TS21's [MCU notes](https://github.com/sjparkinson/wurkkos-ts21/blob/main/docs/hardware.md#the-mcu) apply (mapped flash at 0x8000, two-word vectors, low byte first on 16-bit registers, `CPU.CCP` for clock changes, never write fuses). Here's what's different.
+An ATtiny1616, with flash mapped into data space at 0x8000, two-word vectors, 16-bit registers written low byte first and `CPU.CCP` guarding clock changes. Never write its fuses. The rest is particular to this board.
 
-- The stock firmware runs the clock at 10 MHz (the 20 MHz oscillator divided by 2). Confirmed. The TS21 has since moved to 5 MHz, because its VCC follows the cell. This one's VCC is regulated, and the PWM frequency hangs off the clock.
-- The battery is read on AIN1 against the 1.1 V reference, where the TS21 reads VDD against 1.5 V.
+- The stock firmware runs the clock at 10 MHz (the 20 MHz oscillator divided by 2). Confirmed. VCC is regulated here, and the PWM frequency hangs off the clock.
+- The battery is read on AIN1 against the 1.1 V reference.
 - TCA0 stays at TOP 255; no variable TOP.
 
 Register addresses and bit values in `src/regs.rs` are generated from Microchip's ATDF in [`vendor/`](../vendor/README.md) at build time.

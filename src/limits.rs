@@ -30,8 +30,8 @@ use crate::thermal::{self, Thermal};
 
 /// The highest level the torch runs at when something's wrong that it can't
 /// see past, such as a failed self-test or a voltage reading it can't
-/// believe. The TS21 fell back on its 350 mA linear channel. This board has
-/// nothing like that, so this borrows the thermal floor's level, a few per
+/// believe. This board has no low-current linear channel to fall back on, so
+/// this borrows the thermal floor's level, a few per
 /// cent of full duty on our curve. Unmeasured. Bright enough to find your way
 /// out by, gentle on the cell as far as anyone can say without a meter on it.
 pub const FAULT_CEILING: u8 = thermal::FLOOR;

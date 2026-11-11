@@ -1,6 +1,6 @@
 # Toolchain
 
-How Rust gets onto an ATtiny1616 here, and why it's put together this way. It's the same toolchain as [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21), so most of this is borrowed from there.
+How Rust gets onto an ATtiny1616 here, and why it's put together this way.
 
 ## The short version
 
@@ -30,7 +30,7 @@ The rustc book says `avr-none` needs avr-gcc "because a couple of intrinsics (li
 rust-lld: error: undefined symbol: __mulsi3
 ```
 
-The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. I checked this in the TS21 repo on the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
+The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. I checked this on another ATtiny1616 project with the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
 
 What does work is 8- and 16-bit multiplication, which compiles to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
 
@@ -59,7 +59,7 @@ Each has a comment where it lives. Remove it when a nightly makes it unnecessary
 | Library code | No runtime `u32`/`u64` multiplication, and no `u16` division by a constant that isn't a power of two | There's no `__mulsi3` without libgcc. See above. |
 | `xtask` | Its own ELF-to-HEX conversion | The `rust-objcopy` in the toolchain directory is rustc's private copy and won't run on its own. `llvm-tools` has a working `llvm-objcopy`, but that's one more thing to install for every flash, and `xtask` needs to parse the ELF to program it anyway. |
 
-Up to nightly-2026-09-23 the TS21 repo also needed `--cfg no_fp_fmt_parse` in `.cargo/config.toml`, because `core`'s float formatting wanted a bignum type that only existed for 32- and 64-bit pointers and wouldn't compile for AVR. `core` builds without it on nightly-2026-11-11, so this repo never had it.
+Up to nightly-2026-09-23 an AVR build needed `--cfg no_fp_fmt_parse` in `.cargo/config.toml`, because `core`'s float formatting wanted a bignum type that only existed for 32- and 64-bit pointers and wouldn't compile for AVR. `core` builds without it on nightly-2026-11-11, so this repo never had it.
 
 ## Looking inside the ELF
 
@@ -85,7 +85,7 @@ Then run these after `cargo xtask hex` (it leaves the ELF behind even when its c
 "$LLVM/llvm-objdump" -h "$ELF"                                             # section addresses
 ```
 
-`-S` works because the release profile keeps debug info. `llvm-size -A` should add `.text` and `.rodata` up to the same number `cargo xtask hex` reports (it did on the TS21), so that command stays the one to use for budgets. These are for when you want to know *why*, such as which function grew, or whether an interrupt handler saves more registers than it should.
+`-S` works because the release profile keeps debug info. `llvm-size -A` should add `.text` and `.rodata` up to the same number `cargo xtask hex` reports, so that command stays the one to use for budgets. These are for when you want to know *why*, such as which function grew, or whether an interrupt handler saves more registers than it should.
 
 ## Host builds
 

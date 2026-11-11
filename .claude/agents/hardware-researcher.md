@@ -15,8 +15,6 @@ Sources, in order of trust.
 4. The stock firmware's source, which README.md's acknowledgements link. Find model 0721 in its model list, read the TS26's hardware definition and follow any includes yourself rather than trusting this summary. It's GPL-3.0, so quote a line or two as evidence, but never copy code, ramp tables or calibration tables into the repo or into a suggested patch. Tell the caller which files and commit you read, but suggested wording for the repo calls it "the stock firmware" and names no files, commits or links. Only README.md names it.
 5. Forum threads, reviews and teardown photos (BLF, Reddit r/flashlight, manufacturer pages). Useful, but treat as "likely" unless they show the board.
 
-The sibling repo, wurkkos-ts21, documents a TS21 (model 0614), which shares the MCU but not the driver. A fact from there is "likely" here at best until something says the TS26 is the same.
-
 Rules.
 
 - Every fact gets a source link and a label: **confirmed** (read from the board, the datasheet, or firmware that runs on this exact model) or **likely** (inferred from a sibling model, a forum post, or a guess). Don't promote likely to confirmed.

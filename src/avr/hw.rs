@@ -576,7 +576,7 @@ pub fn fuses() -> Fuses {
 ///
 /// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up. The
 /// lit channel is an input with its pull-up on, and the trickle through the
-/// pull-up is the low setting, like the TS21's button LED. The others are
+/// pull-up is the low setting. The others are
 /// outputs at the 0 in OUT, which holds them dark. That this is what the stock
 /// firmware's low aux setting does on this board is likely, and nobody's
 /// measured it here.

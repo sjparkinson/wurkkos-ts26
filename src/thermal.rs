@@ -35,8 +35,8 @@
 //!   few in a row agree. If the sensor keeps reading impossible values, step
 //!   down to the floor, since a broken sensor can't say it's cool.
 //!
-//! The numbers here are a first guess, carried over from the TS21 where
-//! they aren't the stock firmware's. None of them has been measured on a
+//! The numbers here are a first guess, carried over from an earlier torch
+//! where they aren't the stock firmware's. None of them has been measured on a
 //! TS26, so expect them to change once one's been run up to temperature.
 //! That's why `ramp::CEILING` holds the light back in the meantime.
 

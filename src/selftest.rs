@@ -17,8 +17,8 @@
 //! `limits::FAULT_CEILING`, until the cell comes out.
 //!
 //! That's the whole of the safety net. The RAM and register tests, the clock
-//! check and the watchdog's proof that the TS21 runs are left out on purpose
-//! (see `watchdog`).
+//! check and a proof that the watchdog bites are left out on purpose (see
+//! `watchdog`).
 
 use crate::regs;
 

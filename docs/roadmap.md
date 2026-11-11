@@ -1,15 +1,15 @@
 # Roadmap
 
-Roughly in order. Each step should leave a torch that's no worse than the step before. Tick things off here in the commit that does them. Where the TS21 has already done the work, [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21) is the place to borrow it from, after checking what's different about this board. [breakout.md](breakout.md) gathers every check on a real light into one run.
+Roughly in order. Each step should leave a torch that's no worse than the step before. Tick things off here in the commit that does them. [breakout.md](breakout.md) gathers every check on a real light into one run.
 
 ## 1. It lights up
 
-- [x] Toolchain with nightly `avr-none`, `rust-lld`, own linker script and vector table, no crates (from the TS21)
+- [x] Toolchain with nightly `avr-none`, `rust-lld`, own linker script and vector table, no crates
 - [x] Register constants generated from the ATtiny1616 ATDF at build time
 - [x] Pin map for the model 0721 driver, from the stock firmware
-- [x] Switch sampling at 64 Hz and a click/hold decoder (from the TS21)
+- [x] Switch sampling at 64 Hz and a click/hold decoder
 - [x] Click on, click off, at one dim level through the boost converter
-- [x] The UPDI programmer in `xtask` (ping, backup, flash, restore), tested against a fake chip (from the TS21)
+- [x] The UPDI programmer in `xtask` (ping, backup, flash, restore), tested against a fake chip
 - [ ] Find the flashing pads on a real TS26 and check their order with a multimeter
 - [ ] Ping, back up and flash a real TS26, with only the plain UPDI adapter, and `first-light` (commit `9d3b7dc`) first
 - [ ] Disassemble `backup/torch` and check what docs/hardware.md takes from the stock firmware's source against what the stock build really writes to the pins, TCA0 and the ADC
@@ -39,4 +39,3 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 ## Maybe
 
 - Stop TCA0 while the light's off. It runs for good today, because a timer that stops and restarts is new turn-on behaviour nobody's checked, and what it'd save is small next to the idle after a watchdog feed. Worth a look once that idle has gone
-- Share a crate with the TS21 for the bits that are the same (button decoder, UPDI programmer, toolchain glue), once both have settled. Zero dependencies still applies, so that would be a path dependency in a shared repo, not crates.io

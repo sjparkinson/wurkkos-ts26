@@ -1284,8 +1284,8 @@ pub(crate) mod tests {
                     _ if op & 0xF0 == STCS => Expect::CsValue(op & 0x0F),
                     0xE0 => Expect::Key(Vec::new()),
                     0xE5 => {
-                        // What a real TS21 reported. The TS26 has the same
-                        // part, but nobody's read one yet.
+                        // What another real ATtiny1616 reported. The TS26
+                        // has the same part, but nobody's read one yet.
                         self.replies.extend(b"tinyAVR P:0D:0-3");
                         Expect::Sync
                     }

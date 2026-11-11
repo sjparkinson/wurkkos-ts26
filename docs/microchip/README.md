@@ -1,6 +1,6 @@
 # Microchip references
 
-Microchip's datasheet, errata and app notes that matter for this firmware. It's the same chip as the TS21, so it's the same set of documents as [wurkkos-ts21](https://github.com/sjparkinson/wurkkos-ts21/tree/main/docs/microchip), with the notes changed for this light. The PDFs live in this directory on your machine but aren't in git: each one says "All Rights Reserved" and "No licenses are conveyed", so this public repo can't redistribute them. (The ATDF in `vendor/` is different; it's Apache-2.0.) `.gitignore` covers `*.pdf` here and a `txt/` cache of extracted text.
+Microchip's datasheet, errata and app notes that matter for this firmware. The PDFs live in this directory on your machine but aren't in git: each one says "All Rights Reserved" and "No licenses are conveyed", so this public repo can't redistribute them. (The ATDF in `vendor/` is different; it's Apache-2.0.) `.gitignore` covers `*.pdf` here and a `txt/` cache of extracted text.
 
 Each file is named `<document number><revision>-<short title>.pdf`, using the number printed on the document: the AN or TB number for app notes, the DS number for the rest. Microchip's download names are all over the place, so save each one under the name in the table, for example:
 
@@ -9,7 +9,7 @@ cd docs/microchip
 curl -Lo AN2447A-measure-vcc-without-io-pin.pdf https://ww1.microchip.com/downloads/en/AppNotes/00002447A.pdf
 ```
 
-If you've got the TS21 repo checked out with its PDFs, copying them across is quicker. Either way, check you've got the same revisions:
+Check you've got the same revisions:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
@@ -31,7 +31,7 @@ A newer revision will fail the check. That's fine if you want it, but rename the
 |---|---|---|
 | `AN1982B-interrupt-system.pdf` | [The tinyAVR 0/1 interrupt system](https://ww1.microchip.com/downloads/en/AppNotes/40001982B.pdf) | The CPUINT controller, for the TCA0 overflow interrupt that steps the delta-sigma and for waking on the button |
 | `AN1983A-writing-flash-and-eeprom.pdf` | [Writing flash and EEPROM on the tinyAVR 1-series](https://ww1.microchip.com/downloads/en/AppNotes/AN1983%20Writing%20to%20Flash%20and%20EEPROM%20on%20the%20tinyAVR%201-series%2040001983A.pdf) | The NVM controller the UPDI programmer drives, and EEPROM if the firmware ever remembers anything |
-| `AN2447A-measure-vcc-without-io-pin.pdf` | [Measuring VCC without an I/O pin](https://ww1.microchip.com/downloads/en/AppNotes/00002447A.pdf) | Matters less here than on the TS21. The TS26 reads the cell through a divider on PA1 (AIN1) rather than as VCC, so this is background on the ADC's internal reference more than the method |
+| `AN2447A-measure-vcc-without-io-pin.pdf` | [Measuring VCC without an I/O pin](https://ww1.microchip.com/downloads/en/AppNotes/00002447A.pdf) | The TS26 reads the cell through a divider on PA1 (AIN1) rather than as VCC, so this is background on the ADC's internal reference more than the method |
 | `AN2515C-low-power-techniques.pdf` | [AVR low-power techniques](https://ww1.microchip.com/downloads/en/Appnotes/AN2515-AVR-Low-Power-Techniques-00002515C.pdf) | Sleeping when off, and what to do with the boost driver's enable and the divider while asleep |
 | `AN2519B-hardware-design-considerations.pdf` | [AVR hardware design considerations](https://ww1.microchip.com/downloads/en/Appnotes/AN2519-AVR-Microcontroller-Hardware-Design-Considerations-00002519B.pdf) | Reading the driver board: decoupling, reset and UPDI pin |
 | `AN2551C-adc-noise-countermeasures.pdf` | [Noise countermeasures for ADC applications](https://ww1.microchip.com/downloads/en/Appnotes/AN2551-Noise-Countermeasures-for-ADC-Applications-00002551C.pdf) | Why a battery reading jumps while the boost converter is switching and pulling current from the cell |
@@ -42,4 +42,4 @@ A newer revision will fail the check. That's fine if you want it, but rename the
 | `AVR104A-buffered-eeprom-writes.pdf` | [Buffered interrupt-controlled EEPROM writes](https://ww1.microchip.com/downloads/en/Appnotes/doc2540.pdf) (Atmel doc2540) | Old (pre-1-series NVM), so take the ideas, not the register names |
 | `TB3209B-getting-started-with-adc.pdf` | [Getting started with the ADC](https://ww1.microchip.com/downloads/en/Appnotes/TB3209-Getting-Started-with-ADC-DS90003209.pdf) | ADC setup for the battery reading on AIN1 and the internal temperature sensor |
 
-Download links checked against these hashes on 2026-11-03, in the TS21 repo. Microchip's www site blocks scripted downloads, but these `ww1.microchip.com` links work with `curl`.
+Download links checked against these hashes on 2026-11-03. Microchip's www site blocks scripted downloads, but these `ww1.microchip.com` links work with `curl`.

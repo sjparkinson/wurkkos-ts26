@@ -32,7 +32,7 @@ The UPDI programmer has its own, smaller fake chip in `xtask/src/updi.rs`, with 
 
 ```
 src/lib.rs        the no_std library: everything testable, nothing hardware
-src/button.rs     switch samples in, clicks and holds out (from the TS21)
+src/button.rs     switch samples in, clicks and holds out
 src/ui.rs         the state machine docs/ui.md describes
 src/torch.rs      one pass of the firmware loop: switch and ADC in, boost enable, duty and aux out
 src/ramp.rs       the 150 levels, and the ceiling on them
@@ -75,7 +75,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Bumping the nightly
 
-AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed. The TS21 pins the same nightly, so bump them together.
+AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed.
 
 ## Commits
 

@@ -1,7 +1,7 @@
 //! The cell's voltage, and what to do as it runs flat.
 //!
-//! The MCU runs from a regulator, so unlike the TS21 its own supply says
-//! nothing about the cell. The cell comes in on PA1 (AIN1) through a divider,
+//! The MCU runs from a regulator, so its own supply says nothing about the
+//! cell. The cell comes in on PA1 (AIN1) through a divider,
 //! and the ADC reads that against the internal 1.1 V reference, four
 //! conversions accumulated.
 //!
@@ -28,7 +28,7 @@
 //! constants cost under a tenth of a centivolt, which next to a calibration
 //! from one sample is nothing.
 //!
-//! The thresholds are this board's, not the TS21's. The Wurkkos 21700 is
+//! The thresholds are this board's. The Wurkkos 21700 is
 //! unprotected, and the MP3432 keeps running down to 0.8 V on its input once
 //! it's started, pulling more current as the voltage falls, so nothing but
 //! this module stops the cell being run into the ground.

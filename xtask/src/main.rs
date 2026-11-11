@@ -303,8 +303,8 @@ fn runs(start: u16, bytes: &[u8]) -> Vec<String> {
 }
 
 /// Refuses a file whose name doesn't say it's for this board. An image has no
-/// model in it, so the name's all there is. It catches picking up the TS21's
-/// hex by mistake, not a file that's been renamed.
+/// model in it, so the name's all there is. It catches picking up another
+/// torch's hex by mistake, not a file that's been renamed.
 fn this_boards_hex(path: &Path) -> Result<(), String> {
     let name = path
         .file_name()
@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn flash_takes_this_boards_hex_and_refuses_the_ts21s() {
+    fn flash_takes_this_boards_hex_and_refuses_another_torchs() {
         for good in [
             "target/wurkkos-ts26-0721.hex",
             "release.wurkkos-ts26.hex",
@@ -759,7 +759,7 @@ mod tests {
             assert!(this_boards_hex(Path::new(good)).is_ok(), "{good}");
         }
         for bad in [
-            "target/wurkkos-ts21-0614.hex",
+            "target/wurkkos-ts10.hex",
             "backup/torch/flash.hex",
             "ts26/firmware.hex",
         ] {

@@ -18,11 +18,12 @@
 //! datasheet implies it rather than saying so), so the first pass feeds it
 //! straight away, which also lines the windows up with the ticks.
 //!
-//! That's all there is. The TS21 also proves its watchdog at every power-on
-//! with three deliberate resets and a marker in `.noinit`. This firmware
-//! doesn't, by choice, because that TS21 went dark straight after a verified
-//! flash of that stack, and a firmware hang wasn't ruled out. So nobody's seen
-//! this watchdog bite on a real chip until docs/breakout.md says so.
+//! That's all there is. It could prove the watchdog at every power-on with
+//! three deliberate resets and a marker in `.noinit`. This firmware doesn't,
+//! by choice, because an earlier torch went dark straight after a verified
+//! flash of a stack like that, and a firmware hang wasn't ruled out. So
+//! nobody's seen this watchdog bite on a real chip until docs/breakout.md says
+//! so.
 //!
 //! The watchdog can't catch its own oscillator stopping, since the tick stops
 //! with it. [`TICK_DEADLINE_CYCLES`] is for that, and only with the light on.

@@ -4,8 +4,8 @@
 //!
 //! This finds mistakes, it doesn't prove anything. Everything here is my
 //! reading of the datasheet, run against code written from that same reading,
-//! and nothing has been compared with a real chip. The TS21 had a far bigger
-//! simulator than this, and it didn't save that torch. The likely cause is
+//! and nothing has been compared with a real chip. An earlier torch had a far
+//! bigger simulator than this, and it didn't save it. The likely cause is
 //! the 12 V programmer or a slipped probe, not proven, and no model of the
 //! chip can see either. A pass means the firmware does what this file thinks
 //! it should.
