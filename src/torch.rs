@@ -315,6 +315,40 @@ mod tests {
         assert_eq!(torch.ui.output_level(), CEILING);
     }
 
+    /// A switch that's stuck down from the moment the battery goes in, say a
+    /// jammed button. It's a hold from off, so it lights at the floor and
+    /// never ramps.
+    #[test]
+    fn a_switch_held_from_power_on_stays_at_the_floor() {
+        let mut torch = Rig::default();
+        let mut highest = 0;
+        for tick in 0..10 * 60 * u32::from(TICKS_PER_SECOND) {
+            torch.tick(true);
+            highest = highest.max(torch.level());
+            if tick > 2 * u32::from(TICKS_PER_SECOND) {
+                assert_eq!(torch.level(), FLOOR, "tick {tick}");
+            }
+        }
+        assert_eq!(highest, FLOOR);
+    }
+
+    /// Heat doesn't care whether the switch is down. The light follows the
+    /// thermal ceiling while the ramp's still being held.
+    #[test]
+    fn a_switch_held_while_on_still_answers_to_heat() {
+        let mut torch = Rig::default();
+        click(&mut torch);
+        run(&mut torch, true, 10 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), CEILING);
+        torch.adc.temperature = temperature_reading(thermal::celsius(80));
+        assert!(thermal::celsius(80) > thermal::LIMIT);
+        for _ in 0..120 * TICKS_PER_SECOND {
+            torch.tick(true);
+        }
+        assert_eq!(torch.level(), thermal::FLOOR);
+        assert_eq!(torch.ui.output_level(), CEILING, "still held at the top");
+    }
+
     #[test]
     fn a_fault_caps_the_light_and_only_the_light() {
         for faults in [

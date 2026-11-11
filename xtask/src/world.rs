@@ -122,6 +122,7 @@ mod tests {
             kelvin: 353,
             fault: true,
             corrupt_flash: true,
+            adc_dead: true,
         };
         let world = World::from(scene);
         assert_eq!(world.scene, scene);

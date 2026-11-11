@@ -280,6 +280,39 @@ mod tests {
         assert_eq!(ticks[2], (Some(Reading::Voltage(7)), None));
     }
 
+    /// `Schedule` doesn't track whether a conversion is pending. It knows
+    /// from the phase when a result is due and reads it then, and any other
+    /// tick's result is dropped. So a result the ADC volunteers when nothing
+    /// was asked for never comes back as a reading.
+    #[test]
+    fn a_result_with_no_conversion_started_is_ignored() {
+        let mut schedule = Schedule::new();
+        let mut readings = Vec::new();
+        for tick in 0..160 {
+            let phase = tick % 16;
+            // A result on every tick except the two that are due one.
+            let result = (phase != 2 && phase != 10).then_some(0x155);
+            let (reading, _) = schedule.tick(result, true);
+            readings.push((phase, reading));
+        }
+        for (phase, reading) in readings {
+            match phase {
+                2 => assert_eq!(reading, Some(Reading::Voltage(0))),
+                10 => assert_eq!(reading, Some(Reading::Temperature(0))),
+                _ => assert_eq!(reading, None, "phase {phase}"),
+            }
+        }
+        // And with the temperature not asked for, its turn's results are
+        // ignored too, due tick included.
+        let mut schedule = Schedule::new();
+        for tick in 0..160 {
+            let (reading, convert) = schedule.tick(Some(0x155), false);
+            if tick % 16 >= 8 {
+                assert_eq!((reading, convert), (None, None), "tick {tick}");
+            }
+        }
+    }
+
     #[test]
     fn no_result_when_one_is_due_reads_as_zero() {
         let mut schedule = Schedule::new();

@@ -479,6 +479,42 @@ mod tests {
         assert_eq!(run.offs, 0);
     }
 
+    /// A known gap, docs/safety.md H3 and H12. A reading that's stuck at a
+    /// good-looking 3.8 V is the same to the firmware as a good cell, so
+    /// nothing here ever steps the light down. Only a reading that can't be
+    /// real gets caught. I'm pinning it down so that if I ever close the gap,
+    /// this is the test that has to change.
+    #[test]
+    fn a_plausible_voltage_that_never_changes_keeps_the_light_on() {
+        let mut run = Run::new();
+        assert_eq!(battery::centivolts(run.adc.voltage), 380);
+        run.ui = 100;
+        run.secs(1);
+        for minute in 0..60 {
+            assert_eq!(run.secs(60), 100, "minute {minute}");
+            assert_eq!(run.limits.ceilings().0, CEILING, "minute {minute}");
+        }
+        assert!(run.levels.iter().skip(1).all(|&l| l == 100));
+        assert_eq!(run.offs, 0);
+    }
+
+    /// The same gap for the temperature, docs/safety.md H4. A sensor stuck at
+    /// a comfortable 25 °C never asks for a step down, however long the light
+    /// has really been cooking.
+    #[test]
+    fn a_plausible_temperature_that_never_changes_never_steps_down() {
+        let mut run = Run::new();
+        assert!(run.adc.temperature == celsius(25));
+        run.ui = CEILING;
+        run.secs(1);
+        for minute in 0..60 {
+            assert_eq!(run.secs(60), CEILING, "minute {minute}");
+            assert_eq!(run.limits.ceilings().1, CEILING, "minute {minute}");
+        }
+        assert!(run.levels.iter().skip(1).all(|&l| l == CEILING));
+        assert_eq!(run.offs, 0);
+    }
+
     #[test]
     fn a_garbage_temperature_alone_never_turns_it_off() {
         let mut run = Run::new();

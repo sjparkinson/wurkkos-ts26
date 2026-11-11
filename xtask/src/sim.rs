@@ -106,9 +106,12 @@
 //!    the deadline, and the chip then stop for good in power-down
 //!    (`oscillator_stops`). A tick lost with the oscillator still running ends
 //!    in a watchdog reset instead, which can't run here.
-//! 5. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
-//! 6. Twenty thousand ticks of random clicks and holds.
-//! 7. Both of those again with an overflow landing on every instruction the
+//! 5. An ADC that never finishes a conversion, from a click to five minutes
+//!    later, when the light has to be off (`adc_never_answers`). Then twenty
+//!    thousand ticks with the switch held down from the first (`switch_stuck`).
+//! 6. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
+//! 7. Twenty thousand ticks of random clicks and holds.
+//! 8. Both of those again with an overflow landing on every instruction the
 //!    main loop reaches (`Sim::land`), each as far as the first run kept
 //!    reaching new code, and a little past (`both_ways`).
 //!
@@ -374,6 +377,9 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     slow_ticks(power_on()?, &mut clocks).map_err(|e| format!("with the slowest ticks: {e}"))?;
     oscillator_stops(power_on()?, &mut clocks)
         .map_err(|e| format!("with the 32 kHz oscillator stopped: {e}"))?;
+    adc_never_answers(power_on()?, &mut clocks).map_err(|e| format!("with a dead ADC: {e}"))?;
+    switch_stuck(power_on()?, &mut clocks)
+        .map_err(|e| format!("with the switch stuck down: {e}"))?;
 
     let examples = spec::examples(spec::UI_MD)?;
     // Every example, then the random switching, each with and without
@@ -520,6 +526,77 @@ const _: () = assert!(4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES);
 fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.tick_cycles = SLOWEST_TICK_CYCLES;
     lit(&mut sim, 2 * TICKS_PER_SECOND, report)
+}
+
+/// A click from off, then five minutes with the switch alone, and the ADC
+/// never finishing a conversion (`Scene::adc_dead`), so `hw::adc_result` only
+/// ever sees RESRDY clear. docs/ui.md's `cell:0V` rows are the same path seen
+/// as a garbage reading, where this is silence. The light has to settle at
+/// `limits::FAULT_CEILING` within a few seconds and go out at five minutes,
+/// the firmware and the library in step the whole way.
+///
+/// `in_step` only hands back the last level, so a second rig, fed the same
+/// samples, keeps the one at each tick.
+fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
+    use ts26::limits::FAULT_CEILING;
+    let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
+    let script = [Action::Clicks(1), Action::Wait(301 * TICKS_PER_SECOND)];
+    let levels = std::cell::RefCell::new(Vec::new());
+    let mut shadow = Rig::default();
+    let samples = testing::samples(script).map(|sample| {
+        let sample = Sample {
+            scene: Scene {
+                adc_dead: true,
+                ..sample.scene
+            },
+            ..sample
+        };
+        shadow.tick_in(sample.pressed, &sample.scene);
+        levels.borrow_mut().push(shadow.level());
+        sample
+    });
+    let mut sim = sim;
+    let end = in_step(&mut sim, samples, report)?;
+    let levels = levels.into_inner();
+    if end != Some(0) {
+        return Err(format!("ends at level {end:?}, not off"));
+    }
+    let lit = levels
+        .iter()
+        .position(|&level| level > 0)
+        .ok_or("the light never came on")?;
+    // A few readings may go before the ceiling comes down.
+    let settled = lit + seconds(3);
+    let capped = levels.get(settled..seconds(299));
+    if !capped.is_some_and(|l| !l.is_empty() && l.iter().all(|&l| l == FAULT_CEILING)) {
+        return Err(format!(
+            "the light isn't held at level {FAULT_CEILING} from 3 s after it came on until \
+             299 s ({:?} at {settled})",
+            levels.get(settled)
+        ));
+    }
+    Ok(())
+}
+
+/// The switch pressed from the first tick and never let go, for about five
+/// minutes of ticks, firmware and library in step. A jammed button is a hold
+/// from off, so the light has to sit at `ui::FLOOR` and nothing else.
+fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    let samples = iter::repeat_n(
+        Sample {
+            pressed: true,
+            scene: Scene::NORMAL,
+        },
+        20_000,
+    );
+    let end = in_step(&mut sim, samples, report)?;
+    if end != Some(ts26::ui::FLOOR) {
+        return Err(format!(
+            "ends at level {end:?}, not the floor, {}",
+            ts26::ui::FLOOR
+        ));
+    }
+    Ok(())
 }
 
 /// Steps `hw::halt` may take from dropping PB2 to its `sleep`, counting
@@ -2290,7 +2367,12 @@ impl Bus for Chip {
             reg::RSTCTRL_RSTFR => Ok(self.rstfr),
             reg::ADC0_INTFLAGS => {
                 let ready = self.adc.ready_at.is_some_and(|at| self.now >= at);
-                Ok(if ready { ADC_RESRDY } else { 0 })
+                // A dead ADC never sets RESRDY.
+                Ok(if ready && !self.world.scene.adc_dead {
+                    ADC_RESRDY
+                } else {
+                    0
+                })
             }
             reg::ADC0_RES => {
                 // Reading the low byte latches the high byte into ADC0.TEMP

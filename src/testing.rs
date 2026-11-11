@@ -375,6 +375,9 @@ pub struct Scene {
     pub fault: bool,
     /// A flash byte doesn't match its CRC.
     pub corrupt_flash: bool,
+    /// The ADC never finishes a conversion, so the firmware's loop never sees
+    /// a result. No script word sets it.
+    pub adc_dead: bool,
 }
 
 impl Scene {
@@ -384,6 +387,7 @@ impl Scene {
         kelvin: thermal::celsius(25),
         fault: false,
         corrupt_flash: false,
+        adc_dead: false,
     };
 
     /// What the power-on checks find, with `fault` standing for a fuse that
@@ -498,8 +502,10 @@ impl Rig {
     /// One tick, the ADC reading what `scene` says.
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
         let event = self.torch.tick(pressed, self.adc.result());
+        // A dead ADC is started on but never answers, so nothing's pending.
+        let convert = self.torch.convert().filter(|_| !scene.adc_dead);
         self.adc
-            .start_with(self.torch.convert(), |channel| scene.reading(channel));
+            .start_with(convert, |channel| scene.reading(channel));
         event
     }
 
@@ -1013,6 +1019,7 @@ mod tests {
             kelvin: thermal::celsius(80),
             fault: true,
             corrupt_flash: false,
+            adc_dead: false,
         };
         let mut samples = samples(script).peekable();
         assert!(samples.peek().is_some());

@@ -35,7 +35,7 @@ What covers each hazard, and how well, is in [safety.md](safety.md). These are t
 - [x] No-panic link check. `cargo xtask hex` refuses a firmware image that links any panic path
 - [ ] Restriction lints on the library. Overflow, indexing, casts and unwraps are made explicit, and clippy denies the rest
 - [x] Hold every ADC reading through low-voltage protection and thermal regulation and check where each ends up, plus a randomised property test of `limits::Limits`
-- [ ] Fault injection. Frozen plausible readings, a stuck switch, spurious ADC results, and a dead ADC and stuck switch together, on the simulator
+- [x] Fault injection. Frozen plausible readings, a stuck switch, spurious ADC results, and, on the simulator, a dead ADC and a stuck switch
 - [ ] Unhandled interrupts go to `hw::halt` instead of `reti`
 - [x] A commit stamp in flash, just before the CRC, shown by `flash` and `backup`
 
