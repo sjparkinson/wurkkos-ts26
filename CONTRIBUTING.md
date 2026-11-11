@@ -12,7 +12,7 @@ cargo clippy --package ts26 --lib --bins --examples --release --target avr-none 
 cargo xtask hex
 ```
 
-The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume. That's the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write (the checks are in `xtask/src/layout.rs`). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
+The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume. That's the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write, and that no panic or bounds-check symbol is linked, so nothing can reach the panic handler (the checks are in `xtask/src/layout.rs`). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
 
 ## The simulator
 
@@ -75,7 +75,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Bumping the nightly
 
-AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed.
+AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Symbol names can change between nightlies, so also re-prove the no-panic check still fires. Temporarily index a small array in `src/main.rs`'s loop with a runtime value from `hw::adc_result()`, run `cargo xtask hex`, and confirm it fails naming `panic_bounds_check` and friends (`llvm-nm -C` on the ELF shows what's there). Revert that afterwards. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed.
 
 ## Commits
 

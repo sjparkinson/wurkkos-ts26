@@ -2,7 +2,8 @@
 //! link.x assume but no compiler or linker error would catch. That's the
 //! vector table's shape, where the startup code copies and zeroes memory, and
 //! that every unlock of a protected register is followed straight away by the
-//! write.
+//! write. And that nothing in the firmware can reach a panic, since the
+//! handler in src/main.rs is there because Rust requires one.
 //!
 //! `build()` in main.rs runs these, so `size`, `hex` and `flash` all refuse
 //! an image that fails, and CI runs them through `size`.
@@ -33,7 +34,32 @@ pub fn check(elf: &Elf) -> Result<(), String> {
         .get(text.start as usize..text.end as usize)
         .ok_or(".text isn't in the flash image")?;
     protected_writes(text)?;
-    Ok(())
+    no_panics(elf.symbols())
+}
+
+/// LTO drops the panic machinery while nothing reaches it, so a symbol with
+/// one of these in its name means an `[i]`, an `unwrap` or the like now does.
+/// The names are `core::panicking::*`, `core::slice::index::*_fail` (which
+/// call into `panicking`) and the `rust_begin_unwind` the panic handler is
+/// linked as. They're what this nightly emits, so re-prove the check fires
+/// when bumping it (CONTRIBUTING.md).
+const PANIC_PATTERNS: [&str; 2] = ["panic", "begin_unwind"];
+
+/// Refuses an image with a panic or a bounds check linked in.
+fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
+    let found: Vec<&str> = symbols
+        .into_iter()
+        .filter(|name| PANIC_PATTERNS.iter().any(|p| name.contains(p)))
+        .collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the firmware links panic machinery ({}), so something in it can panic and reach hw::halt. \
+         Find the caller with `llvm-objdump -d target/avr-none/release/ts26.elf` (the llvm tools \
+         are under ~/.rustup/toolchains/<nightly>/lib/rustlib/*/bin/) or the avr-codegen agent",
+        found.join(", ")
+    ))
 }
 
 /// The checks that are about link.x and src/avr/rt.rs rather than the
@@ -395,5 +421,46 @@ mod tests {
     #[test]
     fn insists_on_at_least_one_protected_write() {
         assert!(protected_writes(&bytes(&[NOP, ST_Z_R25])).is_err());
+    }
+
+    #[test]
+    fn accepts_symbols_with_no_panic_machinery() {
+        let symbols = [
+            "__reset",
+            "__unhandled_interrupt",
+            "main",
+            "_ZN3ts266torch5Torch4tick17h0123456789abcdefE",
+            "_ZN3ts263avr2hw4halt17h0123456789abcdefE",
+        ];
+        assert_eq!(no_panics(symbols), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_panic_handler_or_a_bounds_check() {
+        let panicking = [
+            "main",
+            "_ZN4core9panicking18panic_bounds_check17h0123456789abcdefE",
+        ];
+        let err = no_panics(panicking).unwrap_err();
+        assert!(err.contains("panic_bounds_check"), "{err}");
+        assert!(err.contains("llvm-objdump"), "{err}");
+        assert!(err.contains("avr-codegen"), "{err}");
+
+        let handler = ["rust_begin_unwind", "main"];
+        assert!(
+            no_panics(handler)
+                .unwrap_err()
+                .contains("rust_begin_unwind")
+        );
+
+        let both = [
+            "_ZN4core9panicking5panic17h0123456789abcdefE",
+            "rust_begin_unwind",
+        ];
+        let err = no_panics(both).unwrap_err();
+        assert!(
+            err.contains("5panic") && err.contains("rust_begin_unwind"),
+            "{err}"
+        );
     }
 }

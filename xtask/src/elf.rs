@@ -158,6 +158,11 @@ impl Elf {
             .find(|(n, _)| n == name)
             .map(|&(_, value)| value)
     }
+
+    /// Every symbol name, in the order the symbol table has them.
+    pub fn symbols(&self) -> impl Iterator<Item = &str> + '_ {
+        self.symbols.iter().map(|(name, _)| name.as_str())
+    }
 }
 
 struct Reader<'a>(&'a [u8]);

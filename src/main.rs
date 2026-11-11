@@ -85,8 +85,9 @@ extern "C" fn main() -> ! {
 // Spinning here would end the same way while the watchdog runs. `halt` is for
 // when it doesn't, with the 32 kHz oscillator dead. No reset comes then, and
 // a spin would keep the CPU running off the cell for good where `halt`
-// sleeps. Nothing's ever run this. The simulator has no way to make the
-// firmware panic.
+// sleeps. It's here because Rust requires a handler. `cargo xtask hex`
+// refuses any image that could reach it (xtask/src/layout.rs), so nothing
+// should ever run this.
 #[cfg(target_arch = "avr")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
