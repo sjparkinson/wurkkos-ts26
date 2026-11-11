@@ -53,7 +53,7 @@ src/avr/rt.rs     vector table and startup (AVR only)
 examples/link.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
 xtask/            hex, the simulator, simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
-docs/             hardware, flashing, bench plan, toolchain, UI spec, roadmap
+docs/             hardware, flashing, bench plan, toolchain, UI spec, roadmap, hazard log
 vendor/           Microchip's ATDF for the part (Apache-2.0)
 ```
 

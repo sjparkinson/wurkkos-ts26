@@ -28,6 +28,17 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 - [x] A watchdog, so a hang can't leave the boost converter running. Firmware only, with a plain window and no proof at power-on, so nobody's seen it bite. The simulator can't show that either, since it doesn't model resets. The watchdog shares the tick's oscillator, so a tick that stops while the light's on has its own deadline, a count of PWM cycles, which turns the light off and powers down for good
 - [x] Check flash against its CRC, and read the fuses back, at power-on. Firmware only. A failure, or a watchdog reset, caps the light at level 50. Neither check has seen a real chip
 
+## Safety evidence
+
+What covers each hazard, and how well, is in [safety.md](safety.md). These are the gaps it names that code can close. Like section 2, a tick means the firmware or the tests do it, and none of it is bench evidence.
+
+- [ ] No-panic link check. `cargo xtask hex` refuses a firmware image that links any panic path
+- [ ] Restriction lints on the library. Overflow, indexing, casts and unwraps are made explicit, and clippy denies the rest
+- [ ] Hold every ADC reading through low-voltage protection and thermal regulation and check where each ends up, plus a randomised property test of `limits::Limits`
+- [ ] Fault injection. Frozen plausible readings, a stuck switch, spurious ADC results, and a dead ADC and stuck switch together, on the simulator
+- [ ] Unhandled interrupts go to `hw::halt` instead of `reti`
+- [ ] A commit stamp in flash, just before the CRC, shown by `flash` and `backup`
+
 ## 3. It's nice to use
 
 - [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on my own curve
