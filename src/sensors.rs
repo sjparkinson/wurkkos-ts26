@@ -95,7 +95,7 @@ impl Schedule {
     /// Back to where it started, for after the firmware's powered down. The
     /// next tick sets the ADC up again, and throws that conversion away as
     /// usual, which gives the reference a tick to start.
-    pub fn rest(&mut self) {
+    pub const fn rest(&mut self) {
         *self = Self::new();
     }
 

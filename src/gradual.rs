@@ -29,7 +29,7 @@ impl Gradual {
         }
     }
 
-    pub fn level(&self) -> u8 {
+    pub const fn level(&self) -> u8 {
         self.level
     }
 
@@ -45,7 +45,7 @@ impl Gradual {
         reason = "level is over target going down, so at least 1, and under it going up, \
                   so at most 254"
     )]
-    pub fn tick(&mut self, target: u8) -> u8 {
+    pub const fn tick(&mut self, target: u8) -> u8 {
         let level = self.level;
         let (every, next) = if target < level {
             (self.down_every, level - 1)
@@ -66,7 +66,7 @@ impl Gradual {
     /// Drops the level to `max` straight away if it's above it. Only do this
     /// when nothing can see the difference, such as pulling a ceiling down to
     /// the level the light is already at.
-    pub fn cap(&mut self, max: u8) {
+    pub const fn cap(&mut self, max: u8) {
         if self.level > max {
             self.level = max;
             self.waited = 0;
@@ -93,17 +93,17 @@ impl Ceiling {
     }
 
     /// The ceiling right now.
-    pub fn level(&self) -> u8 {
+    pub const fn level(&self) -> u8 {
         self.level.level()
     }
 
     /// Where it's heading.
-    pub fn target(&self) -> u8 {
+    pub const fn target(&self) -> u8 {
         self.target
     }
 
     /// One tick. Moves a step towards the target and returns the ceiling.
-    pub fn tick(&mut self) -> u8 {
+    pub const fn tick(&mut self) -> u8 {
         self.level.tick(self.target)
     }
 

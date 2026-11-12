@@ -154,7 +154,7 @@ impl SerialNumber {
         }
     }
 
-    pub fn bytes(&self) -> &[u8] {
+    pub const fn bytes(&self) -> &[u8] {
         &self.0
     }
 
@@ -1457,7 +1457,7 @@ pub(crate) mod tests {
                     *slot = self
                         .replies
                         .pop_front()
-                        .ok_or(io::Error::from(io::ErrorKind::TimedOut))?;
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))?;
                 }
                 Ok(())
             }

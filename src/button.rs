@@ -41,7 +41,7 @@ impl Clicks {
     }
 
     /// Whether the switch is up with no clicks waiting to count.
-    pub fn idle(&self) -> bool {
+    pub const fn idle(&self) -> bool {
         !self.pressed && self.count == 0
     }
 

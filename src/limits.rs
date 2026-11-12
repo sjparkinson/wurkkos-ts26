@@ -30,11 +30,12 @@ use crate::thermal::{self, Thermal};
 
 /// The highest level the torch runs at when something's wrong that it can't
 /// see past, such as a failed self-test or a voltage reading it can't
-/// believe. This board has no low-current linear channel to fall back on, so
-/// this borrows the thermal floor's level, a few per
-/// cent of full duty on this firmware's curve. Unmeasured. Bright enough to
-/// find your way out by, gentle on the cell as far as anyone can say without a
-/// meter on it.
+/// believe.
+///
+/// This board has no low-current linear channel to fall back on, so this
+/// borrows the thermal floor's level, a few per cent of full duty on this
+/// firmware's curve. Unmeasured. Bright enough to find your way out by,
+/// gentle on the cell as far as anyone can say without a meter on it.
 pub const FAULT_CEILING: u8 = thermal::FLOOR;
 
 const _: () = assert!(FAULT_CEILING <= CEILING);
@@ -83,18 +84,18 @@ impl Limits {
     }
 
     /// The conversion the ADC should start this tick, if any.
-    pub fn convert(&self) -> Option<Convert> {
+    pub const fn convert(&self) -> Option<Convert> {
         self.convert
     }
 
     /// The level the light's at, `0` meaning off, which is the last tick's
     /// [`Step::level`].
-    pub fn level(&self) -> u8 {
+    pub const fn level(&self) -> u8 {
         self.level
     }
 
     /// The battery and thermal ceilings right now.
-    pub fn ceilings(&self) -> (u8, u8) {
+    pub const fn ceilings(&self) -> (u8, u8) {
         (self.protection.ceiling(), self.thermal.ceiling())
     }
 
@@ -104,7 +105,7 @@ impl Limits {
     /// result (DS40002204A §30.3.5). So a battery ceiling only climbs once
     /// readings start again, and a long rest forgets the last ones
     /// (`battery::FORGET_TICKS`).
-    pub fn rest(&mut self) {
+    pub const fn rest(&mut self) {
         self.schedule.rest();
         self.protection.rest();
         self.convert = None;

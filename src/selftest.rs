@@ -45,7 +45,7 @@ impl Fuses {
     /// - `APPEND` and `BOOTEND` are 0. The vector table is linked at 0, and
     ///   only the whole-flash CRC scan expects the checksum where `xtask`
     ///   puts it.
-    pub fn ok(self) -> bool {
+    pub const fn ok(self) -> bool {
         self.wdtcfg == 0
             && self.osccfg & regs::FUSE_FREQSEL == regs::FUSE_FREQSEL_20MHZ
             && self.osccfg & regs::FUSE_OSCLOCK == 0

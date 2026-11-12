@@ -49,14 +49,18 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The temperature to hold the MCU at, 50 °C, in kelvin. The stock firmware's
-/// figure for Wurkkos lights. Unmeasured here. 1Lumen saw 52 °C on the head
-/// on one sample, and nobody knows what the MCU reads when the head's at that.
+/// The temperature to hold the MCU at, 50 °C, in kelvin.
+///
+/// The stock firmware's figure for Wurkkos lights. Unmeasured here. 1Lumen
+/// saw 52 °C on the head on one sample, and nobody knows what the MCU reads
+/// when the head's at that.
 pub const LIMIT: u16 = celsius(50);
 
-/// The lowest level thermal regulation steps down to. The stock firmware's
-/// level number, on this firmware's curve. Unmeasured. Nobody knows that this level is
-/// cool enough to hold in still air, or what it draws.
+/// The lowest level thermal regulation steps down to.
+///
+/// The stock firmware's level number, on this firmware's curve. Unmeasured.
+/// Nobody knows that this level is cool enough to hold in still air, or what
+/// it draws.
 pub const FLOOR: u8 = 50;
 
 const _: () = assert!(FLOOR <= CEILING);
@@ -251,20 +255,20 @@ impl Thermal {
     }
 
     /// The ceiling right now.
-    pub fn ceiling(&self) -> u8 {
+    pub const fn ceiling(&self) -> u8 {
         self.ceiling.level()
     }
 
     /// Forgets everything, so there's no ceiling, and the next reading starts
     /// the smoothing and the trend afresh. Call it when the light turns on,
     /// since nothing's sampled while it's off.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         *self = Self::new();
     }
 
     /// One tick. Moves the ceiling a step towards where it's heading and
     /// returns it.
-    pub fn tick(&mut self) -> u8 {
+    pub const fn tick(&mut self) -> u8 {
         self.ceiling.tick()
     }
 

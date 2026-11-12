@@ -1,7 +1,9 @@
-//! ATtiny1616 register addresses and bitfield values, generated at build time
-//! from Microchip's ATDF in `vendor/` by `build.rs`, with `generate` in
-//! `xtask/src/atdf.rs`. Nothing in here that the ATDF can give is typed by
-//! hand. The generated file is `regs.rs` in the package's `OUT_DIR`.
+//! ATtiny1616 register addresses and bitfield values, generated at build time.
+//!
+//! They come from Microchip's ATDF in `vendor/`, by `build.rs`, with
+//! `generate` in `xtask/src/atdf.rs`. Nothing in here that the ATDF can give
+//! is typed by hand. The generated file is `regs.rs` in the package's
+//! `OUT_DIR`.
 //!
 //! Only plain constants live here, so the file compiles anywhere. It's a
 //! module of the library, where `selftest` checks the fuse fields with it.

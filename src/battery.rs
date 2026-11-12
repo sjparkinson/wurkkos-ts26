@@ -39,10 +39,11 @@ use crate::limits::FAULT_CEILING;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
 
-/// The stock firmware's voltage slope for this board, against its default of
-/// 1024, higher reading lower. Calibrated on one of ToyKeeper's samples, and
-/// unmeasured on any light of ours. Its offset is 0 here, so there's no offset
-/// to carry.
+/// The stock firmware's voltage slope for this board.
+///
+/// It's against its default of 1024, higher reading lower. Calibrated on one
+/// of ToyKeeper's samples, and unmeasured on any light of ours. Its offset is
+/// 0 here, so there's no offset to carry.
 pub const SLOPE: u16 = 1094;
 
 /// 1.1 V in centivolts times the 4.3 that a slope of 1024 stands for.
@@ -88,7 +89,7 @@ const _: () = {
     reason = "reading is at most MAX_READING here, and the asserts on HIGH and LOW bound \
               every step for that"
 )]
-pub fn centivolts(reading: u16) -> u16 {
+pub const fn centivolts(reading: u16) -> u16 {
     if reading > MAX_READING {
         return u16::MAX;
     }
@@ -120,9 +121,11 @@ pub const STEP_DOWN_BELOW: u16 = 300;
 pub const OFF_BELOW: u16 = 290;
 
 /// At or above this many centivolts, held for [`RECOVER_SAMPLES`], the
-/// ceiling steps back up. The 0.3 V gap to [`STEP_DOWN_BELOW`] is the
-/// hysteresis, so a cell that sags to 2.95 V at a high level and rests at
-/// 3.2 V on a lower one stays put. Unmeasured.
+/// ceiling steps back up.
+///
+/// The 0.3 V gap to [`STEP_DOWN_BELOW`] is the hysteresis, so a cell that
+/// sags to 2.95 V at a high level and rests at 3.2 V on a lower one stays
+/// put. Unmeasured.
 pub const RECOVER_AT: u16 = 330;
 
 /// The MP3432's start-up voltage from its datasheet, in centivolts.
@@ -136,9 +139,11 @@ const _: () = assert!(OFF_BELOW < STEP_DOWN_BELOW && STEP_DOWN_BELOW < RECOVER_A
 pub const HOLD_SAMPLES: u16 = SAMPLES_PER_SECOND;
 
 /// How long it has to stay under [`STEP_DOWN_BELOW`] for each step down, five
-/// seconds. Long enough for the cell to recover a little after the last step,
-/// the way the stock firmware waits about six seconds between its
-/// low-voltage step-downs. Unmeasured.
+/// seconds.
+///
+/// Long enough for the cell to recover a little after the last step, the way
+/// the stock firmware waits about six seconds between its low-voltage
+/// step-downs. Unmeasured.
 pub const STEP_SAMPLES: u16 = SAMPLES_PER_SECOND * 5;
 
 /// How long it has to stay at [`RECOVER_AT`] or above for each step back up,
@@ -154,10 +159,11 @@ pub const STEP: u8 = 15;
 /// off, around seven seconds with the fades. Unmeasured.
 pub const FLAT_STEP: u8 = 30;
 
-/// Ticks of rest before the filter forgets the cell, five minutes. Any
-/// sooner and clicking off and on would restart it from the unloaded voltage
-/// each time, which keeps a nearly flat cell running. Any later and a cell
-/// that's sat for days gets judged on what it read before. Unmeasured.
+/// Ticks of rest before the filter forgets the cell, five minutes.
+///
+/// Any sooner and clicking off and on would restart it from the unloaded
+/// voltage each time, which keeps a nearly flat cell running. Any later and a
+/// cell that's sat for days gets judged on what it read before. Unmeasured.
 pub const FORGET_TICKS: u16 = TICKS_PER_SECOND * 60 * 5;
 
 /// Voltages this board could really read, in centivolts.
@@ -226,10 +232,12 @@ pub enum Verdict {
     Off,
 }
 
-/// Low-voltage protection. Feed it each voltage sample (every
-/// [`CYCLE_TICKS`] ticks), call [`Protection::tick`] every tick, and
-/// [`Protection::ceiling`] says how bright the torch may be. The ceiling
-/// fades rather than jumps, like thermal's.
+/// Low-voltage protection.
+///
+/// Feed it each voltage sample (every [`CYCLE_TICKS`] ticks), call
+/// [`Protection::tick`] every tick, and [`Protection::ceiling`] says how
+/// bright the torch may be. The ceiling fades rather than jumps, like
+/// thermal's.
 ///
 /// Samples go through a moving average (each one moves the filtered value an
 /// eighth of the way, a time constant of about two seconds at four samples a
@@ -306,13 +314,13 @@ impl Protection {
     }
 
     /// The ceiling right now.
-    pub fn ceiling(&self) -> u8 {
+    pub const fn ceiling(&self) -> u8 {
         self.ceiling.level()
     }
 
     /// One tick. Moves the ceiling a step towards where it's heading and
     /// returns it.
-    pub fn tick(&mut self) -> u8 {
+    pub const fn tick(&mut self) -> u8 {
         self.ceiling.tick()
     }
 
@@ -320,7 +328,7 @@ impl Protection {
     /// they do for any time off, and so does the count to [`BLIND_SAMPLES`].
     /// The ceiling stays, since only good readings raise it. The filter
     /// stays too, until [`FORGET_TICKS`] have gone by.
-    pub fn rest(&mut self) {
+    pub const fn rest(&mut self) {
         (self.low_samples, self.flat_samples, self.high_samples) = (0, 0, 0);
         self.implausible = 0;
         self.blind_samples = 0;
@@ -331,7 +339,7 @@ impl Protection {
     }
 
     /// The filtered voltage in centivolts, or `None` before the first sample.
-    pub fn centivolts(&self) -> Option<u16> {
+    pub const fn centivolts(&self) -> Option<u16> {
         match self.filtered {
             0 => None,
             filtered => Some(filtered >> 4),

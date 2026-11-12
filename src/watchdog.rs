@@ -119,7 +119,7 @@ impl Feeder {
 
     /// Call once a tick. True when this pass feeds the watchdog, which is the
     /// first one and then every [`FEED_TICKS`]th.
-    pub fn tick(&mut self) -> bool {
+    pub const fn tick(&mut self) -> bool {
         self.fed = match self.wait.checked_sub(1) {
             None => {
                 self.wait = FEED_TICKS - 1;

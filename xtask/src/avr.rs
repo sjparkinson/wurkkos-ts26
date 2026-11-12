@@ -127,7 +127,7 @@ pub struct Cpu {
 impl Cpu {
     /// The state after reset, with PC at 0, SP at the top of SRAM and SREG
     /// clear.
-    pub fn new(sram: &Range<u16>) -> Self {
+    pub const fn new(sram: &Range<u16>) -> Self {
         Self {
             r: [0; 32],
             pc: 0,
@@ -488,11 +488,11 @@ impl Cpu {
         Ok(())
     }
 
-    pub fn flag(&self, bit: u8) -> bool {
+    pub const fn flag(&self, bit: u8) -> bool {
         self.sreg & 1 << bit != 0
     }
 
-    fn set(&mut self, bit: u8, on: bool) {
+    const fn set(&mut self, bit: u8, on: bool) {
         if on {
             self.sreg |= 1 << bit;
         } else {
@@ -500,28 +500,28 @@ impl Cpu {
         }
     }
 
-    fn pair(&self, lo: usize) -> u16 {
+    const fn pair(&self, lo: usize) -> u16 {
         u16::from_le_bytes([self.r[lo], self.r[lo + 1]])
     }
 
-    fn set_pair(&mut self, lo: usize, value: u16) {
+    const fn set_pair(&mut self, lo: usize, value: u16) {
         [self.r[lo], self.r[lo + 1]] = value.to_le_bytes();
     }
 
     /// Sets N, Z and S from a result. V must already be set.
-    fn nzs(&mut self, v: u8) -> u8 {
+    const fn nzs(&mut self, v: u8) -> u8 {
         self.set(N, v & 0x80 != 0);
         self.set(Z, v == 0);
         self.set(S, self.flag(N) != self.flag(V));
         v
     }
 
-    fn logic(&mut self, v: u8) -> u8 {
+    const fn logic(&mut self, v: u8) -> u8 {
         self.set(V, false);
         self.nzs(v)
     }
 
-    fn shift(&mut self, v: u8, carry: bool) -> u8 {
+    const fn shift(&mut self, v: u8, carry: bool) -> u8 {
         self.set(C, carry);
         self.set(N, v & 0x80 != 0);
         self.set(V, self.flag(N) != carry);
@@ -554,7 +554,7 @@ impl Cpu {
     /// Every multiply leaves its result in r1:r0, with C from bit 15 and Z
     /// set if it's zero. The fractional ones (fmul, fmuls, fmulsu) shift the
     /// result left one place, and C comes from bit 15 before the shift.
-    fn product(&mut self, p: u16, fractional: bool) {
+    const fn product(&mut self, p: u16, fractional: bool) {
         let v = if fractional { p << 1 } else { p };
         self.set_pair(0, v);
         self.set(C, p & 0x8000 != 0);
@@ -591,7 +591,7 @@ impl Cpu {
     }
 
     /// Data-space loads and stores, with SP and SREG kept in the CPU.
-    fn load(&mut self, bus: &mut impl Bus, addr: u16) -> Result<u8, String> {
+    fn load(&self, bus: &mut impl Bus, addr: u16) -> Result<u8, String> {
         match addr {
             SPL => Ok(self.sp.to_le_bytes()[0]),
             SPH => Ok(self.sp.to_le_bytes()[1]),
@@ -618,7 +618,7 @@ impl Cpu {
 
     /// The pointer register's post-increment (low bit 1) and pre-decrement
     /// (low bit 2) forms. X's plain form (0xC) leaves it alone.
-    fn step_pointer(&mut self, reg: usize, w: u16) -> u16 {
+    const fn step_pointer(&mut self, reg: usize, w: u16) -> u16 {
         let p = self.pair(reg);
         match w & 3 {
             1 => {
@@ -678,7 +678,7 @@ impl Cpu {
 /// The four 32-bit instructions are `lds` 1001 000d dddd 0000, `sts`
 /// 1001 001d dddd 0000, `jmp` 1001 010k kkkk 110k and `call` 1001 010k
 /// kkkk 111k. Their second word is an address, so a walk through code skips it.
-pub(crate) fn is_two_words(w: u16) -> bool {
+pub(crate) const fn is_two_words(w: u16) -> bool {
     w & 0xFC0F == 0x9000 || w & 0xFE0C == 0x940C
 }
 

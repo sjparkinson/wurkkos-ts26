@@ -50,18 +50,18 @@ impl Torch {
     /// light's off and no click is being counted. The firmware powers down
     /// between these ticks, and a press ends it on the tick that sees the
     /// press, in time to read the cell before a click can turn the light on.
-    pub fn resting(&self) -> bool {
+    pub const fn resting(&self) -> bool {
         self.clicks.idle() && self.ui.output_level() == 0 && self.limits.level() == 0
     }
 
     /// The level the LEDs should be at right now, `0` meaning off. That's what
     /// the UI wants, as far as the cell and the temperature allow.
-    pub fn level(&self) -> u8 {
+    pub const fn level(&self) -> u8 {
         self.limits.level()
     }
 
     /// The conversion to start on the ADC after this tick, if any.
-    pub fn convert(&self) -> Option<Convert> {
+    pub const fn convert(&self) -> Option<Convert> {
         self.limits.convert()
     }
 
@@ -69,7 +69,7 @@ impl Torch {
         ramp::output(self.level())
     }
 
-    pub fn aux(&self) -> Aux {
+    pub const fn aux(&self) -> Aux {
         self.ui.aux()
     }
 }

@@ -59,9 +59,10 @@ const _: () = {
 };
 
 /// Sixteenths of a kelvin from four accumulated temperature sensor
-/// conversions, using the factory calibration from the signature row. A sum
-/// below the offset (which would mean a broken sensor or a bad read) comes
-/// out as 0 rather than wrapping.
+/// conversions, using the factory calibration from the signature row.
+///
+/// A sum below the offset (which would mean a broken sensor or a bad read)
+/// comes out as 0 rather than wrapping.
 #[expect(
     clippy::arithmetic_side_effects,
     reason = "an i8 times -4 is within -508..=512, and the assert above bounds the rest"

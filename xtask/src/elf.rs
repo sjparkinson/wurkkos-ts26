@@ -134,7 +134,7 @@ impl Elf {
     }
 
     /// The address execution starts at, from the ELF header.
-    pub fn entry(&self) -> u32 {
+    pub const fn entry(&self) -> u32 {
         self.entry
     }
 

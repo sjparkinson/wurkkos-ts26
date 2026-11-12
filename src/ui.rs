@@ -3,11 +3,12 @@
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// The lowest level the UI goes to. The stock firmware's smooth floor on this
-/// light is 5 of 150, which is 36 in delta-sigma units on its table, and
-/// reviewers saw flicker below that. This curve is flatter at the bottom, so
-/// its level 5 is only 24, and level 13 is the first at 36 or over.
-/// Unmeasured.
+/// The lowest level the UI goes to.
+///
+/// The stock firmware's smooth floor on this light is 5 of 150, which is 36
+/// in delta-sigma units on its table, and reviewers saw flicker below that.
+/// This curve is flatter at the bottom, so its level 5 is only 24, and level
+/// 13 is the first at 36 or over. Unmeasured.
 pub const FLOOR: u8 = 13;
 
 /// Where a fresh torch starts when you click it on, a duty of about 10 of 255.
@@ -66,12 +67,12 @@ impl Ui {
         }
     }
 
-    pub fn mode(&self) -> Mode {
+    pub const fn mode(&self) -> Mode {
         self.mode
     }
 
     /// The level the LEDs should be at right now, `0` meaning off.
-    pub fn output_level(&self) -> u8 {
+    pub const fn output_level(&self) -> u8 {
         match self.mode {
             Mode::On => self.level,
             Mode::Lockout if self.momentary => FLOOR,
@@ -80,7 +81,7 @@ impl Ui {
     }
 
     /// The aux LEDs give way to the main LED whenever it's lit.
-    pub fn aux(&self) -> Aux {
+    pub const fn aux(&self) -> Aux {
         match self.mode {
             _ if self.output_level() > 0 => Aux::Off,
             Mode::Lockout => Aux::Red,
@@ -148,7 +149,7 @@ impl Ui {
     /// Puts the light out, whatever it was doing, remembering the level. This
     /// is 1C, and it's also how low-voltage protection will turn the light
     /// off. A locked torch stays locked.
-    pub fn off(&mut self) {
+    pub const fn off(&mut self) {
         match self.mode {
             Mode::On => self.mode = Mode::Off,
             Mode::Lockout => self.momentary = false,
@@ -156,7 +157,7 @@ impl Ui {
         }
     }
 
-    fn turn_on(&mut self, level: u8) {
+    const fn turn_on(&mut self, level: u8) {
         self.mode = Mode::On;
         self.level = level;
     }

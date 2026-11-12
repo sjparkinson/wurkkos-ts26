@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 struct Element {
     name: String,
     attrs: Vec<(String, String)>,
-    children: Vec<Element>,
+    children: Vec<Self>,
 }
 
 impl Element {
@@ -35,11 +35,11 @@ impl Element {
             .unwrap_or_else(|| panic!("<{}> has no {key} attribute", self.name))
     }
 
-    fn all<'a>(&'a self, tag: &'static str) -> impl Iterator<Item = &'a Element> {
+    fn all<'a>(&'a self, tag: &'static str) -> impl Iterator<Item = &'a Self> {
         self.children.iter().filter(move |c| c.name == tag)
     }
 
-    fn child(&self, tag: &str) -> &Element {
+    fn child(&self, tag: &str) -> &Self {
         self.children
             .iter()
             .find(|c| c.name == tag)
@@ -47,7 +47,7 @@ impl Element {
     }
 
     /// The child `<tag name="...">`.
-    fn named(&self, tag: &str, name: &str) -> &Element {
+    fn named(&self, tag: &str, name: &str) -> &Self {
         self.children
             .iter()
             .find(|c| c.name == tag && c.attr("name") == Some(name))

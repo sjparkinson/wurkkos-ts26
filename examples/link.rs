@@ -27,6 +27,11 @@ mod rt;
 /// rt.rs's vector table jumps to these by name, and `__unhandled_interrupt`
 /// to `halt`. The probe never enables an interrupt, so they do nothing.
 #[cfg(target_arch = "avr")]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "interrupt handlers and the runtime's halt, reached from the vector table, never \
+              evaluated at compile time"
+)]
 mod hw {
     pub extern "avr-interrupt" fn rtc_pit() {}
     pub extern "avr-interrupt" fn tca0_ovf() {}
@@ -88,11 +93,19 @@ mod probe {
     #[allow(unsafe_code, clippy::empty_loop)]
     #[unsafe(no_mangle)]
     #[inline(never)]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "a named stopping point the simulator looks for, never evaluated at compile time"
+    )]
     extern "C" fn link_probe_done() -> ! {
         loop {}
     }
 
     #[panic_handler]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "the panic handler, never evaluated at compile time"
+    )]
     fn panic(_: &core::panic::PanicInfo) -> ! {
         loop {}
     }

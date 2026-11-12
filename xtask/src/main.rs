@@ -746,7 +746,7 @@ mod tests {
         let round_trip = ihex::decode(&ihex::encode(&image)).unwrap();
         assert!(signed(&round_trip).is_ok());
 
-        let mut broken = image.clone();
+        let mut broken = image;
         broken[1] ^= 1;
         assert!(signed(&broken).is_err());
     }

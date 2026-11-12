@@ -64,7 +64,7 @@ impl World {
 
     /// A world whose fuses fail the firmware's read-back, which is what a
     /// script's `fault` means. OSCCFG asks for 16 MHz.
-    pub fn with_bad_fuse(mut self) -> Self {
+    pub const fn with_bad_fuse(mut self) -> Self {
         self.fuses[OSCCFG] = 0x01;
         self.scene.fault = true;
         self

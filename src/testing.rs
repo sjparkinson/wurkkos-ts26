@@ -1,6 +1,7 @@
-//! Test doubles shared by the library's own tests and xtask's simulators, so
-//! there's one fake ADC, one torch wired to it, one way of turning a voltage
-//! or a temperature into a raw reading, and one reader of docs/ui.md.
+//! Test doubles shared by the library's own tests and xtask's simulators.
+//!
+//! So there's one fake ADC, one torch wired to it, one way of turning a
+//! voltage or a temperature into a raw reading, and one reader of docs/ui.md.
 //!
 //! The firmware never sees it.
 //!
@@ -137,7 +138,7 @@ impl Adc {
     }
 
     /// The result of the conversion started last tick, if there was one.
-    pub fn result(&mut self) -> Option<u16> {
+    pub const fn result(&mut self) -> Option<u16> {
         self.pending.take()
     }
 
@@ -189,7 +190,7 @@ pub enum Action {
 
 impl Action {
     /// Whether it takes time, rather than setting the scene.
-    fn takes_time(self) -> bool {
+    const fn takes_time(self) -> bool {
         matches!(self, Self::Clicks(_) | Self::Hold { .. } | Self::Wait(_))
     }
 }
@@ -392,7 +393,7 @@ impl Scene {
 
     /// What the power-on checks find, with `fault` standing for a fuse that
     /// fails its read-back.
-    pub fn faults(&self) -> Faults {
+    pub const fn faults(&self) -> Faults {
         Faults {
             fuses: self.fault,
             flash: self.corrupt_flash,
@@ -550,7 +551,7 @@ pub enum Expect {
 }
 
 impl Expect {
-    pub fn holds(self, level: u8) -> bool {
+    pub const fn holds(self, level: u8) -> bool {
         match self {
             Self::Off => level == 0,
             Self::On => level > 0,
@@ -762,7 +763,7 @@ impl Rng {
     }
 
     /// The next 16 bits, from the top of the state, which is the better end.
-    pub fn next_u16(&mut self) -> u16 {
+    pub const fn next_u16(&mut self) -> u16 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;

@@ -10,8 +10,10 @@
 pub const LEVELS: u8 = 150;
 
 /// The highest level the firmware will run at, until thermal regulation has
-/// been checked on a real light. Turbo pulls about 11 A from the cell, and the
-/// thermal constants have never met this torch. Raise it to [`LEVELS`] then.
+/// been checked on a real light.
+///
+/// Turbo pulls about 11 A from the cell, and the thermal constants have never
+/// met this torch. Raise it to [`LEVELS`] then.
 pub const CEILING: u8 = 120;
 
 /// TCA0's period. Dual-slope PWM at 10 MHz with a TOP of 255 runs at

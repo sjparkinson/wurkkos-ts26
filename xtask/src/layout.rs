@@ -284,7 +284,7 @@ fn out_address(w: u16) -> Option<u16> {
 }
 
 /// `st Z, Rr` is 1000 001r rrrr 0000.
-fn is_st_z(w: u16) -> bool {
+const fn is_st_z(w: u16) -> bool {
     w & 0xFE0F == 0x8200
 }
 

@@ -97,7 +97,7 @@ struct Fade {
 
 impl Fade {
     /// Whether a step from `before` to `level` on tick `now` carries on.
-    fn continues(&self, now: u32, before: u8, level: u8) -> bool {
+    const fn continues(&self, now: u32, before: u8, level: u8) -> bool {
         self.last + 1 == now && self.to == before && (level > before) == (self.to > self.from)
     }
 }

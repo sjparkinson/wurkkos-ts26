@@ -409,6 +409,10 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     let runs = examples.iter().map(Some).chain([None]);
     let power_on = &power_on;
     let reports: Vec<Result<Report, String>> = thread::scope(|scope| {
+        #[expect(
+            clippy::needless_collect,
+            reason = "spawning every run before joining any is what runs them in parallel"
+        )]
         let runs: Vec<_> = runs
             .map(|example| scope.spawn(move || both_ways(power_on, example)))
             .collect();
@@ -1178,7 +1182,7 @@ impl Sim {
     /// `Landing::Watch` only notes when each instruction's first reached, so
     /// `both_ways` knows how far a landing run has new code to land on.
     fn land(&mut self) {
-        if let Landing::Off = self.landing {
+        if matches!(self.landing, Landing::Off) {
             return;
         }
         let chip = &mut self.chip;
@@ -1199,7 +1203,7 @@ impl Sim {
     }
 
     /// The most stack used so far, in bytes.
-    fn stack(&self) -> u16 {
+    const fn stack(&self) -> u16 {
         SRAM.end - 1 - self.lowest_sp
     }
 
@@ -1314,7 +1318,7 @@ impl Sim {
     /// The handler's budget goes too, since `halt` sleeps from here until a
     /// reset, and so does the check that it gives back the registers, SREG
     /// and SP, since it never returns them to anything.
-    fn abandon(&mut self) {
+    const fn abandon(&mut self) {
         self.abandoned = true;
         self.chip.interrupted = None;
         self.chip.tca.temp = None;
@@ -1409,7 +1413,7 @@ struct Wdt {
 }
 
 /// WDT clocks in a WDT.CTRLA PERIOD or WINDOW setting, 0 for off.
-fn wdt_clocks(setting: u8) -> u32 {
+const fn wdt_clocks(setting: u8) -> u32 {
     match setting {
         0 => 0,
         n => 8 << (n - 1),
@@ -1454,7 +1458,7 @@ impl Boot {
     }
 
     fn in_order(&self) -> Result<(), String> {
-        let at = |when: Option<u64>, what: &str| when.ok_or(format!("never {what}"));
+        let at = |when: Option<u64>, what: &str| when.ok_or_else(|| format!("never {what}"));
         let flags = at(self.flags_cleared, "cleared RSTCTRL.RSTFR")?;
         let flash = at(self.flash_checked, "started a CRC scan")?;
         let fuses = at(self.fuses_read, "read the fuses")?;
@@ -1679,7 +1683,7 @@ impl Chip {
     /// PB2 is low before the first `sleep`, and `halt` sleeps in a loop, so
     /// the worst case is spinning dark rather than sleeping dark, until the
     /// watchdog resets the chip about 63 ms later.
-    fn force_interrupt(&mut self, vector: u8) {
+    const fn force_interrupt(&mut self, vector: u8) {
         self.forced = Some(vector);
     }
 
@@ -1829,7 +1833,7 @@ impl Chip {
     }
 
     /// CRCSCAN.STATUS as a read sees it now.
-    fn crc_status(&mut self) -> u8 {
+    const fn crc_status(&mut self) -> u8 {
         match self.crc.started {
             Some((at, before)) if self.now <= at + CRC_START_INSTRUCTIONS => before,
             Some(_) if self.crc.busy_reads > 0 => {

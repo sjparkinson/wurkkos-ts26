@@ -39,7 +39,7 @@ impl RandomSwitching {
         }
     }
 
-    fn random(&mut self) -> u32 {
+    const fn random(&mut self) -> u32 {
         self.state ^= self.state << 13;
         self.state ^= self.state >> 17;
         self.state ^= self.state << 5;
