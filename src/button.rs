@@ -55,11 +55,10 @@ impl Clicks {
                 self.ticks = 0;
                 None
             }
-            (true, true) if self.ticks >= HOLD_TICKS => Some(Event::Hold {
+            (true, true) => self.ticks.checked_sub(HOLD_TICKS).map(|ticks| Event::Hold {
                 clicks: self.count,
-                ticks: self.ticks - HOLD_TICKS,
+                ticks,
             }),
-            (true, true) => None,
             (true, false) => {
                 // `ticks` has gone up once since the last pressed tick, so
                 // a press that sent Holds is now past HOLD_TICKS.
