@@ -5,6 +5,20 @@
 //! loop that feeds switch samples in and writes the output back.
 
 #![no_std]
+// The library is the safety logic, so nothing in it may panic, index out of
+// range, overflow or truncate without saying why it can't. Tests may.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::indexing_slicing,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+    )
+)]
 
 pub mod battery;
 pub mod board;
@@ -16,7 +30,18 @@ pub mod regs;
 pub mod selftest;
 pub mod sensors;
 pub mod temp;
+// Fakes and helpers for tests and xtask's simulators, never in the firmware,
+// so the restrictions above don't apply.
 #[cfg(any(test, feature = "testing"))]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation
+)]
 pub mod testing;
 pub mod thermal;
 pub mod torch;
