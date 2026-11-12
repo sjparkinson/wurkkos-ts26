@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn a_plausible_temperature_that_never_changes_never_steps_down() {
         let mut run = Run::new();
-        assert!(run.adc.temperature == celsius(25));
+        assert_eq!(run.adc.temperature, celsius(25));
         run.ui = CEILING;
         run.secs(1);
         for minute in 0..60 {

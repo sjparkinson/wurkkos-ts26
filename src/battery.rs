@@ -785,7 +785,7 @@ mod tests {
     #[test]
     fn the_filter_has_room_for_the_most_plausible_voltage() {
         let mut lvp = Protection::new();
-        assert!(u32::from(*PLAUSIBLE.end()) << 4 <= u32::from(u16::MAX));
+        assert!(u16::try_from(u32::from(*PLAUSIBLE.end()) << 4).is_ok());
         assert_eq!(last(&mut lvp, *PLAUSIBLE.end(), CEILING, secs(60)), NONE);
         assert_eq!(lvp.centivolts(), Some(*PLAUSIBLE.end()));
     }

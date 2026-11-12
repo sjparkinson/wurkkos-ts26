@@ -1747,7 +1747,7 @@ impl Chip {
     /// Spends the CCP key on a write to protected register `a`, or refuses
     /// the write if there's no key to spend.
     fn take_protected_write(&mut self, a: usize) -> Result<(), String> {
-        if !self.unlocked_until.is_some_and(|until| self.now <= until) {
+        if self.unlocked_until.is_none_or(|until| self.now > until) {
             return Err(format!(
                 "writes {} without the CCP key in the four instructions before, \
                  and the chip ignores that write",
@@ -2570,7 +2570,7 @@ impl Bus for Chip {
             reg::ADC0_RES => {
                 // Reading the low byte latches the high byte into ADC0.TEMP
                 // and clears RESRDY.
-                if !self.adc.ready_at.is_some_and(|at| self.now >= at) {
+                if self.adc.ready_at.is_none_or(|at| self.now < at) {
                     return Err("reads ADC0.RES with no result ready".into());
                 }
                 self.adc.ready_at = None;
@@ -2652,7 +2652,7 @@ impl Bus for Chip {
                 }
                 self.io[a] = value;
             }
-            reg::TCA0_INTCTRL => {
+            reg::TCA0_INTCTRL | reg::RTC_PITINTCTRL => {
                 self.io[a] = value;
                 self.update_enabled();
             }
@@ -2671,10 +2671,6 @@ impl Bus for Chip {
                 }
                 self.io[a] = value;
                 self.pit_busy = PIT_SYNC_READS;
-            }
-            reg::RTC_PITINTCTRL => {
-                self.io[a] = value;
-                self.update_enabled();
             }
             reg::RTC_PITINTFLAGS => {
                 if value & RTC_PI != 0 {

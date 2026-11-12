@@ -22,6 +22,12 @@ nursery = { level = "warn", priority = -1 }
 option_if_let_else = "allow"
 # `pub(crate)` inside private modules says who uses an item, not who can.
 redundant_pub_crate = "allow"
+checked_conversions = "warn"
+nonminimal_bool = "warn"
+unchecked_time_subtraction = "warn"
+manual_assert_eq = "warn"
+match_same_arms = "warn"
+multiple_unsafe_ops_per_block = "warn"
 
 [package]
 name = "ts26"

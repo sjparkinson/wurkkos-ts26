@@ -748,7 +748,7 @@ pub(crate) mod tests {
             let mut p = Programmer::connect(tiny).unwrap();
             let before = p.wire.elapsed;
             assert!(p.enter_progmode().unwrap_err().contains("programming mode"));
-            let waited = p.wire.elapsed - before;
+            let waited = p.wire.elapsed.checked_sub(before).unwrap();
             assert!(
                 (PROGMODE_TIMEOUT..PROGMODE_TIMEOUT + 4 * round_trip).contains(&waited),
                 "{round_trip:?} a round trip: gave up after {waited:?}"
