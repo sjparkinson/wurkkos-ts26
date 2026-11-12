@@ -52,9 +52,16 @@ const NUMERATOR: u32 = 473;
 const MAX_READING: u16 = 4 * 1023;
 
 /// `NUMERATOR / (4 × SLOPE)` centivolts a count, times `scale`, rounded.
+#[expect(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "only ever run to build HIGH and LOW, where an overflow or the assert fails the build"
+)]
 const fn scaled(scale: u32) -> u16 {
     let denominator = 4 * SLOPE as u32;
-    ((NUMERATOR * scale + denominator / 2) / denominator) as u16
+    let value = (NUMERATOR * scale + denominator / 2) / denominator;
+    assert!(value <= u16::MAX as u32);
+    value as u16
 }
 
 /// 256 counts in 128ths of a centivolt.
@@ -76,6 +83,11 @@ const _: () = {
 /// A reading over [`MAX_READING`] can't come from the ADC, so it comes out as
 /// `u16::MAX`, and zero comes out as zero. Neither is [`plausible`], so
 /// [`Protection`] treats them as the garbage they are.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "reading is at most MAX_READING here, and the asserts on HIGH and LOW bound \
+              every step for that"
+)]
 pub fn centivolts(reading: u16) -> u16 {
     if reading > MAX_READING {
         return u16::MAX;
@@ -162,6 +174,10 @@ pub const PLAUSIBLE: core::ops::RangeInclusive<u16> = 100..=440;
 pub fn plausible(centivolts: u16) -> bool {
     PLAUSIBLE.contains(&centivolts)
 }
+
+/// [`Protection`]'s filter holds 16 times a plausible sample and adds twice
+/// another before it takes an eighth off, so 18 times the top has to fit.
+const _: () = assert!(*PLAUSIBLE.end() as u32 * 18 <= u16::MAX as u32);
 
 /// Implausible samples in a row that [`Protection`] lets go before it assumes
 /// the worst. The fourth in a row, a second's worth, acts. Unmeasured.
@@ -346,7 +362,7 @@ impl Protection {
             // Only time spent lit and blind counts, and off starts it again.
             self.blind_samples = match level {
                 0 => 0,
-                _ => self.blind_samples + 1,
+                _ => self.blind_samples.saturating_add(1),
             };
             if self.blind_samples >= BLIND_SAMPLES {
                 self.blind_samples = 0;
@@ -359,7 +375,7 @@ impl Protection {
         let voltage = self.filter(centivolts);
 
         if voltage >= RECOVER_AT {
-            self.high_samples += 1;
+            self.high_samples = self.high_samples.saturating_add(1);
             if self.high_samples >= RECOVER_SAMPLES {
                 self.high_samples = 0;
                 ceiling = ceiling.saturating_add(STEP).min(CEILING);
@@ -373,14 +389,14 @@ impl Protection {
             return Verdict::Ceiling(ceiling);
         }
         self.low_samples = match voltage < STEP_DOWN_BELOW {
-            true => self.low_samples + 1,
+            true => self.low_samples.saturating_add(1),
             false => 0,
         };
         self.flat_samples = match voltage < OFF_BELOW {
             // Still fading down to the ceiling, so the cell's still under
             // the heavier load. Wait till it's there and judge it on that.
             true if level > ceiling => 0,
-            true => self.flat_samples + 1,
+            true => self.flat_samples.saturating_add(1),
             false => 0,
         };
 
@@ -404,6 +420,12 @@ impl Protection {
     /// centivolts. In sixteenths, moving an eighth of the way is taking off
     /// an eighth and adding the sample times two. Only plausible samples get
     /// here, so the sum stays well inside a `u16` and the seed isn't zero.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "with every sample plausible, filtered never passes 16 times the top of \
+                  PLAUSIBLE, so the sum stays under 18 times it, which the assert after \
+                  `plausible` checks"
+    )]
     fn filter(&mut self, centivolts: u16) -> u16 {
         self.filtered = match self.filtered {
             0 => centivolts << 4,
