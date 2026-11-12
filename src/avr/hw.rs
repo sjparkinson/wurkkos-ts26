@@ -10,9 +10,7 @@ use core::ptr::{
     read_volatile, with_exposed_provenance, with_exposed_provenance_mut, write_volatile,
 };
 
-use ts26::board::{
-    self, AUX_BLUE, AUX_GREEN, AUX_PINS, AUX_RED, BATTERY, ENABLE, PWM, SWITCH, UPDI,
-};
+use ts26::board::{self, AUX_PINS, BATTERY, ENABLE, PWM, SWITCH, UPDI};
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
 use ts26::selftest::Fuses;
 use ts26::sensors::{Channel, Convert};
@@ -612,13 +610,9 @@ pub fn fuses() -> Fuses {
 pub fn set_aux(colour: Aux) {
     let lit = board::aux_pin(colour);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);
-    // Each mask is a constant, so release builds, which check shifts for
-    // overflow, have nothing to check at run time.
-    for (pin, mask) in [
-        (AUX_BLUE, 1 << AUX_BLUE),
-        (AUX_GREEN, 1 << AUX_GREEN),
-        (AUX_RED, 1 << AUX_RED),
-    ] {
+    // Each mask is computed in `board::AUX`, so release builds, which check
+    // shifts for overflow, have nothing to check at run time.
+    for &(pin, mask) in &board::AUX {
         let ctrl = if lit & mask != 0 {
             regs::PORT_PULLUPEN
         } else {
@@ -711,7 +705,10 @@ pub fn set_output(output: Output) {
     }
 
     let dsm = output.dsm.min(DSM_TOP);
-    // DSM_TOP shifted down is the PWM's TOP, 255, so this never falls back.
+    // The assert below makes the conversion total, so the fallback is never
+    // taken. A `PWM_TOP` or `DSM_BITS` that broke it fails the build instead of
+    // writing a duty of 0 with the enable high.
+    const _: () = assert!(DSM_TOP >> DSM_BITS <= 0xFF);
     let duty = u8::try_from(dsm >> DSM_BITS).unwrap_or(0);
     let [low, _] = dsm.to_le_bytes();
     let fraction = low & FRACTION_MASK;

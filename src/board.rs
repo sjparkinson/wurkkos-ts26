@@ -35,6 +35,14 @@ pub const AUX_RED: u8 = 3;
 /// All three aux pins, as a PORTC mask.
 pub const AUX_PINS: u8 = 1 << AUX_BLUE | 1 << AUX_GREEN | 1 << AUX_RED;
 
+/// Each aux pin as its PORTC bit number and mask, in blue, green, red order.
+/// `PINnCTRL` is indexed by the bit number, and `DIR` and `OUT` by the mask.
+pub const AUX: [(u8, u8); 3] = [
+    (AUX_BLUE, 1 << AUX_BLUE),
+    (AUX_GREEN, 1 << AUX_GREEN),
+    (AUX_RED, 1 << AUX_RED),
+];
+
 /// The PORTC pin that lights `colour`, as a mask, or 0 for none.
 pub const fn aux_pin(colour: Aux) -> u8 {
     match colour {
@@ -57,5 +65,18 @@ mod tests {
             assert_eq!(pin & !AUX_PINS, 0, "{colour:?}");
         }
         assert_ne!(aux_pin(Aux::Blue), aux_pin(Aux::Red));
+    }
+
+    #[test]
+    fn aux_table_matches_aux_pin() {
+        let [blue, green, red] = AUX;
+        assert_eq!(blue, (AUX_BLUE, aux_pin(Aux::Blue)));
+        assert_eq!(red, (AUX_RED, aux_pin(Aux::Red)));
+        assert_eq!(green, (AUX_GREEN, 1 << AUX_GREEN));
+        let masks = AUX.iter().fold(0, |all, &(_, mask)| all | mask);
+        assert_eq!(masks, AUX_PINS);
+        for (pin, mask) in AUX {
+            assert_eq!(mask, 1 << pin);
+        }
     }
 }
