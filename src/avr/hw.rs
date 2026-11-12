@@ -76,6 +76,10 @@ fn read(addr: usize) -> u8 {
 /// run with a new low byte and an old high byte. Instead, the low-byte
 /// write is parked in TEMP, and the high-byte write copies both into the
 /// register in the same clock cycle.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "addr is the low byte of a 16-bit register in data space, far under usize::MAX"
+)]
 fn write16(addr: usize, value: u16) {
     let [lo, hi] = value.to_le_bytes();
     write(addr, lo);
@@ -92,6 +96,10 @@ fn write16(addr: usize, value: u16) {
 /// next four instructions, and interrupts are held off for that window.
 /// Rust gives no guarantee about how many instructions it puts between two
 /// `write` calls, so the pair is written out by hand.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "usize is 16 bits on AVR, so addr fits Z whole"
+)]
 fn protected_write(addr: usize, value: u8) {
     // `out` only reaches the first 64 I/O addresses, which are also the
     // first 64 of data space.
@@ -369,10 +377,10 @@ pub fn wait_for_tick(rest: bool) -> bool {
             break true;
         }
         if read(reg::VPORTB_OUT) & 1 << ENABLE != 0 {
-            if cycles == 0 {
+            let Some(left) = cycles.checked_sub(1) else {
                 break false;
-            }
-            cycles -= 1;
+            };
+            cycles = left;
         }
         // SAFETY: sets SREG.I and sleeps until an interrupt, whose handler
         // returns here. The handler saves what it touches.
@@ -496,7 +504,7 @@ pub fn adc_result() -> Option<u16> {
 /// The temperature sensor's factory calibration from the signature row.
 pub fn temperature_calibration() -> Calibration {
     Calibration {
-        offset: read(reg::SIGROW_TEMPSENSE1) as i8,
+        offset: read(reg::SIGROW_TEMPSENSE1).cast_signed(),
         gain: read(reg::SIGROW_TEMPSENSE0),
     }
 }
@@ -700,7 +708,8 @@ pub fn set_output(output: Output) {
 
     let dsm = output.dsm.min(DSM_TOP);
     let duty = (dsm >> DSM_BITS) as u8;
-    let fraction = dsm as u8 & FRACTION_MASK;
+    let [low, _] = dsm.to_le_bytes();
+    let fraction = low & FRACTION_MASK;
     let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;
     without_interrupts(|| {
         write(DSM_DUTY, duty);

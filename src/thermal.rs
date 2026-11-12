@@ -101,7 +101,7 @@ const UP_EVERY: u8 = 4;
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 233..=423;
 
 /// [`LIMIT`] in sixteenths, which fits an `i16` because it's plausible.
-const LIMIT_SIXTEENTHS: i16 = LIMIT as i16 * FRACTION;
+const LIMIT_SIXTEENTHS: i16 = LIMIT.cast_signed() * FRACTION;
 
 const _: () = assert!(LIMIT <= *PLAUSIBLE.end());
 
@@ -119,8 +119,8 @@ const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
 /// temperature and its history never leave it, and clamping to it where
 /// they're read shows release builds, which check for overflow, that the
 /// sums on them can't wrap. The clamps never change a value.
-const NOW_LOW: i16 = *PLAUSIBLE_SIXTEENTHS.start() as i16;
-const NOW_HIGH: i16 = *PLAUSIBLE_SIXTEENTHS.end() as i16;
+const NOW_LOW: i16 = PLAUSIBLE_SIXTEENTHS.start().cast_signed();
+const NOW_HIGH: i16 = PLAUSIBLE_SIXTEENTHS.end().cast_signed();
 
 /// The prediction is a plausible reading plus [`LOOKAHEAD`] times a trend
 /// clamped to [`MAX_TREND`], less [`LIMIT_SIXTEENTHS`], and every step of that
@@ -172,7 +172,7 @@ impl Smoothed {
     /// through a copy on the stack, and that pulls in `memcpy`, which is
     /// bigger than the `memset` this costs.
     fn start(slot: &mut Option<Self>, reading: u16) -> &mut Self {
-        let now = reading as i16;
+        let now = reading.cast_signed();
         let smoothed = slot.insert(Self {
             now,
             history: [0; HISTORY],
@@ -196,7 +196,7 @@ impl Smoothed {
     )]
     fn follow(&mut self, reading: u16) -> i16 {
         let now = self.now.clamp(NOW_LOW, NOW_HIGH);
-        let difference = reading as i16 - now;
+        let difference = reading.cast_signed() - now;
         self.now = now
             + match difference / 8 {
                 0 => difference.signum(),
@@ -297,7 +297,7 @@ impl Thermal {
             }
             // The first reading, or a jump that's lasted long enough to be
             // real.
-            slot => (Smoothed::start(slot, reading), reading as i16),
+            slot => (Smoothed::start(slot, reading), reading.cast_signed()),
         };
         self.rejected = 0;
         smoothed.last = reading;

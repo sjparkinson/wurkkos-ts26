@@ -17,6 +17,8 @@
         clippy::unreachable,
         clippy::arithmetic_side_effects,
         clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
     )
 )]
 
@@ -40,7 +42,9 @@ pub mod temp;
     clippy::panic,
     clippy::unreachable,
     clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
 )]
 pub mod testing;
 pub mod thermal;
