@@ -249,7 +249,7 @@ fn doc(path: String, element: &Element) -> String {
     }
 }
 
-/// The Rust source of every constant the ATDF can give us. `src/regs.rs`
+/// The Rust source of every constant the ATDF can give. `src/regs.rs`
 /// includes it, and describes the names.
 ///
 /// Only addresses, masks, named values, segments, vectors and the signature.

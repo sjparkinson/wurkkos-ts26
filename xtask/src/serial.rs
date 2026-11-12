@@ -2,8 +2,8 @@
 //!
 //! Configuring a port properly means termios, which means libc or a serial
 //! crate. `stty` is on every Mac and Linux box already and does the same
-//! job. We open the port, hand the open file to `stty` as its stdin, and the
-//! settings stick for as long as we hold it open. Windows isn't supported.
+//! job. The port is opened, the open file handed to `stty` as its stdin, and
+//! the settings stick for as long as it's held open. Windows isn't supported.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};

@@ -22,8 +22,8 @@
 //!   but slower and never more than a level a reading. In between, hold. That
 //!   gap, the slow climb and the lookahead are what stop it hunting.
 //! - Never step down below a floor. The stock firmware's TS26 build stops at
-//!   level 50 of 150, so this does too, though the same number on our own
-//!   curve (`src/ramp.rs`) needn't be the same brightness.
+//!   level 50 of 150, so this does too, though the same number on this
+//!   firmware's own curve (`src/ramp.rs`) needn't be the same brightness.
 //!
 //! Only sample while the light's on. The stock firmware leaves the
 //! temperature alone in standby because the ADC costs about 250 µA against
@@ -55,7 +55,7 @@ pub const fn celsius(degrees: u8) -> u16 {
 pub const LIMIT: u16 = celsius(50);
 
 /// The lowest level thermal regulation steps down to. The stock firmware's
-/// level number, on our curve. Unmeasured. Nobody knows that this level is
+/// level number, on this firmware's curve. Unmeasured. Nobody knows that this level is
 /// cool enough to hold in still air, or what it draws.
 pub const FLOOR: u8 = 50;
 

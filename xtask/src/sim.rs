@@ -2,7 +2,7 @@
 //! and the checks that run the real firmware on it. `build()` in main.rs runs
 //! them after `layout.rs`'s, so `hex` and `flash` refuse firmware that fails.
 //!
-//! This finds mistakes, it doesn't prove anything. Everything here is my
+//! This finds mistakes, it doesn't prove anything. Everything here is one
 //! reading of the datasheet, run against code written from that same reading,
 //! and nothing has been compared with a real chip. An earlier torch had a far
 //! bigger simulator than this, and it didn't save it. The likely cause is

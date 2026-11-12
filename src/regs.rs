@@ -1,6 +1,6 @@
 //! ATtiny1616 register addresses and bitfield values, generated at build time
 //! from Microchip's ATDF in `vendor/` by `build.rs`, with `generate` in
-//! `xtask/src/atdf.rs`. Nothing in here that the ATDF can give us is typed by
+//! `xtask/src/atdf.rs`. Nothing in here that the ATDF can give is typed by
 //! hand. The generated file is `regs.rs` in the package's `OUT_DIR`.
 //!
 //! Only plain constants live here, so the file compiles anywhere. It's a
@@ -27,7 +27,7 @@
 include!(concat!(env!("OUT_DIR"), "/regs.rs"));
 
 /// ADC0.SAMPCTRL.SAMPLEN as 20 more ADC clocks of sampling. Hand-written, since
-/// it's a count we chose rather than a value the ATDF names; src/avr/hw.rs
+/// it's a count chosen here rather than a value the ATDF names; src/avr/hw.rs
 /// says why 20.
 pub const ADC_SAMPLEN_32US: u8 = 20;
 const _: () = assert!(ADC_SAMPLEN_32US & !ADC_SAMPLEN == 0);

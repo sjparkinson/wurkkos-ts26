@@ -2,7 +2,7 @@
 //!
 //! UPDI is Microchip's one-wire debug and programming interface. A "serial
 //! UPDI" programmer is a USB-serial chip with TX and RX joined onto that one
-//! wire, so everything we send comes straight back as an echo before the
+//! wire, so everything sent comes straight back as an echo before the
 //! chip's reply. [`Wire`] hides the echo; this module only sees replies.
 //!
 //! The protocol is in the tinyAVR 1-series datasheet (DS40002204, the UPDI

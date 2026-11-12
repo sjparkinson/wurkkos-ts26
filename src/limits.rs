@@ -32,8 +32,9 @@ use crate::thermal::{self, Thermal};
 /// see past, such as a failed self-test or a voltage reading it can't
 /// believe. This board has no low-current linear channel to fall back on, so
 /// this borrows the thermal floor's level, a few per
-/// cent of full duty on our curve. Unmeasured. Bright enough to find your way
-/// out by, gentle on the cell as far as anyone can say without a meter on it.
+/// cent of full duty on this firmware's curve. Unmeasured. Bright enough to
+/// find your way out by, gentle on the cell as far as anyone can say without a
+/// meter on it.
 pub const FAULT_CEILING: u8 = thermal::FLOOR;
 
 const _: () = assert!(FAULT_CEILING <= CEILING);
@@ -482,7 +483,7 @@ mod tests {
     /// A known gap, docs/safety.md H3 and H12. A reading that's stuck at a
     /// good-looking 3.8 V is the same to the firmware as a good cell, so
     /// nothing here ever steps the light down. Only a reading that can't be
-    /// real gets caught. I'm pinning it down so that if I ever close the gap,
+    /// real gets caught. This pins it down so that if the gap is ever closed,
     /// this is the test that has to change.
     #[test]
     fn a_plausible_voltage_that_never_changes_keeps_the_light_on() {

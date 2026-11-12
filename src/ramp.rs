@@ -2,8 +2,8 @@
 //!
 //! Levels are in delta-sigma units, the same 15-bit scale the stock firmware
 //! uses on this board. That's 0 to 32640, a PWM duty of 0 to 255 with seven
-//! more bits below it. docs/hardware.md has why. The curve here is my own
-//! cubic, not the stock firmware's table, and nobody's measured what it comes
+//! more bits below it. docs/hardware.md has why. The curve here is this
+//! firmware's own cubic, not the stock firmware's table, and nobody's measured what it comes
 //! out as in lumens.
 
 /// How many levels the ramp has. Level 0 is off.

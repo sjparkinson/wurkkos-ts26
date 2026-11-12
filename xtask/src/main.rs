@@ -322,7 +322,7 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
     ))
 }
 
-/// Checks a file's image against the CRC our firmware checks at every power-on,
+/// Checks a file's image against the CRC the firmware checks at every power-on,
 /// since one that doesn't match would flash and verify cleanly, then cap itself
 /// at level 50 with nothing to say why. `cargo xtask hex` always writes all
 /// 16 KB, so a full image that doesn't check is refused. A shorter one isn't

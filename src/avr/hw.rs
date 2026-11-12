@@ -20,10 +20,10 @@ use ts26::watchdog::TICK_DEADLINE_CYCLES;
 
 use crate::regs::{self, addr as reg};
 
-/// The PORTB pins we drive. PORTB has PB0 to PB5 on the 20-pin package.
+/// The PORTB pins the firmware drives. PORTB has PB0 to PB5 on the 20-pin package.
 const PORTB_OUTPUTS: u8 = 1 << PWM | 1 << ENABLE;
 const PORTB_PINS: u8 = 6;
-/// The PORTC pins we drive. PORTC has PC0 to PC3 on the 20-pin package.
+/// The PORTC pins the firmware drives. PORTC has PC0 to PC3 on the 20-pin package.
 const PORTC_OUTPUTS: u8 = AUX_PINS;
 const PORTC_PINS: u8 = 4;
 
@@ -133,7 +133,7 @@ fn protected_write(addr: usize, value: u8) {
 /// with PORTB dirty and the rest of the chip clean (`found_lit` in
 /// xtask/src/sim.rs), and that's as far as it's been tested.
 ///
-/// PB2 isn't all such a start would find stale. What follows is my reading of
+/// PB2 isn't all such a start would find stale. What follows is a reading of
 /// the code, and nothing has run it. PB0 stays TCA0's, still carrying the old
 /// PWM into a boost converter that's now off, until [`init`] writes CTRLB and
 /// hands it back to PORT, low. GPIOR1 to 3 and TCA0.INTCTRL keep the lit
@@ -171,7 +171,7 @@ pub fn init() {
         regs::CLKCTRL_PDIV_2X | regs::CLKCTRL_PEN,
     );
 
-    // Pull every pin we don't drive up, so nothing floats and leaks current.
+    // Pull every pin the firmware doesn't drive up, so nothing floats and leaks current.
     // PA0 is UPDI, and nothing here writes its settings. The outputs get no
     // pull-up either, so PB2 can't creep the boost converter on before it's
     // an output.
@@ -675,7 +675,8 @@ pub extern "avr-interrupt" fn tca0_ovf() {
 /// write too, so power-down can follow on this very pass. The datasheet
 /// doesn't say whether that clears the waveform output before BOTTOM, so PB0
 /// could go high for up to one cycle at the next turn-on, 51 µs, inside the
-/// 180 µs above. That's my reasoning, and not checked on a real light.
+/// 180 µs above. That's reasoning only, and not checked on a real
+/// light.
 pub fn set_output(output: Output) {
     if !output.enable {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
