@@ -120,12 +120,15 @@ impl Feeder {
     /// Call once a tick. True when this pass feeds the watchdog, which is the
     /// first one and then every [`FEED_TICKS`]th.
     pub fn tick(&mut self) -> bool {
-        self.fed = if self.wait == 0 {
-            self.wait = FEED_TICKS - 1;
-            true
-        } else {
-            self.wait -= 1;
-            false
+        self.fed = match self.wait.checked_sub(1) {
+            None => {
+                self.wait = FEED_TICKS - 1;
+                true
+            }
+            Some(wait) => {
+                self.wait = wait;
+                false
+            }
         };
         self.fed
     }
