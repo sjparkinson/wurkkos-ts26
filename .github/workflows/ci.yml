@@ -55,3 +55,44 @@ jobs:
           path: |
             target/wurkkos-ts26-0721.hex
             target/avr-none/release/ts26.elf
+
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # upload-artifact strips the paths' common `target/` prefix.
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: wurkkos-ts26-0721
+          path: dist
+
+      - name: version
+        run: |
+          version="0.1.$(git rev-list --count HEAD)"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mv dist/wurkkos-ts26-0721.hex "dist/wurkkos-ts26-0721-$version.hex"
+          mv dist/avr-none/release/ts26.elf "dist/wurkkos-ts26-0721-$version.elf"
+
+      - uses: actions/attest@v4.2.2
+        with:
+          subject-path: dist/wurkkos-ts26-0721-*
+
+      - name: gh release
+        run: |
+          gh release create "v$VERSION" dist/wurkkos-ts26-0721-* \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION+$(git rev-parse --short HEAD)" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
