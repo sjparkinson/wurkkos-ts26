@@ -21,7 +21,7 @@ Roughly in order. Each step should leave a torch that's no worse than the step b
 A tick here means the firmware does it and it runs on the simulator. Nothing below has met a real light, so none of it means the torch is safe yet. [breakout.md](breakout.md) is what would.
 
 - [x] Sleep when off, in power-down, with PB2 low first. Firmware only. The PIT wakes it every tick and the loop samples PA5. On the tick after a watchdog feed it idles instead, because the datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped
-- [ ] Test power-down straight after a feed on a real light (T4 in [breakout.md](breakout.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA, so this isn't fit for a drawer until then
+- [ ] Test power-down straight after a feed on a real light (T4 in [breakout.md](breakout.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA at 3 V and about 0.6 mA on a full cell, a third of the datasheet's typical idle current since one tick in three idles, so this isn't fit for a drawer until then
 - [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. The firmware reads it with the stock firmware's slope of 1094. Still needs checking against a multimeter
 - [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge. A cell it can't read holds the light at level 50 and turns it off after five minutes
 - [x] Thermal regulation from the internal temperature sensor. Firmware only, and every constant's unmeasured. `ramp::CEILING` holds the light at level 120 until it's been run on a real light
