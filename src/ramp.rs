@@ -51,19 +51,25 @@ static TABLE: [u16; LEVELS as usize] = table();
 /// The output for `level`. Level 0 is off, and anything over [`CEILING`] runs
 /// at the ceiling.
 pub fn output(level: u8) -> Output {
-    if level == 0 {
+    let Some(index) = level.min(CEILING).checked_sub(1) else {
         return Output::OFF;
-    }
-    let level = if level > CEILING { CEILING } else { level };
-    Output {
-        enable: true,
-        dsm: TABLE[usize::from(level) - 1],
+    };
+    match TABLE.get(usize::from(index)) {
+        Some(&dsm) => Output { enable: true, dsm },
+        None => Output::OFF,
     }
 }
 
 /// Worked out at compile time, so the wide maths never reaches the chip. A
 /// cubic this flat at the bottom would repeat itself there, so each level is
 /// held at least one step over the last.
+#[expect(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "only ever run to build TABLE, where an overflow or a bad index fails the build, \
+              and the cubic term is at most span, which came from a u16"
+)]
 const fn table() -> [u16; LEVELS as usize] {
     let mut table = [0; LEVELS as usize];
     let span = (DSM_TOP - DSM_FLOOR) as u64;
