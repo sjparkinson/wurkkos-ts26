@@ -104,9 +104,26 @@ const _: () = assert!(LIMIT <= *PLAUSIBLE.end());
 /// Whether a reading in sixteenths of a kelvin could be real. Anything else
 /// is a broken sensor or a bad ADC setup.
 pub fn plausible(sixteenths: u16) -> bool {
-    let unit = FRACTION as u16;
-    (*PLAUSIBLE.start() * unit..=*PLAUSIBLE.end() * unit).contains(&sixteenths)
+    PLAUSIBLE_SIXTEENTHS.contains(&sixteenths)
 }
+
+/// [`PLAUSIBLE`] in sixteenths, worked out at compile time.
+const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
+    *PLAUSIBLE.start() * FRACTION as u16..=*PLAUSIBLE.end() * FRACTION as u16;
+
+/// The prediction is a plausible reading plus [`LOOKAHEAD`] times a trend
+/// clamped to [`MAX_TREND`], less [`LIMIT_SIXTEENTHS`], and every step of that
+/// fits an `i16` either way.
+const _: () = {
+    let (low, high) = (
+        *PLAUSIBLE.start() as i32 * FRACTION as i32,
+        *PLAUSIBLE.end() as i32 * FRACTION as i32,
+    );
+    let swing = MAX_TREND as i32 * LOOKAHEAD as i32;
+    assert!(high + swing <= i16::MAX as i32);
+    assert!(low - swing - LIMIT_SIXTEENTHS as i32 >= i16::MIN as i32);
+};
+
 /// A reading further than this from the last good one, in sixteenths of a
 /// kelvin, is a glitch, unless more than `GLITCHES` in a row agree, and then
 /// it's believed. Unmeasured.
@@ -116,6 +133,10 @@ const GLITCHES: u8 = 3;
 const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
 
 /// For wrapping an index into the history, a power of two long.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the assert below holds HISTORY to a u8"
+)]
 const HISTORY_MASK: u8 = HISTORY as u8 - 1;
 
 const _: () = assert!(HISTORY.is_power_of_two() && HISTORY <= u8::MAX as usize);
@@ -153,6 +174,15 @@ impl Smoothed {
 
     /// An eighth of the way to `reading`, but always at least a sixteenth,
     /// so a steady reading is reached exactly.
+    ///
+    /// `now` starts at a plausible reading and only ever moves part of the
+    /// way towards another, so it stays inside [`PLAUSIBLE_SIXTEENTHS`], and
+    /// so does every sample in the history.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "now and reading are both in PLAUSIBLE_SIXTEENTHS, under 6,800 apart, \
+                  and the step never overshoots reading"
+    )]
     fn follow(&mut self, reading: u16) {
         let difference = reading as i16 - self.now;
         self.now += match difference / 8 {
@@ -163,6 +193,14 @@ impl Smoothed {
 
     /// Records the smoothed temperature, and returns how far it's moved
     /// over the history.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "masking with HISTORY_MASK keeps the index under HISTORY, a power of two"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "now and the oldest sample are both in PLAUSIBLE_SIXTEENTHS"
+    )]
     fn trend(&mut self) -> i16 {
         let next = &mut self.history[usize::from(self.next & HISTORY_MASK)];
         let oldest = core::mem::replace(next, self.now);
@@ -237,7 +275,7 @@ impl Thermal {
                 smoothed
             }
             Some(_) if self.rejected < GLITCHES => {
-                self.rejected += 1;
+                self.rejected = self.rejected.saturating_add(1);
                 return;
             }
             // The first reading, or a jump that's lasted long enough to be
@@ -248,9 +286,12 @@ impl Thermal {
         smoothed.last = reading;
         let smooth = smoothed.now;
         let trend = smoothed.trend().clamp(-MAX_TREND, MAX_TREND);
-        let predicted = smooth + trend * LOOKAHEAD;
-
-        let over = predicted - LIMIT_SIXTEENTHS;
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "smooth is in PLAUSIBLE_SIXTEENTHS and trend is clamped, and the assert \
+                      after PLAUSIBLE_SIXTEENTHS bounds both sums"
+        )]
+        let over = smooth + trend * LOOKAHEAD - LIMIT_SIXTEENTHS;
         if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
             // Each step down costs `DOWN_PRESSURE`, so the rate follows how
             // far over the prediction is. A kelvin over steps once a second,
@@ -258,18 +299,24 @@ impl Thermal {
             // sixteen seconds.
             let pressure = self.pressure.max(0).saturating_add(over);
             let steps = (pressure / DOWN_PRESSURE).min(i16::from(MAX_STEP_DOWN));
-            self.pressure = (pressure - steps * DOWN_PRESSURE).min(DOWN_PRESSURE - 1);
+            self.pressure = pressure
+                .saturating_sub(steps.saturating_mul(DOWN_PRESSURE))
+                .min(DOWN_PRESSURE - 1);
             if steps > 0 {
-                self.step_down(level, steps as u8);
+                let steps = u8::try_from(steps).unwrap_or(MAX_STEP_DOWN);
+                self.step_down(level, steps);
             }
         } else if over < -WINDOW && trend < WARMING {
             // The same going up, counted from the bottom of the window, but
             // at most a level a reading and for four times the pressure. The
             // head takes a minute or so to show what a step up did, so
             // coming back up too fast is what makes it hunt.
-            let pressure = self.pressure.min(0).saturating_add(over + WINDOW);
+            let pressure = self
+                .pressure
+                .min(0)
+                .saturating_add(over.saturating_add(WINDOW));
             if pressure <= -UP_PRESSURE {
-                self.pressure = (pressure + UP_PRESSURE).max(1 - UP_PRESSURE);
+                self.pressure = pressure.saturating_add(UP_PRESSURE).max(1 - UP_PRESSURE);
                 self.ceiling.raise();
             } else {
                 self.pressure = pressure;
