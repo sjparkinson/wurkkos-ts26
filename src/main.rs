@@ -8,7 +8,9 @@
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 // The same restrictions as the library's, for the loop, the hardware layer
-// and the startup code. Only the AVR clippy sees them.
+// and the startup code. Only the AVR clippy sees them. The xtask test
+// `lints::restriction_lint_lists_match` keeps this list in step with the
+// library's.
 #![cfg_attr(
     target_arch = "avr",
     deny(

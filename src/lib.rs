@@ -7,6 +7,9 @@
 #![no_std]
 // The library is the safety logic, so nothing in it may panic, index out of
 // range, overflow or truncate without saying why it can't. Tests may.
+// This list, the one on the `testing` module below and the one in
+// src/main.rs must match. The xtask test `lints::restriction_lint_lists_match`
+// keeps them in step.
 #![cfg_attr(
     not(test),
     deny(
@@ -34,7 +37,8 @@ pub mod selftest;
 pub mod sensors;
 pub mod temp;
 // Fakes and helpers for tests and xtask's simulators, never in the firmware,
-// so the restrictions above don't apply.
+// so the restrictions above don't apply. The list must match the one above,
+// which the xtask test `lints::restriction_lint_lists_match` checks.
 #[cfg(any(test, feature = "testing"))]
 #[allow(
     clippy::indexing_slicing,

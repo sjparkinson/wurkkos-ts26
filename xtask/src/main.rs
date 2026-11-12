@@ -12,6 +12,8 @@ mod crc;
 mod elf;
 mod ihex;
 mod layout;
+#[cfg(test)]
+mod lints;
 mod serial;
 mod sim;
 mod simulate;
