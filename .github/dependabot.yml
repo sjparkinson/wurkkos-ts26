@@ -1,0 +1,42 @@
+# Monthly, and grouped to one PR per ecosystem, keeps the PRs to a
+# reviewable number.
+version: 2
+updates:
+  # Bumps the dated nightly in rust-toolchain.toml. AVR is a tier 3 target
+  # and nightlies do break it, so run every check in CONTRIBUTING.md on a
+  # bump, not only CI.
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  # The actions in .github/workflows/. Dependabot doesn't regenerate
+  # .github/workflows/actions.lock, so run `gh actions-lock` on a bump.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The workspace has no crate dependencies and should keep it that way, so
+  # this only ever fires if one sneaks in.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    groups:
+      crates:
+        patterns:
+          - "*"
