@@ -50,10 +50,22 @@ impl Calibration {
 /// times what the ADC can produce, and anything over it is garbage anyway.
 const MAX_DIFFERENCE: u16 = 0x3FFF;
 
+/// Every step of [`sixteenths`] fits a `u16`, with the highest bytes
+/// `MAX_DIFFERENCE` allows and the highest gain.
+const _: () = {
+    let (hi, lo, g) = ((MAX_DIFFERENCE >> 8) as u32, 0xFF, u8::MAX as u32);
+    assert!(lo * g + 0x20 <= u16::MAX as u32);
+    assert!(hi * g * 4 + ((lo * g + 0x20) >> 6) <= u16::MAX as u32);
+};
+
 /// Sixteenths of a kelvin from four accumulated temperature sensor
 /// conversions, using the factory calibration from the signature row. A sum
 /// below the offset (which would mean a broken sensor or a bad read) comes
 /// out as 0 rather than wrapping.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "an i8 times -4 is within -508..=512, and the assert above bounds the rest"
+)]
 pub fn sixteenths(sum: u16, offset: i8, gain: u8) -> u16 {
     let d = sum
         .saturating_add_signed(-4 * i16::from(offset))
