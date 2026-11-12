@@ -48,6 +48,11 @@ impl Gradual {
         self.waited = self.waited.saturating_add(1);
         if self.waited >= every {
             self.waited = 0;
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "target isn't level, so going down level is over target and at least 1, \
+                          and going up it's under target and at most 254"
+            )]
             if target < self.level {
                 self.level -= 1;
             } else {
