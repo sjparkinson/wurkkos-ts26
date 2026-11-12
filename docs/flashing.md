@@ -6,7 +6,7 @@
 
 Only a non-high-voltage UPDI adapter ever goes on the TS26's pads. Adafruit's High Voltage UPDI Friend never does, and that includes trying to recover a torch that's stopped talking. There's no exception for a torch that's already dead. If UPDI's gone, the torch is gone.
 
-I lost an earlier torch on 2026-11-06 after hand-holding the Friend on its pads. It then measured about 2.5 Ω between all three pads. I think 12 V or a slipped probe did it, and I can't prove either.
+An earlier torch was lost on 2026-11-06 after the Friend was hand-held on its pads. It then measured about 2.5 Ω between all three pads. The likely cause is 12 V or a slipped probe, but neither is proven.
 
 The Friend puts a 12 V pulse on the UPDI line on every falling edge of RTS, which probably means every time a tool opens the port, and nothing turns that off. The chip's RESET pin is rated for that, but nobody knows what else sits on these pads. Keep it for a breakout. [breakout.md](breakout.md#the-high-voltage-updi-friends-12-v-pulse) has the detail.
 
@@ -20,7 +20,7 @@ The easy option is a ready-made USB UPDI programmer. [JLHawaii808's kit](https:/
 
 The cheap option is a USB-serial adapter (CH340, CP2102, FT232) wired as a serial UPDI programmer, with TX and RX joined and that joined line going to the UPDI pad. [pymcuprog's README](https://github.com/microchip-pic-avr-tools/pymcuprog) suggests a series resistor of about 1 kΩ between TX and UPDI, and an adapter running at the same voltage as the MCU. The CH340 module in [pingle.org's guide](https://www.pingle.org/2022/08/07/flashing-a-3-pin-t1616-flashlight-with-new-firmware) worked wired straight through. Add pogo pins or a steady hand.
 
-Watch the pad spacing before you rely on a fixed probe. gchart's standard three-pad layout is `+ - R` at 1.27 mm pitch, and that's what most probes expect. Some Wurkkos and Sofirn boards use 2.54 mm instead (thefreeman ships loose leads for exactly that reason), and some put the pads in a different order. That earlier torch's pads turned out to be about 1.75 mm apart, not the 1.27 mm I'd written down, and that's neither of those. So measure the pitch on your own board before trusting any probe. One that nearly fits sits on the edges of the pads, which is how it slips. Loose pogo leads work whatever the layout. Use a short USB cable too; JLHawaii808 notes failures with 1 m ones.
+Watch the pad spacing before you rely on a fixed probe. gchart's standard three-pad layout is `+ - R` at 1.27 mm pitch, and that's what most probes expect. Some Wurkkos and Sofirn boards use 2.54 mm instead (thefreeman ships loose leads for exactly that reason), and some put the pads in a different order. That earlier torch's pads turned out to be about 1.75 mm apart, not the 1.27 mm that had been written down, and that's neither of those. So measure the pitch on your own board before trusting any probe. One that nearly fits sits on the edges of the pads, which is how it slips. Loose pogo leads work whatever the layout. Use a short USB cable too; JLHawaii808 notes failures with 1 m ones.
 
 ## The pads
 
@@ -28,7 +28,7 @@ Where the TS26's pads are, which is which and their pitch are in [hardware.md](h
 
 Whatever the layout, take the cell out, since the programmer powers the MCU through its supply pad (anything from 3.3 V to 5 V depending on the programmer, and the MCU's rated to 5.5 V). Nobody's reported what else that supply reaches on a TS26, the boost converter included, so make the first contact in the dark, watching the emitters, as row 1.7 of [breakout.md](breakout.md#what-the-adapter-powers) has it. Before anything touches the UPDI pad, check with a multimeter that the pad you think is ground connects to the battery negative contact. Pad order isn't the same on every light, and a probe the wrong way round puts the supply on UPDI. Finding ground only names one pad of three, so tell the supply pad from the UPDI pad as well before the probe goes on. Rows 1.5 and 1.6 of [breakout.md](breakout.md#stage-1-the-pads-and-stock) do that from how each reads against ground with the cell out, and row 0.16 names the probe's own three pins first.
 
-Measure the ohms between each pair of pads before the first contact and write them down, so you've got something to compare with if it stops talking. I don't know what a good TS26 reads. About 2.5 Ω between all three is what the dead one read.
+Measure the ohms between each pair of pads before the first contact and write them down, so you've got something to compare with if it stops talking. Nobody knows what a good TS26 reads. About 2.5 Ω between all three is what the dead one read.
 
 If you can manage it, hold the probe with something that can't slip rather than your hand.
 
@@ -70,7 +70,7 @@ git worktree add --detach ../ts26-first-light 9d3b7dc
 cargo xtask flash /dev/cu.usbserial-XXXX ../ts26-first-light/target/wurkkos-ts26-0721.hex
 ```
 
-`cargo xtask hex` in that worktree should report 628 bytes of flash, and it did when I built it on 2026-11-09. Checking out `9d3b7dc` and running `cargo xtask flash` there would flash the same image with that commit's programmer, which is older than main's and doesn't have its later fixes or its clearer errors.
+`cargo xtask hex` in that worktree should report 628 bytes of flash, and it did when built on 2026-11-09. Checking out `9d3b7dc` and running `cargo xtask flash` there would flash the same image with that commit's programmer, which is older than main's and doesn't have its later fixes or its clearer errors.
 
 Main's `flash` takes the file because its name has `ts26` in it. It then warns that the image isn't the full 16,384 bytes with a CRC, and that a build of this firmware like that caps itself at level 50. Expect the warning and carry on. `first-light` has no CRC check, so nothing in it does any capping. Keep the worktree until stage 3 has passed, since a torch that goes dark later gets `first-light` again.
 
@@ -128,7 +128,7 @@ To go back to the stock firmware without a backup, download its latest release z
 cargo xtask flash /dev/cu.usbserial-XXXX path/to/release.wurkkos-ts26.hex
 ```
 
-The TS26 has a build of its own, so there's no guessing which one to pick. I haven't flashed one onto a TS26 myself.
+The TS26 has a build of its own, so there's no guessing which one to pick. This project hasn't flashed one onto a TS26.
 
 ## If it doesn't talk
 

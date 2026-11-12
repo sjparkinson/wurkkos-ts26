@@ -30,7 +30,7 @@ The rustc book says `avr-none` needs avr-gcc "because a couple of intrinsics (li
 rust-lld: error: undefined symbol: __mulsi3
 ```
 
-The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. I checked this on another ATtiny1616 project with the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
+The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. This was checked on another ATtiny1616 project with the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
 
 What does work is 8- and 16-bit multiplication, which compiles to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
 

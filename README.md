@@ -36,5 +36,5 @@ That last line is for a torch that's already run `first-light`, the small image 
 
 - [Anduril](https://github.com/ToyKeeper/anduril), by ToyKeeper, the stock firmware, for the click notation and most of what's known about this hardware.
 - [pymcuprog](https://github.com/microchip-pic-avr-tools/pymcuprog), which the UPDI programmer's sequences follow.
-- [AVRDUDE](https://github.com/avrdudes/avrdude), whose flashing logic we reviewed when writing the UPDI programmer.
+- [AVRDUDE](https://github.com/avrdudes/avrdude), whose flashing logic was reviewed when writing the UPDI programmer.
 - Microchip, for the ATDF in `vendor/` and the datasheets.

@@ -31,6 +31,8 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 - **Parallel agents get their own worktree and their own files.** Never `git stash` to compare before and after; use a WIP commit or a second worktree.
 - **The sandbox can't write `.git/config`**, so `git push -u` pushes but can't record the upstream. Push with `git push origin <branch>`, pass `--head <branch>` to `gh pr create`, and don't try to fix the tracking.
 - **PRs merge by rebase only**, so every commit on a branch lands on main as written. Keep each one single-line and passing.
+- **Docs and comments are in documentation style.** No "I", "I've", "my", "we" or "our". Describe the thing ("the firmware reads", "nobody has measured"), and use "you" only for instructions to the reader. Keep uncertainty as words like "likely" or "unconfirmed" rather than "I think". Quotes stay as they were written.
+- **docs/safety.md is the hazard log.** Change the row a commit affects in that commit.
 
 ## Rules that bite
 

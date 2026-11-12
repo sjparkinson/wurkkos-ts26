@@ -41,7 +41,7 @@ What covers each hazard, and how well, is in [safety.md](safety.md). These are t
 
 ## 3. It's nice to use
 
-- [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on my own curve
+- [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on this firmware's own curve
 - [x] The RGB aux LEDs on PC1 to PC3. Firmware only
 - [x] Remember the level in RAM, which a cell swap or any reset loses. Firmware only
 - [x] A simulator. `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
