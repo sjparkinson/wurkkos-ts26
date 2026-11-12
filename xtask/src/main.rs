@@ -157,6 +157,7 @@ fn hex() -> Result<(), String> {
     let image = crc::sign(&firmware, &stamp::current(&root()))?;
     write(&root().join(HEX), &ihex::encode(&image))?;
     eprintln!("wrote {HEX}");
+    println!("stamp {}", stamp::read(&image).unwrap_or_default());
 
     let flash = firmware.len() as u64;
     let ram = elf.ram_bytes().into();
@@ -165,7 +166,6 @@ fn hex() -> Result<(), String> {
         "{}",
         row("flash", flash, Some(map::FLASH_SIZE as u64), "bytes")
     );
-    println!("stamp {}", stamp::read(&image).unwrap_or_default());
     println!("{}", row("ram", ram, Some(ram_size), "bytes"));
     println!("{}", row("stack", sim.stack.into(), None, "bytes"));
     println!(
