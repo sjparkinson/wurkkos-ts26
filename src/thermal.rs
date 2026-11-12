@@ -736,6 +736,120 @@ mod tests {
         assert!(settled[0] > 0, "{trends:?}");
     }
 
+    /// A plausible reading in sixteenths, anywhere in the range.
+    fn any_plausible(rng: &mut crate::testing::Rng) -> u16 {
+        let (low, high) = (*PLAUSIBLE_SIXTEENTHS.start(), *PLAUSIBLE_SIXTEENTHS.end());
+        low + rng.next_u16() % (high - low + 1)
+    }
+
+    /// Asserts that `now` and every sample of the history are inside the
+    /// range the clamps in `follow` and `trend` cap them to, so the clamps
+    /// have nothing to change.
+    fn assert_in_range(smoothed: &Smoothed, context: &str) {
+        let range = NOW_LOW..=NOW_HIGH;
+        assert!(range.contains(&smoothed.now), "{context}: {smoothed:?}");
+        assert!(
+            smoothed.history.iter().all(|sample| range.contains(sample)),
+            "{context}: {smoothed:?}"
+        );
+    }
+
+    /// What `follow` would return with no clamp, worked out in `i32`.
+    fn follow_unclamped(smoothed: &Smoothed, reading: u16) -> i32 {
+        let now = i32::from(smoothed.now);
+        let difference = i32::from(reading) - now;
+        now + match difference / 8 {
+            0 => difference.signum(),
+            step => step,
+        }
+    }
+
+    /// What `trend` would return with no clamp, worked out in `i32`.
+    fn trend_unclamped(smoothed: &Smoothed, now: i16) -> i32 {
+        i32::from(now) - i32::from(smoothed.history[usize::from(smoothed.next & HISTORY_MASK)])
+    }
+
+    #[test]
+    fn smoothed_state_stays_inside_the_plausible_range() {
+        let mut rng = crate::testing::Rng::new(0x5EED);
+        let (low, high) = (*PLAUSIBLE_SIXTEENTHS.start(), *PLAUSIBLE_SIXTEENTHS.end());
+
+        // `Smoothed` driven directly, so every `follow` and `trend` can be
+        // compared with the unclamped sums. The readings are the plausible
+        // ones `follow` is given, including jumps from one end to the other.
+        let mut slot = None;
+        for round in 0..200_u16 {
+            // A fresh start every round, from either end or anywhere between.
+            let first = match round % 3 {
+                0 => low,
+                1 => high,
+                _ => any_plausible(&mut rng),
+            };
+            let smoothed = Smoothed::start(&mut slot, first);
+            assert_in_range(smoothed, "start");
+            for step in 0..100_u16 {
+                let reading = match (round + step / 25) % 4 {
+                    0 => low,
+                    1 => high,
+                    _ => any_plausible(&mut rng),
+                };
+                let want_now = follow_unclamped(smoothed, reading);
+                let now = smoothed.follow(reading);
+                assert_eq!(
+                    i32::from(now),
+                    want_now,
+                    "follow, round {round}, step {step}"
+                );
+                let want_trend = trend_unclamped(smoothed, now);
+                let trend = smoothed.trend(now);
+                assert_eq!(
+                    i32::from(trend),
+                    want_trend,
+                    "trend, round {round}, step {step}"
+                );
+                assert_in_range(smoothed, "after a sample");
+            }
+        }
+
+        // And through `Thermal`, with rests (no readings), resets, glitches
+        // and jumps believed after they last.
+        let mut thermal = Thermal::new();
+        for step in 0..20_000_u16 {
+            let reading = match rng.next_u16() % 16 {
+                0 => low,
+                1 => high,
+                2 => 0,
+                3 => u16::MAX,
+                _ => any_plausible(&mut rng),
+            };
+            match rng.next_u16() % 64 {
+                0 => thermal.reset(),
+                // A rest, as when the light's off. Nothing's sampled.
+                1 => {}
+                _ => thermal.sample(reading, CEILING),
+            }
+            if let Some(smoothed) = &thermal.smoothed {
+                assert_in_range(smoothed, &std::format!("step {step}"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_fresh_start_fills_the_whole_history_with_the_reading() {
+        for reading in [
+            *PLAUSIBLE_SIXTEENTHS.start(),
+            fraction(celsius(30)) + 5,
+            *PLAUSIBLE_SIXTEENTHS.end(),
+        ] {
+            let mut slot = None;
+            let smoothed = Smoothed::start(&mut slot, reading);
+            assert_eq!(smoothed.now, reading.cast_signed());
+            assert_eq!(smoothed.last, reading);
+            assert_eq!(smoothed.next, 0);
+            assert_eq!(smoothed.history, [reading.cast_signed(); HISTORY]);
+        }
+    }
+
     #[test]
     fn the_plausible_range_and_the_jump_are_the_ones_they_always_were() {
         assert!(!plausible(fraction(233) - 1));
