@@ -65,10 +65,13 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 debug = true
-# Every sum, difference, product and shift LLVM can't prove fits then links a
-# panic, and `no_panics` in xtask/src/layout.rs fails `cargo xtask hex` on any
-# panic machinery. Together they prove the firmware never wraps by accident.
-# Wrapping on purpose takes `wrapping_*`, which says so where it happens.
+# Every sum, difference, product and negation LLVM can't prove fits, and every
+# shift by too many bits, then links a panic, and `no_panics` in
+# xtask/src/layout.rs fails `cargo xtask hex` on any panic machinery. Together
+# they prove none of those wraps by accident. Wrapping on purpose takes
+# `wrapping_*`, which says so where it happens. Bits shifted out of the top and
+# truncating casts are never checked, so those rest on the clippy denies and on
+# reading.
 overflow-checks = true
 
 [profile.dev]

@@ -458,9 +458,14 @@ impl Protection {
     /// With every sample plausible, `filtered` never passes 16 times the top
     /// of [`PLAUSIBLE`], so the sum stays under 18 times it, which the assert
     /// after [`plausible`] checks. Release builds, which check for overflow,
-    /// can't see that, so the add is checked. Were it ever to overflow, the
-    /// filter would start again from nothing and read as a flat cell, which
-    /// errs towards dark.
+    /// can't see that, so the add is checked. Were it ever to overflow, this
+    /// returns 0 once and [`Protection::centivolts`] reads `None`. That one
+    /// low sample can't step anything down, since `flat_samples` needs
+    /// [`HOLD_SAMPLES`] in a row, and the next sample takes the `0 =>` arm and
+    /// seeds the filter afresh from that raw sample, unsmoothed. The assert
+    /// above makes that unreachable. It's a fallback rather than a saturating
+    /// add because saturating would read as a high voltage and hold protection
+    /// off.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "an eighth of filtered is never more than filtered"
