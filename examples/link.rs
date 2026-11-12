@@ -24,12 +24,17 @@ use ts26::regs;
 #[path = "../src/avr/rt.rs"]
 mod rt;
 
-/// rt.rs's vector table jumps to these by name. The probe never enables an
-/// interrupt, so they're empty.
+/// rt.rs's vector table jumps to these by name, and `__unhandled_interrupt`
+/// to `halt`. The probe never enables an interrupt, so they do nothing.
 #[cfg(target_arch = "avr")]
 mod hw {
     pub extern "avr-interrupt" fn rtc_pit() {}
     pub extern "avr-interrupt" fn tca0_ovf() {}
+
+    #[allow(clippy::empty_loop)]
+    pub fn halt() -> ! {
+        loop {}
+    }
 }
 
 #[cfg(target_arch = "avr")]

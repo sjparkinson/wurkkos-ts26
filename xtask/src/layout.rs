@@ -23,8 +23,8 @@ const CPU_CCP: u16 = addr::CPU_CCP as u16;
 /// Where tinyAVR maps flash into data space, and how much of it there is.
 const MAPPED_FLASH: u32 = map::FLASH as u32;
 const FLASH_SIZE: u32 = map::FLASH_SIZE as u32;
-/// `reti` is 1001 0101 0001 1000.
-const RETI: u16 = 0x9518;
+/// `eor r1, r1`. `eor Rd, Rr` is 0010 01rd dddd rrrr.
+const EOR_R1_R1: u16 = 0x2411;
 
 pub fn check(elf: &Elf) -> Result<(), String> {
     memory(elf)?;
@@ -78,7 +78,12 @@ pub fn memory(elf: &Elf) -> Result<(), String> {
     }
 
     let image = elf.flash_image();
-    vectors(&image, reset, symbol("__unhandled_interrupt")?)?;
+    vectors(
+        &image,
+        reset,
+        symbol("__unhandled_interrupt")?,
+        halt(elf.symbols(), |name| elf.symbol(name))?,
+    )?;
 
     let ram_layout = Ram {
         data_start: symbol("__data_start")?,
@@ -91,9 +96,34 @@ pub fn memory(elf: &Elf) -> Result<(), String> {
     mapped(elf.segments())
 }
 
+/// What a symbol for `hw::halt` has in its name. It isn't `no_mangle`, so the
+/// name is mangled, but both of Rust's schemes spell each path segment as its
+/// length then its name. The firmware's is `ts26::avr::hw::halt` and the link
+/// probe's `link::hw::halt`.
+const HALT: &str = "2hw4halt";
+
+/// The byte address of `hw::halt`, the one symbol with `HALT` in its name.
+/// `value` looks a symbol up by name.
+pub(crate) fn halt<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    value: impl Fn(&str) -> Option<u32>,
+) -> Result<u32, String> {
+    let found: Vec<&str> = names.into_iter().filter(|n| n.contains(HALT)).collect();
+    match found[..] {
+        [name] => value(name).ok_or_else(|| format!("no value for `{name}`")),
+        [] => Err("no `hw::halt` symbol".into()),
+        _ => Err(format!(
+            "more than one symbol looks like `hw::halt`: {}",
+            found.join(", ")
+        )),
+    }
+}
+
 /// Every slot is a `jmp`. Slot 0 goes to `__reset`, the rest somewhere in
-/// flash past the table, and `__unhandled_interrupt` is a `reti`.
-fn vectors(image: &[u8], reset: u32, unhandled: u32) -> Result<(), String> {
+/// flash past the table. `__unhandled_interrupt` is `eor r1, r1` then a `jmp`
+/// to `halt`, src/avr/rt.rs's way of going dark rather than returning into
+/// an interrupt that would fire again forever.
+fn vectors(image: &[u8], reset: u32, unhandled: u32, halt: u32) -> Result<(), String> {
     let table_end = (VECTORS * 4) as u32;
     for slot in 0..VECTORS {
         let target = jmp_target(image, slot * 4)
@@ -109,9 +139,17 @@ fn vectors(image: &[u8], reset: u32, unhandled: u32) -> Result<(), String> {
             ));
         }
     }
-    if word(image, unhandled as usize) != Some(RETI) {
+    if word(image, unhandled as usize) != Some(EOR_R1_R1) {
         return Err(format!(
-            "__unhandled_interrupt at {unhandled:#06x} isn't a reti"
+            "__unhandled_interrupt at {unhandled:#06x} doesn't start with `eor r1, r1`"
+        ));
+    }
+    let target = jmp_target(image, unhandled as usize + 2).ok_or_else(|| {
+        format!("__unhandled_interrupt at {unhandled:#06x} doesn't `jmp` after clearing r1")
+    })?;
+    if target < table_end || target as usize >= image.len() || target != halt {
+        return Err(format!(
+            "__unhandled_interrupt jumps to {target:#06x}, but hw::halt is at {halt:#06x}"
         ));
     }
     Ok(())
@@ -268,15 +306,33 @@ mod tests {
         [w0, k as u16]
     }
 
-    /// A vector table, then `reti` at 0x7C and a `nop` at 0x7E for reset.
-    fn image(table: impl Fn(usize) -> [u16; 2]) -> Vec<u8> {
+    /// Where `image` puts `__unhandled_interrupt`, reset and `hw::halt`.
+    const UNHANDLED: u32 = 0x7C;
+    const RESET: u32 = 0x82;
+    const HALT_AT: u32 = 0x84;
+    const RETI: u16 = 0x9518;
+
+    /// `__unhandled_interrupt` as src/avr/rt.rs has it.
+    fn clear_r1_and_halt() -> [u16; 3] {
+        let [w0, w1] = jmp(HALT_AT);
+        [EOR_R1_R1, w0, w1]
+    }
+
+    /// A vector table, then `unhandled` at 0x7C, and a `nop` each for reset
+    /// at 0x82 and `hw::halt` at 0x84.
+    fn image_with(table: impl Fn(usize) -> [u16; 2], unhandled: [u16; 3]) -> Vec<u8> {
         let mut words: Vec<u16> = (0..VECTORS).flat_map(table).collect();
-        words.extend([RETI, NOP]);
+        words.extend(unhandled);
+        words.extend([NOP, NOP]);
         bytes(&words)
     }
 
+    fn image(table: impl Fn(usize) -> [u16; 2]) -> Vec<u8> {
+        image_with(table, clear_r1_and_halt())
+    }
+
     fn standard(slot: usize) -> [u16; 2] {
-        jmp(if slot == 0 { 0x7E } else { 0x7C })
+        jmp(if slot == 0 { RESET } else { UNHANDLED })
     }
 
     #[test]
@@ -289,36 +345,86 @@ mod tests {
 
     #[test]
     fn accepts_a_well_formed_vector_table() {
-        assert_eq!(vectors(&image(standard), 0x7E, 0x7C), Ok(()));
+        assert_eq!(vectors(&image(standard), RESET, UNHANDLED, HALT_AT), Ok(()));
     }
 
     #[test]
     fn rejects_a_reset_vector_pointing_elsewhere() {
-        let err = vectors(&image(|_| jmp(0x7C)), 0x7E, 0x7C).unwrap_err();
+        let img = image(|_| jmp(UNHANDLED));
+        let err = vectors(&img, RESET, UNHANDLED, HALT_AT).unwrap_err();
         assert!(err.contains("reset vector"), "{err}");
     }
 
     #[test]
     fn rejects_a_short_table() {
-        // One slot short, so the last slot is the `reti` and the `nop`.
+        // One slot short, so the last slot is `eor r1, r1` and half a `jmp`.
         let mut img = image(standard);
         img.drain(..4);
-        assert!(vectors(&img, 0x7A, 0x78).is_err());
+        assert!(vectors(&img, RESET - 4, UNHANDLED - 4, HALT_AT - 4).is_err());
     }
 
     #[test]
     fn rejects_a_vector_into_the_table_or_past_the_image() {
         for bad in [0x10, 0x1000] {
             let img = image(|slot| if slot == 5 { jmp(bad) } else { standard(slot) });
-            let err = vectors(&img, 0x7E, 0x7C).unwrap_err();
+            let err = vectors(&img, RESET, UNHANDLED, HALT_AT).unwrap_err();
             assert!(err.contains("vector 5"), "{err}");
         }
     }
 
     #[test]
-    fn rejects_an_unhandled_interrupt_that_isnt_reti() {
-        let err = vectors(&image(standard), 0x7E, 0x7E).unwrap_err();
-        assert!(err.contains("reti"), "{err}");
+    fn accepts_an_unhandled_interrupt_that_clears_r1_and_jumps_to_halt() {
+        let img = image_with(standard, clear_r1_and_halt());
+        assert_eq!(word(&img, UNHANDLED as usize), Some(EOR_R1_R1));
+        assert_eq!(jmp_target(&img, UNHANDLED as usize + 2), Some(HALT_AT));
+        assert_eq!(vectors(&img, RESET, UNHANDLED, HALT_AT), Ok(()));
+    }
+
+    #[test]
+    fn rejects_an_unhandled_interrupt_that_doesnt_clear_r1_and_jump() {
+        let [_, w0, w1] = clear_r1_and_halt();
+        let to = |addr| {
+            let [w0, w1] = jmp(addr);
+            [EOR_R1_R1, w0, w1]
+        };
+        let cases = [
+            ([RETI, NOP, NOP], "eor r1, r1"),
+            ([NOP, w0, w1], "eor r1, r1"),
+            ([0x2400, w0, w1], "eor r1, r1"), // eor r0, r0
+            ([EOR_R1_R1, RETI, NOP], "doesn't `jmp`"),
+            ([EOR_R1_R1, 0x940E, w1], "doesn't `jmp`"), // call, not jmp
+            (to(RESET), "hw::halt is at"),
+            (to(0x10), "hw::halt is at"),
+            (to(0x1000), "hw::halt is at"),
+        ];
+        for (unhandled, expected) in cases {
+            let img = image_with(standard, unhandled);
+            let err = vectors(&img, RESET, UNHANDLED, HALT_AT).unwrap_err();
+            assert!(err.contains(expected), "{unhandled:04x?}: {err}");
+        }
+    }
+
+    #[test]
+    fn finds_halt_by_its_mangled_path() {
+        let value = |name: &str| name.starts_with("_ZN").then_some(0x1234);
+        let firmware = [
+            "__reset",
+            "_ZN3ts263avr2hw8set_output17h0123456789abcdefE",
+            "_ZN3ts263avr2hw4halt17h0123456789abcdefE",
+        ];
+        assert_eq!(halt(firmware, value), Ok(0x1234));
+        let probe = ["main", "_ZN4link2hw4halt17h0123456789abcdefE"];
+        assert_eq!(halt(probe, value), Ok(0x1234));
+        let v0 = ["_RNvNtNtCs1234_4ts263avr2hw4halt"];
+        assert_eq!(halt(v0, |_| Some(0x42)), Ok(0x42));
+
+        let none = ["main", "_ZN3ts263avr2hw8set_output17h0123456789abcdefE"];
+        assert!(halt(none, value).unwrap_err().contains("no `hw::halt`"));
+        let two = [
+            "_ZN3ts263avr2hw4halt17h0123456789abcdefE",
+            "_ZN3ts263avr2hw4halt17hfedcba9876543210E",
+        ];
+        assert!(halt(two, value).unwrap_err().contains("more than one"));
     }
 
     fn ram_at(data: u32, data_len: u32, bss_len: u32, data_load: u32) -> Ram {

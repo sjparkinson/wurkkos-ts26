@@ -386,6 +386,23 @@ pub fn wait_for_tick(rest: bool) -> bool {
 /// Turns the light off and stops for good. `main` calls this when
 /// [`wait_for_tick`]'s deadline runs out, and it's the panic handler too.
 ///
+/// An interrupt with no handler ends up here as well. src/avr/rt.rs's
+/// `__unhandled_interrupt` zeroes r1 and jumps in, from inside the
+/// interrupt. CPUINT still has that interrupt marked as running then (LVL0EX,
+/// which only a `reti` clears, DS40002204A section 13.5.2), and this never
+/// `reti`s. That's fine, since all it does after turning the light off is
+/// sleep, and no other interrupt is wanted. That interrupt's own flag and
+/// enable stay up, since nothing here knows which peripheral it was. With
+/// LVL0EX set it can't be taken again, and the datasheet doesn't say whether
+/// it still wakes the `sleep`, so the loop round that covers it. The CPU
+/// doesn't clear SREG.I on the way into a handler on this core (section
+/// 8.7.3), so the `cli` below still matters. The return address that
+/// interrupt pushed stays on the stack. A level 0 interrupt can't land with
+/// the main loop halfway through one of TCA0's 16-bit registers, since
+/// [`set_output`] writes them with interrupts held off. Only an NMI could,
+/// and even then this overwriting the TEMP byte wouldn't matter, since the
+/// interrupted code never runs again.
+///
 /// Interrupts go off first, so nothing else runs from here on. Then the
 /// output goes off in the usual order, PB2 low and then the duty
 /// ([`set_output`]), which turns TCA0's interrupt off as well. The PIT's goes

@@ -36,8 +36,10 @@
 //! wake-up from the interrupt request after SREG.I has gated it, so that
 //! interrupt couldn't wake the CPU. That's a block diagram, though, and no
 //! text says it. So firmware that means to stop turns the enables off as
-//! well, and firmware that doesn't has made a mistake. It's an error inside a
-//! handler too, where LVL0EX holds every other interrupt off. Asleep, each
+//! well, and firmware that doesn't has made a mistake. With one enabled it's
+//! an error inside a handler too, where LVL0EX holds every other interrupt
+//! off. With none, a handler that sleeps has stopped for good like any other
+//! code, which is `hw::halt` reached from `__unhandled_interrupt`. Asleep, each
 //! step either takes a pending interrupt or lets the bus move time on.
 
 use std::ops::Range;
@@ -460,18 +462,22 @@ impl Cpu {
         Ok(())
     }
 
-    /// `sleep`. Inside a handler, LVL0EX holds every other interrupt off, so
-    /// nothing could wake the CPU. Otherwise the bus says whether an enabled
-    /// interrupt could. With none it sleeps until a reset, SREG.I set or not.
-    /// With one and SREG.I clear, only a block diagram says that interrupt
-    /// couldn't wake it (figure 13-1), so firmware that does it is refused.
+    /// `sleep`. The bus says whether an enabled interrupt could wake the CPU.
+    /// With none it sleeps until a reset, SREG.I set or not, inside a handler
+    /// or out (§11.3.1). With one inside a handler, LVL0EX holds it off, so
+    /// it couldn't be taken, and firmware that does it is refused. With one
+    /// and SREG.I clear, only a block diagram says that interrupt couldn't
+    /// wake it (figure 13-1), so that's refused too.
     fn sleep(&mut self, bus: &mut impl Bus) -> Result<(), String> {
-        if let Some(vector) = self.handling {
+        let enabled = bus.sleep()?;
+        if let Some(vector) = self.handling
+            && enabled
+        {
             return Err(format!(
                 "sleeps inside the handler for interrupt {vector}, so no other can wake it"
             ));
         }
-        if bus.sleep()? && !self.flag(I) {
+        if enabled && !self.flag(I) {
             return Err(
                 "sleeps with SREG.I clear and an interrupt still enabled, which only a block \
                  diagram says can't wake it (figure 13-1)"
@@ -1407,5 +1413,27 @@ mod tests {
             assert_eq!(bus.sleeps, 1);
             assert!(bus.idles > 0, "time still passes");
         }
+    }
+
+    /// The same holds inside a handler, which is how `__unhandled_interrupt`
+    /// ends, in `hw::halt`. LVL0EX stays set, since there's no `reti`.
+    #[test]
+    fn a_handler_sleeps_for_good_with_no_interrupt_enabled() {
+        let image = program(&[(3, &[SLEEP, NOP])], &[SEI, NOP, NOP]);
+        let mut bus = TestBus::new(&image);
+        bus.pending = 1 << 3;
+        let mut cpu = Cpu::new(&RAM);
+        for _ in 0..4 {
+            cpu.step(&mut bus).unwrap();
+        }
+        assert_eq!(cpu.handling, Some(3));
+        bus.pending = 0;
+        bus.nothing_enabled = true;
+        for _ in 0..10 {
+            cpu.step(&mut bus).unwrap();
+        }
+        assert!(cpu.asleep);
+        assert_eq!((cpu.handling, bus.sleeps), (Some(3), 1));
+        assert!(bus.idles > 0, "time still passes");
     }
 }

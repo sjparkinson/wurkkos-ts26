@@ -57,7 +57,10 @@
 //!   the switch never wakes it. Enabling an interrupt with SREG.I set and its
 //!   vector going to `__unhandled_interrupt` is an error, because the real
 //!   chip would return with the flag still up, forever. PORTA's vector is one
-//!   of those.
+//!   of those. So is taking one, except in the run that forces one on
+//!   purpose (`Chip::force_interrupt`).
+//! - A handler that reaches `hw::halt` never returns, so from there it's held
+//!   to the main loop's rules, not a handler's (`Sim::abandon`).
 //! - The switch is read through VPORTA.IN, which wants PA5's input buffer on
 //!   and its pull-up, since the switch only pulls the pin low. IN follows the
 //!   pin at once here. The real one stops following it in power-down, and the
@@ -99,7 +102,9 @@
 //! 2. The reset vector again with PB2 already an output and high, as far as
 //!    the first register write, which has to clear it (`found_lit`). Then
 //!    again as far as the first wait for a tick, checking `main` starts up in
-//!    the order it has to (`boot_order`).
+//!    the order it has to (`boot_order`). Then lit, with an interrupt that
+//!    has no handler forced, which has to end in `hw::halt` with the light
+//!    off (`unhandled_interrupt`).
 //! 3. Two seconds lit with every tick at its slowest, which mustn't trip
 //!    `hw::wait_for_tick`'s deadline (`slow_ticks`).
 //! 4. The 32 kHz oscillator stopping with the light on. PB2 has to drop within
@@ -117,7 +122,8 @@
 //!
 //! All but the first two drive `ts26::torch` alongside the firmware and check
 //! the pins show the library's output on every tick, the fourth until the
-//! oscillator stops. `probe` separately runs examples/link.rs, which has real
+//! oscillator stops. So does the last part of the second, until the forced
+//! interrupt. `probe` separately runs examples/link.rs, which has real
 //! statics.
 
 use std::iter;
@@ -134,7 +140,7 @@ use ts26::watchdog::{CLOCK_HZ, Feeder, TICK_DEADLINE_CYCLES};
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
-use crate::layout::{jmp_target, word};
+use crate::layout::{self, jmp_target, word};
 use crate::spec;
 use crate::stamp;
 use crate::switching::RandomSwitching;
@@ -318,8 +324,18 @@ impl Report {
 /// addresses as each one's used.
 struct Linked {
     main: u32,
-    unhandled: u32,
+    ends: Ends,
     layout: Layout,
+}
+
+/// Where interrupts that can't go back to the code they interrupted end up,
+/// as byte addresses.
+#[derive(Clone, Copy, Default)]
+struct Ends {
+    /// `__unhandled_interrupt`.
+    unhandled: u32,
+    /// `hw::halt`, which `__unhandled_interrupt` jumps to.
+    halt: u32,
 }
 
 impl Linked {
@@ -328,7 +344,10 @@ impl Linked {
         let sram = |name| -> Result<u16, String> { Ok((symbol(name)? - DATA_SPACE) as u16) };
         Ok(Self {
             main: symbol("main")? / 2,
-            unhandled: symbol("__unhandled_interrupt")?,
+            ends: Ends {
+                unhandled: symbol("__unhandled_interrupt")?,
+                halt: layout::halt(elf.symbols(), |name| elf.symbol(name))?,
+            },
             layout: Layout {
                 data: sram("__data_start")?..sram("__data_end")?,
                 bss: sram("__bss_start")?..sram("__bss_end")?,
@@ -352,7 +371,7 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
 
     // A chip that's just had its cell put in, run to the end of startup.
     let power_on = || -> Result<Sim, String> {
-        let mut sim = Sim::new(signed.clone(), linked.layout.bss.end, linked.unhandled)?;
+        let mut sim = Sim::new(signed.clone(), linked.layout.bss.end, linked.ends)?;
         sim.run_to(linked.main, BOOT_BUDGET)
             .map_err(|e| format!("startup: {e}"))?;
         Ok(sim)
@@ -364,15 +383,17 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     found_lit(Sim::new(
         signed.clone(),
         linked.layout.bss.end,
-        linked.unhandled,
+        linked.ends,
     )?)
     .map_err(|e| format!("starting with PB2 high: {e}"))?;
     boot_order(Sim::new(
         signed.clone(),
         linked.layout.bss.end,
-        linked.unhandled,
+        linked.ends,
     )?)
     .map_err(|e| format!("start-up order: {e}"))?;
+    unhandled_interrupt(power_on()?)
+        .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
     let mut clocks = Report::default();
     slow_ticks(power_on()?, &mut clocks).map_err(|e| format!("with the slowest ticks: {e}"))?;
     oscillator_stops(power_on()?, &mut clocks)
@@ -670,6 +691,86 @@ fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     Ok(())
 }
 
+/// The vector `unhandled_interrupt` forces. Nothing in the firmware touches
+/// TCB0 and the model doesn't have it, so its slot goes to
+/// `__unhandled_interrupt`.
+const VECTOR_UNHANDLED: u8 = regs::VECTOR_TCB0_INT as u8;
+
+/// An interrupt with no handler fires with the light on, which nothing in the
+/// firmware can make happen, so `Chip::force_interrupt` stands in for a
+/// peripheral gone wrong. src/avr/rt.rs's `__unhandled_interrupt` jumps into
+/// `hw::halt`, so within `HALT_BUDGET` instructions of taking it, PB2 has to
+/// be low, the duty 0, and the chip asleep for good in power-down. Then it
+/// has to stay that way, with no tick taken, since LVL0EX is still set and
+/// halt turned the PIT's interrupt off anyway.
+///
+/// On a real chip the watchdog then resets it, since nothing feeds it. This
+/// chip has no resets, so the run stops one PIT period short of the bite.
+fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
+    if sim.handled & 1 << VECTOR_UNHANDLED != 0 {
+        return Err(format!(
+            "{} has a handler now, so pick another vector to force",
+            vector_name(VECTOR_UNHANDLED)
+        ));
+    }
+    lit(&mut sim, TICKS_PER_SECOND / 4, &mut Report::default())?;
+    sim.chip.force_interrupt(VECTOR_UNHANDLED);
+    let mut steps = 0;
+    while !sim.chip.down {
+        if steps == HALT_BUDGET {
+            return Err(format!(
+                "didn't stop for good within {HALT_BUDGET} instructions of {} being forced",
+                vector_name(VECTOR_UNHANDLED)
+            ));
+        }
+        sim.step()?;
+        steps += 1;
+    }
+    if sim.forced != Some(VECTOR_UNHANDLED) || sim.cpu.handling != sim.forced {
+        return Err("stopped for good without taking the forced interrupt".into());
+    }
+    if !sim.abandoned {
+        return Err("stopped for good without going through hw::halt".into());
+    }
+    if sim.chip.enabled_high() || sim.chip.duty() != 0 {
+        return Err(format!(
+            "stopped for good with PB2 {} and a duty of {}",
+            if sim.chip.enabled_high() {
+                "high"
+            } else {
+                "low"
+            },
+            sim.chip.duty()
+        ));
+    }
+    if !sim.chip.powering_down() {
+        return Err("stopped for good in idle, which leaves the main clock running".into());
+    }
+
+    let periods = sim.chip.wdt_periods_left();
+    if periods == 0 {
+        return Err(
+            "stopped for good with the watchdog about to bite, so nothing's left to watch".into(),
+        );
+    }
+    let (ticks, until) = (
+        sim.chip.ticks,
+        sim.chip.next_pit + (periods - 1) * sim.chip.tick_cycles,
+    );
+    while sim.chip.now < until {
+        sim.step()?;
+        if !sim.cpu.asleep || sim.cpu.handling != sim.forced || sim.chip.enabled_high() {
+            return Err("woke up, took an interrupt or raised PB2 after stopping for good".into());
+        }
+    }
+    if sim.chip.ticks == ticks {
+        return Err(
+            "no PIT period went by after stopping for good, so this checked nothing".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Feeds the same switch samples to the firmware, from just after `main`, and
 /// to `ts26::torch`, and checks the pins show the library's output on every
 /// tick. Returns the level it ends at, or `None` if `Landing::Until` cut it
@@ -776,7 +877,7 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
     if rodata.is_empty() || layout.data.is_empty() || layout.bss.is_empty() {
         return Err(".rodata, .data or .bss is empty, so there's nothing to check".into());
     }
-    let mut sim = Sim::new(elf.flash_image(), layout.bss.end, linked.unhandled)?;
+    let mut sim = Sim::new(elf.flash_image(), layout.bss.end, linked.ends)?;
     sim.run_to(linked.main, BOOT_BUDGET)
         .and_then(|()| check_startup(&sim.chip, layout))
         .map_err(|e| format!("startup: {e}"))?;
@@ -844,7 +945,7 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
     };
     patch_startup(&mut image, reset as usize, &linked.layout, &moved)?;
 
-    let mut sim = Sim::new(image, moved.bss.end, linked.unhandled)?;
+    let mut sim = Sim::new(image, moved.bss.end, linked.ends)?;
     sim.run_to(linked.main, BOOT_BUDGET)?;
     check_startup(&sim.chip, &moved)?;
     for edge in [moved.data.start - 1, moved.bss.end] {
@@ -988,8 +1089,17 @@ struct Sim {
     executed: u64,
     /// `__unhandled_interrupt`, as a word address.
     unhandled: u32,
+    /// `hw::halt`, as a word address.
+    halt: u32,
     /// A bit per vector whose slot doesn't jump there.
     handled: u32,
+    /// The vector `Chip::force_interrupt` asked for, once the CPU's taken
+    /// it. It's allowed to go to `__unhandled_interrupt`, since that's what
+    /// it's for.
+    forced: Option<u8>,
+    /// The running handler has reached `hw::halt`, so it'll never return to
+    /// the code it interrupted.
+    abandoned: bool,
     /// What the running handler has to give back.
     landed: Option<Landed>,
     /// Instructions the running handler has taken.
@@ -1023,12 +1133,12 @@ enum Landing {
 }
 
 impl Sim {
-    fn new(image: Vec<u8>, bss_end: u16, unhandled: u32) -> Result<Self, String> {
+    fn new(image: Vec<u8>, bss_end: u16, ends: Ends) -> Result<Self, String> {
         if image.len() > FLASH_SIZE {
             return Err(format!("{} bytes won't fit in flash", image.len()));
         }
         let cpu = Cpu::new(&SRAM);
-        let unhandled = unhandled / 2;
+        let unhandled = ends.unhandled / 2;
         let handled = handled(&image, unhandled);
         let chip = Chip::new(image);
         Ok(Self {
@@ -1039,6 +1149,9 @@ impl Sim {
             stack_floor: bss_end - 1,
             executed: 0,
             unhandled,
+            halt: ends.halt / 2,
+            forced: None,
+            abandoned: false,
             landed: None,
             handler_steps: 0,
             longest_handler: 0,
@@ -1094,9 +1207,14 @@ impl Sim {
         let pc = self.cpu.pc;
         let awake = !self.cpu.asleep;
         let handling = self.cpu.handling;
-        self.chip.in_handler = handling.is_some();
+        // `hw::halt` is main-loop code, wherever it was reached from, and
+        // gets the main loop's rules.
+        self.chip.in_handler = handling.is_some() && !self.abandoned;
         self.cpu.step(&mut self.chip)?;
         self.watch_handler(handling)?;
+        if self.cpu.handling.is_some() && self.cpu.pc == self.halt {
+            self.abandon();
+        }
         if awake {
             self.executed += 1;
             self.chip.elapse()?;
@@ -1121,6 +1239,7 @@ impl Sim {
         }
         if self.cpu.pc == self.unhandled
             && let Some(vector) = self.cpu.handling
+            && self.forced != Some(vector)
         {
             return Err(format!(
                 "takes {}, whose vector goes to __unhandled_interrupt",
@@ -1135,7 +1254,11 @@ impl Sim {
     /// CPU was handling before the step just run.
     fn watch_handler(&mut self, before: Option<u8>) -> Result<(), String> {
         match (before, self.cpu.handling) {
-            (None, Some(_)) => {
+            (None, Some(vector)) => {
+                if self.chip.forced == Some(vector) {
+                    self.chip.forced = None;
+                    self.forced = Some(vector);
+                }
                 self.chip.interrupted = self.chip.tca.temp.map(|(low, _)| low);
                 self.mid_access += u32::from(self.chip.interrupted.is_some());
                 self.handler_steps = 0;
@@ -1155,6 +1278,9 @@ impl Sim {
                         .map_err(|e| format!("the handler for {}: {e}", vector_name(vector)))?;
                 }
             }
+            // A handler in `hw::halt` has stopped being one in all but
+            // LVL0EX, and sleeps from there until a reset.
+            (Some(_), Some(_)) if self.abandoned => {}
             (Some(vector), Some(_)) => {
                 self.handler_steps += 1;
                 if self.handler_steps > HANDLER_BUDGET {
@@ -1168,6 +1294,31 @@ impl Sim {
             (None, None) => {}
         }
         Ok(())
+    }
+
+    /// The running handler has reached `hw::halt`, which never returns, so
+    /// the rules about giving back what it found stop applying. That's
+    /// `__unhandled_interrupt`'s way out, and it'd be any handler's that
+    /// panicked.
+    ///
+    /// That includes TEMP (`Chip::temp_undisturbed`). If the handler landed
+    /// with the main loop halfway through one of TCA0's 16-bit registers,
+    /// `hw::set_output`'s writes in `halt` overwrite the low byte the main
+    /// loop left in TEMP. The rule's there because the main loop would carry
+    /// on and write its high byte with the wrong low one. Here it never
+    /// carries on, so there's nothing left to corrupt, and `halt`'s own
+    /// writes go low byte then high byte like any other. The half-done access
+    /// goes too, since nothing will ever write its high byte, and the real
+    /// TEMP takes `halt`'s low byte over the top of it.
+    ///
+    /// The handler's budget goes too, since `halt` sleeps from here until a
+    /// reset, and so does the check that it gives back the registers, SREG
+    /// and SP, since it never returns them to anything.
+    fn abandon(&mut self) {
+        self.abandoned = true;
+        self.chip.interrupted = None;
+        self.chip.tca.temp = None;
+        self.landed = None;
     }
 
     /// A handler lands between any two instructions of the main loop, so
@@ -1441,6 +1592,8 @@ struct Chip {
     world: World,
     /// A bit per vector whose interrupt is enabled.
     enabled: u32,
+    /// A request `force_interrupt` put up, until the CPU takes it.
+    forced: Option<u8>,
     /// Whether the instruction running is in a handler.
     in_handler: bool,
     /// The low byte of the TCA0 register the running handler caught halfway
@@ -1498,12 +1651,36 @@ impl Chip {
             rstfr: RSTCTRL_PORF,
             world: World::NORMAL,
             enabled: 0,
+            forced: None,
             in_handler: false,
             interrupted: None,
             power_downs: 0,
             register_writes: 0,
             boot: Boot::default(),
         }
+    }
+
+    /// Puts up a request for `vector`, from a peripheral the model doesn't
+    /// have, for a run to see what the firmware does with an interrupt it
+    /// never enabled. The CPU takes it like any other, at the next
+    /// instruction boundary where SREG.I is set and nothing holds interrupts
+    /// off (LVL0EX, `sei`, SPL or the CCP key), lowest vector first, pushing
+    /// PC, leaving SREG alone and jumping to the vector's slot (`avr.rs`).
+    ///
+    /// This is a stand-in, and a one-shot one. It isn't in `enabled`, so it
+    /// wakes nothing and the rule about enabling an interrupt with no handler
+    /// doesn't see it, and it goes once it's taken (`Sim::watch_handler`). A
+    /// real stray interrupt stays enabled and flagged, since `hw::halt`
+    /// doesn't know which peripheral to clear. With LVL0EX set it can't be
+    /// taken again, but whether a pending interrupt that's blocked like that
+    /// (LVL0EX set, SREG.I clear) still wakes `halt`'s `sleep` isn't in the
+    /// datasheet. Modelled as enabled, this chip would refuse that `sleep`
+    /// for a question the datasheet doesn't answer, so it isn't. Either way
+    /// PB2 is low before the first `sleep`, and `halt` sleeps in a loop, so
+    /// the worst case is spinning dark rather than sleeping dark, until the
+    /// watchdog resets the chip about 63 ms later.
+    fn force_interrupt(&mut self, vector: u8) {
+        self.forced = Some(vector);
     }
 
     fn sram(&self, range: &Range<u16>) -> &[u8] {
@@ -1618,6 +1795,17 @@ impl Chip {
         } else {
             0
         }
+    }
+
+    /// PIT periods that can still go by without a `wdr` before the watchdog
+    /// bites, up to `DOWN_PERIODS`, which is all of them with it off.
+    fn wdt_periods_left(&self) -> u64 {
+        let timeout = self.wdt_closed() + self.wdt_open();
+        if timeout == 0 {
+            return DOWN_PERIODS;
+        }
+        let last_safe = (timeout - 1) / WDT_CLOCKS_PER_TICK;
+        u64::from(last_safe.saturating_sub(self.wdt.ticks)).min(DOWN_PERIODS)
     }
 
     /// A PIT period's worth of WDT clocks, while the watchdog's on. It runs
@@ -2236,12 +2424,13 @@ impl Bus for Chip {
 
     /// Lowest vector first, the default static priority (§13.3.2.4). A port's
     /// flags only go up for pins whose ISC enables them, so any flag is a
-    /// request.
+    /// request. So is `force_interrupt`'s.
     fn interrupt(&self) -> Option<u8> {
         let pending = u32::from(self.porta_flags != 0) << VECTOR_PORTA
             | u32::from(self.pit_flag) << VECTOR_RTC_PIT
             | u32::from(self.tca.ovf) << VECTOR_TCA0_OVF;
-        let requests = pending & self.enabled;
+        let forced = self.forced.map_or(0, |vector| 1 << vector);
+        let requests = pending & self.enabled | forced;
         (requests != 0).then(|| requests.trailing_zeros() as u8)
     }
 
@@ -2881,6 +3070,71 @@ mod tests {
         chip.write(reg::GPIO_GPIOR0 as u16, 1).unwrap();
     }
 
+    /// Where `forced` puts vector 13's slot, as a byte address.
+    const SLOT_13: u32 = 13 * VECTOR_WORDS * 2;
+
+    /// `sei`, then `nop`s up to vector 13's slot, which writes CMP0BUF with
+    /// r1, low byte then high, with `halt` at `halt`.
+    fn forced(halt: u32) -> Sim {
+        let sts = |a: usize| [0x9210, a as u16];
+        let mut words = vec![0x9478u16];
+        words.resize(SLOT_13 as usize / 2, 0);
+        words.extend(sts(reg::TCA0_CMP0BUF));
+        words.extend(sts(reg::TCA0_CMP0BUF + 1));
+        words.extend([0; 4]);
+        let image = words.into_iter().flat_map(u16::to_le_bytes).collect();
+        let ends = Ends {
+            unhandled: SLOT_13,
+            halt,
+        };
+        Sim::new(image, SRAM.start, ends).unwrap()
+    }
+
+    #[test]
+    fn a_forced_interrupt_waits_for_sreg_i_and_the_instruction_after_sei() {
+        let mut sim = forced(0x200);
+        sim.chip.force_interrupt(13);
+        sim.step().unwrap(); // sei
+        assert_eq!(sim.cpu.handling, None, "SREG.I was clear");
+        sim.step().unwrap(); // the nop after it
+        assert_eq!(
+            sim.cpu.handling, None,
+            "the instruction after sei runs first"
+        );
+        let sp = sim.cpu.sp;
+        sim.step().unwrap();
+        assert_eq!(sim.cpu.handling, Some(13));
+        assert_eq!(sim.cpu.pc * 2, SLOT_13);
+        assert_eq!(sim.cpu.sp, sp - 2, "pushed PC");
+        assert!(sim.cpu.flag(I), "left SREG.I alone");
+        assert_eq!((sim.forced, sim.chip.forced), (Some(13), None));
+        assert!(!sim.abandoned);
+    }
+
+    #[test]
+    fn a_handler_in_halt_may_overwrite_temp_and_no_other_may() {
+        let run = |halt: u32| {
+            let mut sim = forced(halt);
+            // The main loop's halfway through CMP0.
+            sim.chip.tca.temp = Some((reg::TCA0_CMP0, 0x12));
+            sim.chip.force_interrupt(13);
+            for _ in 0..3 {
+                sim.step()?;
+            }
+            assert_eq!(sim.cpu.handling, Some(13));
+            for _ in 0..2 {
+                sim.step()?;
+            }
+            Ok::<_, String>(sim)
+        };
+        let err = run(0x200).err().unwrap();
+        assert!(err.contains("TEMP"), "{err}");
+        let sim = run(SLOT_13).unwrap();
+        assert!(sim.abandoned);
+        assert_eq!(sim.chip.tca.cmp0buf, 0);
+        assert!(sim.chip.tca.cmp0bv);
+    }
+
     #[test]
     fn the_high_byte_needs_its_low_byte_first() {
         let mut chip = running();
@@ -2938,7 +3192,7 @@ mod tests {
                 .chain(writes)
                 .flat_map(u16::to_le_bytes)
                 .collect();
-            found_lit(Sim::new(image, SRAM.start, 0)?)
+            found_lit(Sim::new(image, SRAM.start, Ends::default())?)
         };
         let dir = out(reg::VPORTB_DIR, 16);
         let clear = out(reg::VPORTB_OUT, 17);
@@ -3015,7 +3269,7 @@ mod tests {
             .into_iter()
             .flat_map(u16::to_le_bytes)
             .collect();
-        let mut sim = Sim::new(image, SRAM.start, 0).unwrap();
+        let mut sim = Sim::new(image, SRAM.start, Ends::default()).unwrap();
         sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
         let err = sim.tick(false).unwrap_err();
         assert!(err.contains("stopped for good"), "{err}");

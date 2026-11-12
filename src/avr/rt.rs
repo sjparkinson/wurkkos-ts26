@@ -70,7 +70,7 @@ global_asm!(
     // Slots 1 to 30 are the interrupts. `.rept` and `.endr` make the
     // assembler repeat the line between them. The handled ones go to hw.rs
     // and the rest to `__unhandled_interrupt`. Nothing enables those, so they
-    // can't fire.
+    // shouldn't fire, and if one does the torch goes dark.
     "  .rept {before_pit}",
     "  jmp __unhandled_interrupt",
     "  .endr",
@@ -83,14 +83,30 @@ global_asm!(
     "  jmp __unhandled_interrupt",
     "  .endr",
     "",
-    // `reti` returns from an interrupt handler. It pops the return address
-    // the CPU pushed on the way in, and tells the interrupt controller the
-    // handler has finished. If an interrupt with no handler ever did fire,
-    // this would return with its flag still up, and it would fire again,
-    // forever.
+    // An interrupt with no handler. A `reti` here would return with its flag
+    // still up, so it'd be taken again after every single instruction of the
+    // main loop (DS40002204A section 13.2). The loop would crawl, and the
+    // datasheet can't say whether it would ever reach a watchdog feed or the
+    // tick deadline. PB2 could be high all that time. So this turns the light
+    // off and stops instead, in `hw::halt`, which never returns. A watchdog
+    // reset follows if the 32 kHz oscillator is running.
+    //
+    // Compiled Rust code assumes r1 holds zero, but an interrupt can land
+    // straight after a `mul`, which leaves the high byte of its product in
+    // r1. `eor` of r1 with itself zeroes it before any Rust runs. Nothing
+    // else needs setting up, since `halt` takes no arguments, never returns,
+    // and turns interrupts off first thing. The return address the CPU
+    // pushed stays on the stack, which costs two bytes of a stack nothing
+    // will use again.
+    //
+    // CPUINT still has this interrupt marked as running (LVL0EX), since
+    // only a `reti` clears that, so no other normal-priority (level 0)
+    // interrupt is taken from here on. The `cli` in `halt` keeps level 1 out
+    // too, and nothing sets one up (CPUINT.LVL1VEC). `halt` doesn't need any.
     ".section .text.__unhandled_interrupt, \"ax\", @progbits",
     "__unhandled_interrupt:",
-    "  reti",
+    "  eor r1, r1",
+    "  jmp {halt}",
     "",
     // Reset, which gets the chip ready for Rust. `.global` exports the
     // symbol so the linker can see it, and link.x also names `__reset` as
@@ -172,6 +188,8 @@ global_asm!(
     before_ovf = const regs::VECTOR_TCA0_OVF - regs::VECTOR_RTC_PIT - 1,
     tca0_ovf = sym super::hw::tca0_ovf,
     after_ovf = const regs::VECTORS - regs::VECTOR_TCA0_OVF - 1,
+    // Where an interrupt with no handler goes.
+    halt = sym super::hw::halt,
     // SREG's I/O address, small enough for `out` to reach.
     sreg = const regs::addr::CPU_SREG,
 );
