@@ -33,6 +33,7 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 What covers each hazard, and how well, is in [safety.md](safety.md). These are the gaps it names that code can close. Like section 2, a tick means the firmware or the tests do it, and none of it is bench evidence.
 
 - [x] No-panic link check. `cargo xtask hex` refuses a firmware image that links any panic path
+- [x] Overflow checks in release builds, so with the no-panic check the firmware can't wrap by accident
 - [x] Restriction lints on the library. Overflow, indexing, casts and unwraps are made explicit, and clippy denies the rest
 - [x] Hold every ADC reading through low-voltage protection and thermal regulation and check where each ends up, plus a randomised property test of `limits::Limits`
 - [x] Fault injection. Frozen plausible readings, a stuck switch, spurious ADC results, and, on the simulator, a dead ADC and a stuck switch

@@ -35,29 +35,30 @@ impl Gradual {
 
     /// One tick towards `target`. Returns the new level, which is never more
     /// than one away from the last.
+    ///
+    /// Each step is worked out under the comparison that bounds it, so
+    /// release builds, which check for overflow, can see that neither wraps.
+    /// Comparing with `cmp`, or comparing twice, hides that and links a
+    /// panic.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "level is over target going down, so at least 1, and under it going up, \
+                  so at most 254"
+    )]
     pub fn tick(&mut self, target: u8) -> u8 {
-        if target == self.level {
-            self.waited = 0;
-            return self.level;
-        }
-        let every = if target < self.level {
-            self.down_every
+        let level = self.level;
+        let (every, next) = if target < level {
+            (self.down_every, level - 1)
+        } else if target > level {
+            (self.up_every, level + 1)
         } else {
-            self.up_every
+            self.waited = 0;
+            return level;
         };
         self.waited = self.waited.saturating_add(1);
         if self.waited >= every {
             self.waited = 0;
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "target isn't level, so going down level is over target and at least 1, \
-                          and going up it's under target and at most 254"
-            )]
-            if target < self.level {
-                self.level -= 1;
-            } else {
-                self.level += 1;
-            }
+            self.level = next;
         }
         self.level
     }

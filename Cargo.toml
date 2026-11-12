@@ -54,6 +54,11 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 debug = true
+# Every sum, difference, product and shift LLVM can't prove fits then links a
+# panic, and `no_panics` in xtask/src/layout.rs fails `cargo xtask hex` on any
+# panic machinery. Together they prove the firmware never wraps by accident.
+# Wrapping on purpose takes `wrapping_*`, which says so where it happens.
+overflow-checks = true
 
 [profile.dev]
 panic = "abort"

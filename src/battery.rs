@@ -420,16 +420,23 @@ impl Protection {
     /// centivolts. In sixteenths, moving an eighth of the way is taking off
     /// an eighth and adding the sample times two. Only plausible samples get
     /// here, so the sum stays well inside a `u16` and the seed isn't zero.
+    ///
+    /// With every sample plausible, `filtered` never passes 16 times the top
+    /// of [`PLAUSIBLE`], so the sum stays under 18 times it, which the assert
+    /// after [`plausible`] checks. Release builds, which check for overflow,
+    /// can't see that, so the add is checked. Were it ever to overflow, the
+    /// filter would start again from nothing and read as a flat cell, which
+    /// errs towards dark.
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "with every sample plausible, filtered never passes 16 times the top of \
-                  PLAUSIBLE, so the sum stays under 18 times it, which the assert after \
-                  `plausible` checks"
+        reason = "an eighth of filtered is never more than filtered"
     )]
     fn filter(&mut self, centivolts: u16) -> u16 {
         self.filtered = match self.filtered {
             0 => centivolts << 4,
-            filtered => filtered - (filtered >> 3) + (centivolts << 1),
+            filtered => (filtered - (filtered >> 3))
+                .checked_add(centivolts << 1)
+                .unwrap_or(0),
         };
         self.filtered >> 4
     }

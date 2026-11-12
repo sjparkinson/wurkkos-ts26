@@ -111,6 +111,13 @@ pub fn plausible(sixteenths: u16) -> bool {
 const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
     *PLAUSIBLE.start() * FRACTION as u16..=*PLAUSIBLE.end() * FRACTION as u16;
 
+/// [`PLAUSIBLE_SIXTEENTHS`] as the smoothed temperature's `i16`. The smoothed
+/// temperature and its history never leave it, and clamping to it where
+/// they're read shows release builds, which check for overflow, that the
+/// sums on them can't wrap. The clamps never change a value.
+const NOW_LOW: i16 = *PLAUSIBLE_SIXTEENTHS.start() as i16;
+const NOW_HIGH: i16 = *PLAUSIBLE_SIXTEENTHS.end() as i16;
+
 /// The prediction is a plausible reading plus [`LOOKAHEAD`] times a trend
 /// clamped to [`MAX_TREND`], less [`LIMIT_SIXTEENTHS`], and every step of that
 /// fits an `i16` either way.
@@ -177,35 +184,39 @@ impl Smoothed {
     ///
     /// `now` starts at a plausible reading and only ever moves part of the
     /// way towards another, so it stays inside [`PLAUSIBLE_SIXTEENTHS`], and
-    /// so does every sample in the history.
+    /// so does every sample in the history. Returns the new value.
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "now and reading are both in PLAUSIBLE_SIXTEENTHS, under 6,800 apart, \
-                  and the step never overshoots reading"
+        reason = "now is clamped to PLAUSIBLE_SIXTEENTHS and reading is plausible, so they're \
+                  under 6,800 apart, and the step never overshoots reading"
     )]
-    fn follow(&mut self, reading: u16) {
-        let difference = reading as i16 - self.now;
-        self.now += match difference / 8 {
-            0 => difference.signum(),
-            step => step,
-        };
+    fn follow(&mut self, reading: u16) -> i16 {
+        let now = self.now.clamp(NOW_LOW, NOW_HIGH);
+        let difference = reading as i16 - now;
+        self.now = now
+            + match difference / 8 {
+                0 => difference.signum(),
+                step => step,
+            };
+        self.now
     }
 
-    /// Records the smoothed temperature, and returns how far it's moved
-    /// over the history.
+    /// Records `now`, the smoothed temperature from [`follow`](Self::follow)
+    /// or a fresh start, and returns how far it's moved over the history.
     #[expect(
         clippy::indexing_slicing,
         reason = "masking with HISTORY_MASK keeps the index under HISTORY, a power of two"
     )]
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "now and the oldest sample are both in PLAUSIBLE_SIXTEENTHS"
+        reason = "now is in PLAUSIBLE_SIXTEENTHS, as follow or a plausible reading left it, \
+                  and the oldest sample is clamped to it"
     )]
-    fn trend(&mut self) -> i16 {
+    fn trend(&mut self, now: i16) -> i16 {
         let next = &mut self.history[usize::from(self.next & HISTORY_MASK)];
-        let oldest = core::mem::replace(next, self.now);
+        let oldest = core::mem::replace(next, now);
         self.next = self.next.wrapping_add(1) & HISTORY_MASK;
-        self.now - oldest
+        now - oldest.clamp(NOW_LOW, NOW_HIGH)
     }
 }
 
@@ -269,10 +280,12 @@ impl Thermal {
             }
             return;
         }
-        let smoothed = match &mut self.smoothed {
+        // The smoothed temperature comes out of the match rather than being
+        // read back, so release builds can see the range it's in.
+        let (smoothed, smooth) = match &mut self.smoothed {
             Some(smoothed) if reading.abs_diff(smoothed.last) <= JUMP => {
-                smoothed.follow(reading);
-                smoothed
+                let smooth = smoothed.follow(reading);
+                (smoothed, smooth)
             }
             Some(_) if self.rejected < GLITCHES => {
                 self.rejected = self.rejected.saturating_add(1);
@@ -280,12 +293,11 @@ impl Thermal {
             }
             // The first reading, or a jump that's lasted long enough to be
             // real.
-            slot => Smoothed::start(slot, reading),
+            slot => (Smoothed::start(slot, reading), reading as i16),
         };
         self.rejected = 0;
         smoothed.last = reading;
-        let smooth = smoothed.now;
-        let trend = smoothed.trend().clamp(-MAX_TREND, MAX_TREND);
+        let trend = smoothed.trend(smooth).clamp(-MAX_TREND, MAX_TREND);
         #[expect(
             clippy::arithmetic_side_effects,
             reason = "smooth is in PLAUSIBLE_SIXTEENTHS and trend is clamped, and the assert \

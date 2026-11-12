@@ -600,8 +600,14 @@ pub fn fuses() -> Fuses {
 pub fn set_aux(colour: Aux) {
     let lit = board::aux_pin(colour);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);
-    for pin in [AUX_BLUE, AUX_GREEN, AUX_RED] {
-        let ctrl = if lit & 1 << pin != 0 {
+    // Each mask is a constant, so release builds, which check shifts for
+    // overflow, have nothing to check at run time.
+    for (pin, mask) in [
+        (AUX_BLUE, 1 << AUX_BLUE),
+        (AUX_GREEN, 1 << AUX_GREEN),
+        (AUX_RED, 1 << AUX_RED),
+    ] {
+        let ctrl = if lit & mask != 0 {
             regs::PORT_PULLUPEN
         } else {
             0
