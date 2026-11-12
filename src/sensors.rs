@@ -112,7 +112,7 @@ impl Schedule {
         temperature: bool,
     ) -> (Option<Reading>, Option<Convert>) {
         let phase = self.phase;
-        self.phase = (phase + 1) & (CYCLE_TICKS - 1);
+        self.phase = phase.wrapping_add(1) & (CYCLE_TICKS - 1);
         let (channel, step) = match phase.checked_sub(TEMPERATURE_AT) {
             None => (Channel::Voltage, phase),
             Some(step) => (Channel::Temperature, step),
