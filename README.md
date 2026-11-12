@@ -2,13 +2,6 @@
 
 Rust firmware for the Wurkkos TS26 torch (model 0721).
 
-> [!WARNING]
-> This isn't firmware to carry yet. It has never run on a real TS26. Its sleep, low-voltage protection, thermal regulation and watchdog have only run on a simulator, which finds mistakes and proves nothing, and every threshold behind them is unmeasured on this light. See the [roadmap](docs/roadmap.md) and the [bench plan](docs/breakout.md).
-
-## Using it
-
-From off, 1C turns it on and another 1C turns it off. See [docs/ui.md](docs/ui.md) for the full UI.
-
 ## Building
 
 You need [rustup](https://rustup.rs).
@@ -29,8 +22,6 @@ cargo xtask ping /dev/cu.usbserial-XXXX
 cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
 cargo xtask flash /dev/cu.usbserial-XXXX
 ```
-
-That last line is for a torch that's already run `first-light`, the small image that goes on first. See [docs/flashing.md](docs/flashing.md) for that, programmers, the pads, and restoring the backup.
 
 ## Acknowledgements
 
