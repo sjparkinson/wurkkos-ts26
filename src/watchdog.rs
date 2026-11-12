@@ -47,6 +47,10 @@ pub const FEED_TICKS: u8 = 3;
 // a tick of `hw::start_watchdog` turning the WDT on. `wdr` takes two to three WDT clocks
 // to sync (§19.3.6), the same for every feed, so it shifts the windows without
 // changing the gap between feeds.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const, where From can't be called"
+)]
 const _: () = {
     let gap = FEED_TICKS as u16 * CLOCKS_PER_TICK;
     assert!(gap > CLOSED_CLOCKS && gap < CLOSED_CLOCKS + OPEN_CLOCKS);
@@ -83,6 +87,10 @@ pub const CLOCK_HZ: u32 = 10_000_000;
 /// a real chip.
 pub const TICK_DEADLINE_CYCLES: u16 = 2048;
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to u32 in a const, where From can't be called"
+)]
 const _: () = {
     // Main clocks in a PWM cycle, in a tick and in the deadline.
     let cycle = 2 * PWM_TOP as u32;

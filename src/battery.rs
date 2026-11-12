@@ -56,7 +56,9 @@ const MAX_READING: u16 = 4 * 1023;
 #[expect(
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
-    reason = "only ever run to build HIGH and LOW, where an overflow or the assert fails the build"
+    clippy::as_conversions,
+    reason = "only ever run to build HIGH and LOW, where an overflow or the assert fails the \
+              build, and From can't be called in a const fn"
 )]
 const fn scaled(scale: u32) -> u16 {
     let denominator = 4 * SLOPE as u32;
@@ -72,7 +74,15 @@ const HIGH: u16 = scaled(256 << 7);
 /// because it's a small number that needs the digits.
 const LOW: u16 = scaled(1 << 11);
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to u32 in a const, where From can't be called"
+)]
 const _: () = assert!(LOW as u32 * 0xFF <= u16::MAX as u32);
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to u32 in a const, where From can't be called"
+)]
 const _: () = {
     let top = (MAX_READING >> 8) as u32 * HIGH as u32 + ((0xFF * LOW as u32) >> 4) + 64;
     assert!(top <= u16::MAX as u32);
@@ -98,8 +108,16 @@ pub const fn centivolts(reading: u16) -> u16 {
 }
 
 /// Four voltage samples a second, one every [`CYCLE_TICKS`].
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const, where From can't be called"
+)]
 pub const SAMPLES_PER_SECOND: u16 = TICKS_PER_SECOND / CYCLE_TICKS as u16;
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const, where From can't be called"
+)]
 const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(CYCLE_TICKS as u16));
 
 /// Below this many centivolts, held for [`STEP_SAMPLES`], the ceiling steps
@@ -183,6 +201,10 @@ pub fn plausible(centivolts: u16) -> bool {
 
 /// [`Protection`]'s filter holds 16 times a plausible sample and adds twice
 /// another before it takes an eighth off, so 18 times the top has to fit.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to u32 in a const, where From can't be called"
+)]
 const _: () = assert!(*PLAUSIBLE.end() as u32 * 18 <= u16::MAX as u32);
 
 /// Implausible samples in a row that [`Protection`] lets go before it assumes
@@ -212,6 +234,10 @@ const GLITCHES: u8 = 3;
 pub const BLIND_SAMPLES: u16 = SAMPLES_PER_SECOND * 60 * 5;
 
 // The ceiling's already down by the time it turns off.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const, where From can't be called"
+)]
 const _: () = assert!(BLIND_SAMPLES > GLITCHES as u16);
 
 /// Ticks per level as the ceiling fades down, and back up. Down is a level a

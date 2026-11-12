@@ -6,7 +6,9 @@
 #![allow(unsafe_code)]
 
 use core::arch::asm;
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::{
+    read_volatile, with_exposed_provenance, with_exposed_provenance_mut, write_volatile,
+};
 
 use ts26::board::{
     self, AUX_BLUE, AUX_GREEN, AUX_PINS, AUX_RED, BATTERY, ENABLE, PWM, SWITCH, UPDI,
@@ -59,12 +61,12 @@ const _: () = {
 fn write(addr: usize, value: u8) {
     // SAFETY: every caller passes one of the `reg` constants, which are
     // memory-mapped I/O registers on this part.
-    unsafe { write_volatile(addr as *mut u8, value) }
+    unsafe { write_volatile(with_exposed_provenance_mut::<u8>(addr), value) }
 }
 
 fn read(addr: usize) -> u8 {
     // SAFETY: as for `write`.
-    unsafe { read_volatile(addr as *const u8) }
+    unsafe { read_volatile(with_exposed_provenance::<u8>(addr)) }
 }
 
 /// 16-bit peripheral registers go through a shared TEMP byte. Write the low
@@ -98,7 +100,9 @@ fn write16(addr: usize, value: u16) {
 /// `write` calls, so the pair is written out by hand.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "usize is 16 bits on AVR, so addr fits Z whole"
+    clippy::as_conversions,
+    reason = "usize is 16 bits on AVR, so addr fits Z whole, and try_from would need a \
+              fallback address that doesn't exist"
 )]
 fn protected_write(addr: usize, value: u8) {
     // `out` only reaches the first 64 I/O addresses, which are also the
@@ -206,16 +210,16 @@ pub fn init() {
             SWITCH => regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE,
             _ => regs::PORT_PULLUPEN,
         };
-        write(reg::PORTA_PIN0CTRL + pin as usize, ctrl);
+        write(reg::PORTA_PIN0CTRL + usize::from(pin), ctrl);
     }
     for pin in 0..PORTB_PINS {
         if PORTB_OUTPUTS & 1 << pin == 0 {
-            write(reg::PORTB_PIN0CTRL + pin as usize, regs::PORT_PULLUPEN);
+            write(reg::PORTB_PIN0CTRL + usize::from(pin), regs::PORT_PULLUPEN);
         }
     }
     for pin in 0..PORTC_PINS {
         if PORTC_OUTPUTS & 1 << pin == 0 {
-            write(reg::PORTC_PIN0CTRL + pin as usize, regs::PORT_PULLUPEN);
+            write(reg::PORTC_PIN0CTRL + usize::from(pin), regs::PORT_PULLUPEN);
         }
     }
 
@@ -707,7 +711,8 @@ pub fn set_output(output: Output) {
     }
 
     let dsm = output.dsm.min(DSM_TOP);
-    let duty = (dsm >> DSM_BITS) as u8;
+    // DSM_TOP shifted down is the PWM's TOP, 255, so this never falls back.
+    let duty = u8::try_from(dsm >> DSM_BITS).unwrap_or(0);
     let [low, _] = dsm.to_le_bytes();
     let fraction = low & FRACTION_MASK;
     let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;

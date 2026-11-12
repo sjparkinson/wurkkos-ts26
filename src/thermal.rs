@@ -45,6 +45,10 @@ use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
 
 /// Kelvin, from whole degrees Celsius.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const fn, where From can't be called"
+)]
 pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
@@ -113,7 +117,7 @@ pub fn plausible(sixteenths: u16) -> bool {
 
 /// [`PLAUSIBLE`] in sixteenths, worked out at compile time.
 const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
-    *PLAUSIBLE.start() * FRACTION as u16..=*PLAUSIBLE.end() * FRACTION as u16;
+    *PLAUSIBLE.start() * FRACTION.cast_unsigned()..=*PLAUSIBLE.end() * FRACTION.cast_unsigned();
 
 /// [`PLAUSIBLE_SIXTEENTHS`] as the smoothed temperature's `i16`. The smoothed
 /// temperature and its history never leave it, and clamping to it where
@@ -125,6 +129,10 @@ const NOW_HIGH: i16 = PLAUSIBLE_SIXTEENTHS.end().cast_signed();
 /// The prediction is a plausible reading plus [`LOOKAHEAD`] times a trend
 /// clamped to [`MAX_TREND`], less [`LIMIT_SIXTEENTHS`], and every step of that
 /// fits an `i16` either way.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to i32 in a const, where From can't be called"
+)]
 const _: () = {
     let (low, high) = (
         *PLAUSIBLE.start() as i32 * FRACTION as i32,
@@ -138,18 +146,27 @@ const _: () = {
 /// A reading further than this from the last good one, in sixteenths of a
 /// kelvin, is a glitch, unless more than `GLITCHES` in a row agree, and then
 /// it's believed. Unmeasured.
-const JUMP: u16 = 6 * FRACTION as u16;
+const JUMP: u16 = 6 * FRACTION.cast_unsigned();
 const GLITCHES: u8 = 3;
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to u16 in a const, where From can't be called"
+)]
 const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
 
 /// For wrapping an index into the history, a power of two long.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "the assert below holds HISTORY to a u8"
+    clippy::as_conversions,
+    reason = "the assert below holds HISTORY to a u8, and try_from can't be called in a const"
 )]
 const HISTORY_MASK: u8 = HISTORY as u8 - 1;
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to usize in a const, where From can't be called"
+)]
 const _: () = assert!(HISTORY.is_power_of_two() && HISTORY <= u8::MAX as usize);
 
 /// The smoothed temperature, in sixteenths of a kelvin, and the last

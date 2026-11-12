@@ -52,6 +52,10 @@ const MAX_DIFFERENCE: u16 = 0x3FFF;
 
 /// Every step of [`sixteenths`] fits a `u16`, with the highest bytes
 /// `MAX_DIFFERENCE` allows and the highest gain.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening to u32 in a const, where From can't be called"
+)]
 const _: () = {
     let (hi, lo, g) = ((MAX_DIFFERENCE >> 8) as u32, 0xFF, u8::MAX as u32);
     assert!(lo * g + 0x20 <= u16::MAX as u32);

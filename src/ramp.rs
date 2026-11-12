@@ -48,6 +48,10 @@ impl Output {
     };
 }
 
+#[expect(
+    clippy::as_conversions,
+    reason = "widening u8 to usize for an array length, where From can't be called"
+)]
 static TABLE: [u16; LEVELS as usize] = table();
 
 /// The output for `level`. Level 0 is off, and anything over [`CEILING`] runs
@@ -69,8 +73,10 @@ pub fn output(level: u8) -> Output {
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
+    clippy::as_conversions,
     reason = "only ever run to build TABLE, where an overflow or a bad index fails the build, \
-              and the cubic term is at most span, which came from a u16"
+              the cubic term is at most span, which came from a u16, and From can't be called \
+              in a const fn"
 )]
 const fn table() -> [u16; LEVELS as usize] {
     let mut table = [0; LEVELS as usize];
