@@ -55,7 +55,12 @@ extern "C" fn main() -> ! {
     let faults = Faults {
         hang: selftest::hung(hw::take_reset_flags()),
         flash: !hw::flash_ok(),
-        fuses: !hw::fuses().ok(),
+        // T5, docs/breakout.md. Breakout only, never the torch. The fuses
+        // are still read, so nothing else in the build changes.
+        fuses: {
+            let _ = hw::fuses();
+            false
+        },
     };
 
     hw::init();
