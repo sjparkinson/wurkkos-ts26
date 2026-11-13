@@ -40,7 +40,9 @@ commands:
   hex                     build the firmware, run it on the simulator, write
                           target/wurkkos-ts26-0721.hex and print flash, RAM,
                           stack, loop and handler use
-  ping <port>             check the programmer can see the chip, writing nothing,
+  hex --no-examples       the same, leaving docs/ui.md's examples out of the
+                          simulator run, for a breakout test build (T1, T5)
+  ping <port>            check the programmer can see the chip, writing nothing,
                           though expect it to reset as UPDI turns off
   peek <port>             read the running chip's registers and SRAM, to see how
                           far the firmware got; it writes nothing, and the same
@@ -68,11 +70,12 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
 
     let result = match args.as_slice() {
-        ["hex"] => hex(),
+        ["hex"] => hex(true),
+        ["hex", "--no-examples"] => hex(false),
         ["ping", port] => ping(port),
         ["peek", port] => peek(port),
         ["backup", port, dir] => backup(port, Path::new(dir)),
-        ["flash", port] => build()
+        ["flash", port] => build(true)
             .and_then(|(elf, _)| crc::sign(&elf.flash_image(), &stamp::current(&root())))
             .and_then(|image| flash(port, &image)),
         ["flash", port, file] => this_boards_hex(Path::new(file))
@@ -106,8 +109,8 @@ fn root() -> PathBuf {
 }
 
 /// Builds the firmware and the link probe, and refuses either if the layout
-/// checks or the simulator fail.
-fn build() -> Result<(elf::Elf, sim::Report), String> {
+/// checks or the simulator fail. `examples` is `sim::check`'s.
+fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     run(Command::new(cargo).current_dir(root()).args([
         "build",
@@ -125,7 +128,8 @@ fn build() -> Result<(elf::Elf, sim::Report), String> {
     let bytes = fs::read(&path).map_err(at(&path))?;
     let elf = elf::Elf::parse(&bytes).map_err(at(&path))?;
     layout::check(&elf).map_err(at(&path))?;
-    let report = sim::check(&elf).map_err(|e| format!("{}: simulator: {e}", path.display()))?;
+    let report =
+        sim::check(&elf, examples).map_err(|e| format!("{}: simulator: {e}", path.display()))?;
 
     let probe = root().join(PROBE);
     let bytes = fs::read(&probe).map_err(at(&probe))?;
@@ -151,8 +155,8 @@ fn probe_sections(elf: &elf::Elf) -> Result<(), String> {
 /// Writes the image `flash` would, which is the firmware padded to all of
 /// flash with 0xFF, a stamp of the commit and its CRC at the end (`crc.rs`).
 /// Then prints flash, RAM, stack, loop and handler use, and the stamp.
-fn hex() -> Result<(), String> {
-    let (elf, sim) = build()?;
+fn hex(examples: bool) -> Result<(), String> {
+    let (elf, sim) = build(examples)?;
     let firmware = elf.flash_image();
     let image = crc::sign(&firmware, &stamp::current(&root()))?;
     write(&root().join(HEX), &ihex::encode(&image))?;

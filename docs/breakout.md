@@ -247,7 +247,7 @@ A real bite only gets seen on purpose on the breakout (0.13). On the torch, the 
 
 None exist yet, and they should stay on a throwaway branch, because they aren't the firmware. Build and debug each on the breakout first.
 
-**T1, another level.** A build that comes on at a set level. The docs/ui.md examples expect the real one, so `cargo xtask hex` won't write it as it stands. It needs a small `xtask` change that skips the examples, keeps everything else and writes the CRC as usual, since a hex made some other way misses the CRC and caps the light. `cargo xtask flash <port> <file>` already takes any hex.
+**T1, another level.** A build that comes on at a set level. The docs/ui.md examples expect the real one, so build it with `cargo xtask hex --no-examples`, which leaves the examples out of the simulator run, keeps everything else and writes the CRC as usual. A hex made some other way misses the CRC and caps the light. `cargo xtask flash <port> <file>` already takes any hex.
 
 **T2, a number out.** A build that blinks a value out on the main LED, tens on long blinks and units on short, at a low level. One build per value is fine. Blink codes stay out of the real firmware.
 
@@ -257,7 +257,7 @@ None exist yet, and they should stay on a throwaway branch, because they aren't 
 
 **T5, no fuse check.** The real firmware with `src/main.rs` setting `fuses: false` in place of `!hw::fuses().ok()`. **Breakout only**, for this breakout's SYSCFG0 of `0xFF` (0.3), which caps the real firmware at level 50 for good and makes 0.11, 0.12 and 0.15 unanswerable here. Writing the fuse back would fix it too, but this plan writes no fuses, so the build changes instead. Use it in place of Main for 0.11 and 0.12, and with T4's change as well for 0.15. It needs two things first.
 
-- **T1's `xtask` change.** `cargo xtask hex` won't write it, because the simulator runs docs/ui.md's `fault 2C` example, and a build that ignores the fuses doesn't cap.
+- **`cargo xtask hex --no-examples`**, as T1. Plain `cargo xtask hex` won't write it, because the simulator runs docs/ui.md's `fault 2C` example, and a build that ignores the fuses doesn't cap.
 - **Pin 14's divider in place.** Pin 14 on G is a cell the firmware can't read, which caps it at level 50 all the same.
 
 The torch never gets T5. If its own fuses fail at 1.9, that's a stop, not a reason to skip the check.

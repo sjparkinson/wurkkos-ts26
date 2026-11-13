@@ -362,7 +362,10 @@ fn symbol(elf: &Elf, name: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("no `{name}` symbol"))
 }
 
-pub fn check(elf: &Elf) -> Result<Report, String> {
+/// Runs every check on the firmware. With `examples` false, docs/ui.md's
+/// examples are left out, for a test build that's meant to disagree with
+/// them, and the rest still runs.
+pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     let linked = Linked::of(elf)?;
     let image = elf.flash_image();
     // What `cargo xtask hex` and `flash` write.
@@ -402,7 +405,11 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     switch_stuck(power_on()?, &mut clocks)
         .map_err(|e| format!("with the switch stuck down: {e}"))?;
 
-    let examples = spec::examples(spec::UI_MD)?;
+    let examples = if examples {
+        spec::examples(spec::UI_MD)?
+    } else {
+        Vec::new()
+    };
     // Every example, then the random switching, each with and without
     // overflows landing mid-pass. Each is its own chip, so they run side by
     // side, because the long ones take minutes of simulated time.
