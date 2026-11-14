@@ -71,6 +71,12 @@ extern "C" fn main() -> ! {
     let mut aux_changes = Changes::new();
     let mut feeder = Feeder::new();
 
+    // T3, docs/breakout.md. Breakout only, never the torch. A press that
+    // began with the light on and is held for 640 ticks (ten seconds) stops
+    // the feeds, so the watchdog bites.
+    let mut held: u16 = 0;
+    let mut armed = false;
+
     loop {
         // Power-down or idle, by `Feeder::power_down`'s rule, which the
         // simulator holds this loop to. False means the light's on and no
@@ -81,7 +87,18 @@ extern "C" fn main() -> ! {
             hw::halt();
         }
 
-        torch.tick(hw::switch_pressed(), hw::adc_result());
+        let pressed = hw::switch_pressed();
+        if !pressed {
+            held = 0;
+            armed = false;
+        } else {
+            if held == 0 {
+                armed = torch.level() > 0;
+            }
+            held = held.saturating_add(1);
+        }
+
+        torch.tick(pressed, hw::adc_result());
 
         if let Some(convert) = torch.convert() {
             hw::adc_start(convert);
@@ -96,7 +113,7 @@ extern "C" fn main() -> ! {
         }
 
         // The only place the running torch feeds the watchdog.
-        if feeder.tick() {
+        if feeder.tick() && !(armed && held > 640) {
             hw::feed_watchdog();
         }
     }
