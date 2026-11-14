@@ -333,13 +333,13 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
 /// at level 50 with nothing to say why. `cargo xtask hex` always writes all
 /// 16 KB, so a full image that doesn't check is refused. A shorter one isn't
 /// ours, or wasn't signed. The stock firmware's hex is like that and needs no
-/// CRC, and so is `first-light`, so it gets a warning and goes ahead. Not for
+/// CRC, and so is T0 (first light), so it gets a warning and goes ahead. Not for
 /// `restore`, since a factory backup has no CRC of ours.
 fn signed(image: &[u8]) -> Result<(), String> {
     if image.len() < map::FLASH_SIZE {
         eprintln!(
             "warning: the image isn't the full {} bytes with a CRC, so it isn't a signed build \
-             of the full firmware. That's right for the stock firmware and for `first-light`, which check \
+             of the full firmware. That's right for the stock firmware and for T0 (first light), which check \
              no CRC. If it's a build from main, it'll cap itself at level 50 on every boot, so \
              flash the file `cargo xtask hex` writes instead",
             map::FLASH_SIZE
@@ -441,7 +441,7 @@ fn report_stamp(what: &str, flash: &[u8]) {
         Some(text) => eprintln!("{what} has the stamp `{text}`"),
         None => eprintln!(
             "{what} has no stamp, so it isn't a full build from this repo (it may be the \
-             stock firmware, `first-light` or an empty chip)"
+             stock firmware, T0 (first light) or an empty chip)"
         ),
     }
 }
