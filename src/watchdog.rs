@@ -152,8 +152,10 @@ impl Feeder {
     /// datasheet doesn't say it gets there with the peripheral clock stopped.
     /// If it didn't, the watchdog would reset a resting torch. That costs an
     /// idle tick in [`FEED_TICKS`] while resting.
+    // T4 (docs/breakout.md): powers down straight after a feed too.
     pub const fn power_down(&self, resting: bool) -> bool {
-        resting && !self.fed
+        let _ = self.fed;
+        resting
     }
 }
 
@@ -203,15 +205,15 @@ mod tests {
     }
 
     #[test]
-    fn never_powers_down_straight_after_a_feed() {
+    // T4: powers down straight after a feed too.
+    fn powers_down_straight_after_a_feed() {
         let mut feeder = Feeder::new();
         assert!(feeder.power_down(true), "before the first feed");
         let after: [bool; 6] = core::array::from_fn(|_| {
             feeder.tick();
             feeder.power_down(true)
         });
-        let (t, f) = (true, false);
-        assert_eq!(after, [f, t, t, f, t, t]);
+        assert_eq!(after, [true; 6]);
     }
 
     #[test]
