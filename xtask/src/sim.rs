@@ -397,33 +397,41 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     .map_err(|e| format!("start-up order: {e}"))?;
     unhandled_interrupt(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
-    let mut clocks = Report::default();
-    slow_ticks(power_on()?, &mut clocks).map_err(|e| format!("with the slowest ticks: {e}"))?;
-    oscillator_stops(power_on()?, &mut clocks)
-        .map_err(|e| format!("with the 32 kHz oscillator stopped: {e}"))?;
-    adc_never_answers(power_on()?, &mut clocks).map_err(|e| format!("with a dead ADC: {e}"))?;
-    switch_stuck(power_on()?, &mut clocks)
-        .map_err(|e| format!("with the switch stuck down: {e}"))?;
-
     let examples = if examples {
         spec::examples(spec::UI_MD)?
     } else {
         Vec::new()
     };
-    // Every example, then the random switching, each with and without
-    // overflows landing mid-pass. Each is its own chip, so they run side by
-    // side, because the long ones take minutes of simulated time.
-    let runs = examples.iter().map(Some).chain([None]);
+    // The clock and stuck-input faults, every example, then the random
+    // switching, each example and the switching with and without overflows
+    // landing mid-pass. Each is its own chip, so they run side by side,
+    // because the long ones take minutes of simulated time. Errors come back
+    // in this order, whichever thread finishes first.
+    let faults: [(FaultCheck, &str); 4] = [
+        (slow_ticks, "with the slowest ticks"),
+        (oscillator_stops, "with the 32 kHz oscillator stopped"),
+        (adc_never_answers, "with a dead ADC"),
+        (switch_stuck, "with the switch stuck down"),
+    ];
     let power_on = &power_on;
     let reports: Vec<Result<Report, String>> = thread::scope(|scope| {
-        #[expect(
-            clippy::needless_collect,
-            reason = "spawning every run before joining any is what runs them in parallel"
-        )]
-        let runs: Vec<_> = runs
+        let faults = faults.map(|(check, name)| {
+            scope.spawn(move || {
+                let mut report = Report::default();
+                check(power_on()?, &mut report).map_err(|e| format!("{name}: {e}"))?;
+                Ok(report)
+            })
+        });
+        // Spawning every run before joining any is what runs them in parallel.
+        let runs: Vec<_> = examples
+            .iter()
+            .map(Some)
+            .chain([None])
             .map(|example| scope.spawn(move || both_ways(power_on, example)))
             .collect();
-        runs.into_iter()
+        faults
+            .into_iter()
+            .chain(runs)
             .map(|run| run.join().unwrap_or_else(|_| Err("a run panicked".into())))
             .collect()
     });
@@ -433,7 +441,6 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
         handler_budget: HANDLER_BUDGET,
         ..Report::default()
     };
-    report.merge(&clocks);
     for run in reports {
         report.merge(&run?);
     }
@@ -445,6 +452,10 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     }
     Ok(report)
 }
+
+/// One of the fault checks `check` runs on a freshly started chip, which adds
+/// what it measured to the report.
+type FaultCheck = fn(Sim, &mut Report) -> Result<(), String>;
 
 /// Ticks a run with overflows landing goes on for after the last tick the run
 /// without them reached new code, so whatever a late landing broke has time
