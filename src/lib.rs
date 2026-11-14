@@ -27,6 +27,7 @@
 )]
 
 pub mod battery;
+pub mod blink;
 pub mod board;
 pub mod button;
 pub mod gradual;

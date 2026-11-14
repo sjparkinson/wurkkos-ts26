@@ -1,20 +1,29 @@
 //! One pass of the firmware's loop, minus the hardware. A switch sample and
 //! an ADC result in, a level and the next conversion out.
 
+use crate::battery;
+use crate::blink::{self, Blink};
 use crate::button::{Clicks, Event};
 use crate::limits::Limits;
 use crate::ramp::{self, Output};
 use crate::selftest::Faults;
-use crate::sensors::Convert;
+use crate::sensors::{Channel, Convert};
 use crate::temp::Calibration;
-use crate::ui::{Aux, Ui};
+use crate::ui::{self, Aux, Ui};
 
 #[derive(Clone, Debug)]
 pub struct Torch {
     clicks: Clicks,
     ui: Ui,
     limits: Limits,
+    /// T2 (docs/breakout.md): the last voltage reading, raw.
+    voltage: Option<u16>,
+    blink: Option<Blink>,
 }
+
+/// T2: the clicks that blink the last voltage reading out, which the real UI
+/// ignores and no docs/ui.md example uses.
+pub const BLINK_CLICKS: u8 = 6;
 
 impl Torch {
     /// `calibration` is the temperature sensor's, from the signature row, and
@@ -24,6 +33,8 @@ impl Torch {
             clicks: Clicks::new(),
             ui: Ui::new(),
             limits: Limits::new(calibration, faults),
+            voltage: None,
+            blink: None,
         }
     }
 
@@ -31,9 +42,23 @@ impl Torch {
     /// ADC's result, if it has one ready. Returns the click or hold this
     /// sample finished, if any.
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
+        // The firmware started what `convert` said after the last tick, so
+        // this result is from that.
+        if let (Some(raw), Some(convert)) = (adc, self.limits.convert())
+            && convert.channel == Channel::Voltage
+        {
+            self.voltage = Some(raw);
+        }
         let event = self.clicks.tick(pressed);
         if let Some(event) = event {
             self.ui.handle(event);
+        }
+        if event == Some(Event::Click(BLINK_CLICKS)) && self.blink.is_none() {
+            let (volts, tenths) = blink::decivolts(self.voltage.map_or(0, battery::centivolts));
+            self.blink = Some(Blink::new(volts, tenths));
+        }
+        if self.blink.as_mut().and_then(Blink::tick).is_none() {
+            self.blink = None;
         }
         if !self.resting() && self.limits.tick(self.ui.output_level(), adc).off {
             self.ui.off();
@@ -51,7 +76,10 @@ impl Torch {
     /// between these ticks, and a press ends it on the tick that sees the
     /// press, in time to read the cell before a click can turn the light on.
     pub const fn resting(&self) -> bool {
-        self.clicks.idle() && self.ui.output_level() == 0 && self.limits.level() == 0
+        self.clicks.idle()
+            && self.ui.output_level() == 0
+            && self.limits.level() == 0
+            && self.blink.is_none()
     }
 
     /// The level the LEDs should be at right now, `0` meaning off. That's what
@@ -65,8 +93,13 @@ impl Torch {
         self.limits.convert()
     }
 
+    /// T2 takes the output over while it blinks, at the UI's floor.
     pub fn output(&self) -> Output {
-        ramp::output(self.level())
+        match &self.blink {
+            Some(blink) if blink.lit() => ramp::output(ui::FLOOR),
+            Some(_) => ramp::output(0),
+            None => ramp::output(self.level()),
+        }
     }
 
     pub const fn aux(&self) -> Aux {
@@ -411,5 +444,39 @@ mod tests {
         assert_eq!(changes.update(dim()), Some(dim()));
         assert_eq!(changes.update(dim()), None);
         assert_eq!(changes.update(Output::OFF), Some(Output::OFF));
+    }
+
+    /// T2: 6C from off on a 3.8 V cell blinks 3 long and 8 short at the
+    /// floor, awake throughout, then rests.
+    #[test]
+    fn six_clicks_blink_the_voltage() {
+        extern crate std;
+        let mut torch = Rig::default();
+        for pressed in crate::testing::clicks(BLINK_CLICKS) {
+            torch.tick(pressed);
+        }
+        let mut lit = std::vec::Vec::new();
+        let mut was = false;
+        let mut run = 0u16;
+        for _ in 0..TICKS_PER_SECOND * 20 {
+            torch.tick(false);
+            if torch.resting() {
+                break;
+            }
+            let on = torch.output() == ramp::output(FLOOR);
+            assert!(on || torch.output() == Output::OFF);
+            if on != was && was {
+                lit.push(run);
+            }
+            run = if on == was { run + 1 } else { 1 };
+            was = on;
+        }
+        assert!(torch.resting());
+        assert_eq!(torch.output(), Output::OFF);
+        let long = u16::from(blink::LONG);
+        let short = u16::from(blink::SHORT);
+        let mut expected = std::vec![long; 3];
+        expected.extend([short; 8]);
+        assert_eq!(lit, expected);
     }
 }
