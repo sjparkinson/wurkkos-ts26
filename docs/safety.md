@@ -19,7 +19,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Mitigation.** `hw::hold_enable_low` is the first call in `main`, and writes OUT before DIR. `hw::set_output` sets the duty and then raises the enable, and drops the enable and then zeroes the duty. `hw::halt` (also the panic handler) goes through the same off order. `hw::init` never gives PB2 a pull-up.
 
-**Evidence.** Simulator `found_lit` starts with PORTB dirty. The simulator turns PB2 high with no duty into an error, and so a PB2 that stays high with the duty at 0 for longer than the delta-sigma's longest gap. Tests `the_enable_goes_after_the_duty`, `a_dsm_gap_is_fine_but_a_longer_zero_duty_is_not`, `the_dangerous_pins_never_get_a_pull_up`, `power_down_wants_pb2_low` and `found_lit_wants_out_cleared_by_the_first_register_write` in xtask/src/sim.rs. On the breakout, `first-light` read 0 V on PB2 off and VCC on, through several power cycles (0.7), at 3 readings a second.
+**Evidence.** Simulator `found_lit` starts with PORTB dirty. The simulator turns PB2 high with no duty into an error, and so a PB2 that stays high with the duty at 0 for longer than the delta-sigma's longest gap. Tests `the_enable_goes_after_the_duty`, `a_dsm_gap_is_fine_but_a_longer_zero_duty_is_not`, `the_dangerous_pins_never_get_a_pull_up`, `power_down_wants_pb2_low` and `found_lit_wants_out_cleared_by_the_first_register_write` in xtask/src/sim.rs. On the breakout, T0 read 0 V on PB2 off and VCC on, through several power cycles (0.7), at 3 readings a second.
 
 **Status.** Simulator.
 
@@ -101,7 +101,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Cause.** A wrong `SYSCFG0` write, 12 V on the pad, a slipped probe, or a wrong pad order.
 
-**Mitigation.** The programmer never writes fuses, the user row or a locked chip, and refuses a chip with the wrong signature. No high-voltage programmer ever goes on this torch, recovery included. The first flash on any torch is `first-light` (commit `9d3b7dc`), and the full firmware goes on only after that's proven on the light. `restore` refuses a backup from another chip.
+**Mitigation.** The programmer never writes fuses, the user row or a locked chip, and refuses a chip with the wrong signature. No high-voltage programmer ever goes on this torch, recovery included. The first flash on any torch is T0 (commit `9d3b7dc`), and the full firmware goes on only after that's proven on the light. `restore` refuses a backup from another chip.
 
 **Evidence.** `refuses_another_chip` and `refuses_a_locked_chip` in xtask/src/updi.rs. `restore_refuses_a_backup_from_another_chip_and_writes_nothing` in xtask/src/main.rs. [flashing.md](flashing.md) and [breakout.md](breakout.md) have the rules and the order.
 
@@ -161,9 +161,9 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Cause.** A wrong `OSCCFG` frequency select, a locked oscillator calibration, or a prescaler that isn't the one assumed.
 
-**Mitigation.** `selftest::Fuses::ok` checks `FREQSEL` and `OSCLOCK`. The prescaler is the firmware's own write in `hw::init` (`CLKCTRL_MCLKCTRLB`, divide by 2), and the simulator checks the clock it ends up with (`clocked_as_modelled` in xtask/src/sim.rs). `watchdog::CLOCK_HZ` is that clock, and the tick deadline's sums start from it. On the breakout, `first-light`'s PWM read 19.79 to 19.80 kHz against 19.61 expected, so about 0.9 % fast (0.6).
+**Mitigation.** `selftest::Fuses::ok` checks `FREQSEL` and `OSCLOCK`. The prescaler is the firmware's own write in `hw::init` (`CLKCTRL_MCLKCTRLB`, divide by 2), and the simulator checks the clock it ends up with (`clocked_as_modelled` in xtask/src/sim.rs). `watchdog::CLOCK_HZ` is that clock, and the tick deadline's sums start from it. On the breakout, T0's PWM read 19.79 to 19.80 kHz against 19.61 expected, so about 0.9 % fast (0.6).
 
-**Evidence.** `each_wrong_field_fails` in src/selftest.rs and `clocked_as_modelled`. The breakout's frequency reading, which is first-light on a different chip.
+**Evidence.** `each_wrong_field_fails` in src/selftest.rs and `clocked_as_modelled`. The breakout's frequency reading, which is T0 on a different chip.
 
 **Status.** Simulator.
 
@@ -177,4 +177,4 @@ This is true of every hazard, so it's kept out of the sections above.
 - **The simulator's limits** are in [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator). The two that matter most here are that it has no chip resets, so a watchdog bite and the boot after it never run, and that it models nothing analogue, so the driver, the cell and the head are all scripted.
 - **Frozen but plausible readings** get past both `battery::plausible` and `thermal::plausible`. Nothing in the firmware can tell a stuck reading from a steady one, and two tests in src/limits.rs pin that down so a change to it shows.
 - **There's no run-time limit.** A lit light with a good cell and a cool head stays lit, whatever pressed the switch.
-- **[breakout.md](breakout.md) is what would move hazards to bench.** Stage 3's `first-light` run is the gate for H1 and H8, stage 6 for H2, H6 and H7, and stage 7 for H3, H4 and H12's thresholds. Until a hazard has a result there, it stays where it is.
+- **[breakout.md](breakout.md) is what would move hazards to bench.** Stage 3's T0 run is the gate for H1 and H8, stage 6 for H2, H6 and H7, and stage 7 for H3, H4 and H12's thresholds. Until a hazard has a result there, it stays where it is.
