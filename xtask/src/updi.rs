@@ -1073,6 +1073,333 @@ pub(crate) mod tests {
         assert!(err.contains("0x8001"), "{err}");
     }
 
+    /// UPDI's own registers, their bits and its instructions, pinned to the
+    /// numbers in the datasheet's UPDI chapter and pymcuprog's
+    /// `constants.py`. None of them are in the ATDF, and the fake chip
+    /// decodes most with these same names, so a slip in one would pass every
+    /// other test.
+    #[test]
+    fn updi_registers_and_instructions_are_the_datasheets() {
+        assert_eq!(SYNC, 0x55, "SYNCH");
+        assert_eq!(ACK, 0x40, "ACK");
+
+        assert_eq!(
+            [LDS, LD, STS, ST, LDCS, REPEAT, STCS, KEY],
+            [0x00, 0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0],
+            "opcodes"
+        );
+
+        assert_eq!(CS_STATUSA, 0x00, "STATUSA");
+        assert_eq!(CS_CTRLA, 0x02, "CTRLA");
+        assert_eq!(CS_CTRLB, 0x03, "CTRLB");
+        assert_eq!(ASI_KEY_STATUS, 0x07, "ASI_KEY_STATUS");
+        assert_eq!(ASI_RESET_REQ, 0x08, "ASI_RESET_REQ");
+        assert_eq!(ASI_SYS_STATUS, 0x0B, "ASI_SYS_STATUS");
+
+        assert_eq!(CTRLA_IBDLY, 0x80, "CTRLA.IBDLY");
+        assert_eq!(CTRLA_RSD, 0x08, "CTRLA.RSD");
+        assert_eq!(CTRLB_CCDETDIS, 0x08, "CTRLB.CCDETDIS");
+        assert_eq!(CTRLB_UPDIDIS, 0x04, "CTRLB.UPDIDIS");
+        assert_eq!(KEY_STATUS_NVMPROG, 0x10, "ASI_KEY_STATUS.NVMPROG");
+        assert_eq!(SYS_STATUS_NVMPROG, 0x08, "ASI_SYS_STATUS.NVMPROG");
+        assert_eq!(SYS_STATUS_LOCKSTATUS, 0x01, "ASI_SYS_STATUS.LOCKSTATUS");
+        assert_eq!(RESET_REQ_APPLY, 0x59, "the reset signature");
+        assert_eq!(KEY_NVMPROG, b"NVMProg ", "the NVM programming key");
+    }
+
+    /// Stands in for a line that fails the same way every time, with no chip
+    /// behind it. `fails` makes the error, on `send` if `on_send` and on
+    /// `recv` if not.
+    struct BadLine {
+        fails: fn() -> io::Error,
+        on_send: bool,
+        breaks: usize,
+    }
+
+    impl Wire for &mut BadLine {
+        fn send(&mut self, _: &[u8]) -> io::Result<()> {
+            if self.on_send {
+                Err((self.fails)())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn recv(&mut self, _: &mut [u8]) -> io::Result<()> {
+            Err((self.fails)())
+        }
+
+        fn double_break(&mut self) -> io::Result<()> {
+            self.breaks += 1;
+            Ok(())
+        }
+    }
+
+    /// The words docs/flashing.md tells the reader to look for.
+    #[test]
+    fn a_chip_that_says_nothing_reads_as_no_reply_after_a_double_break() {
+        let mut line = BadLine {
+            fails: || io::ErrorKind::TimedOut.into(),
+            on_send: false,
+            breaks: 0,
+        };
+        let Err(err) = Programmer::connect(&mut line) else {
+            panic!("connected to nothing");
+        };
+        assert_eq!(
+            err,
+            "no reply from the chip. Check the probe's contact, the pad order and that the \
+             cell is out"
+        );
+        assert_eq!(line.breaks, 1, "one double break and a second try");
+    }
+
+    /// `serial.rs` says "nothing echoed back" when the adapter can't hear its
+    /// own bytes, which on the pads can mean a short. That mustn't come out as
+    /// "no reply", which means poor contact and invites pressing harder.
+    #[test]
+    fn a_line_that_does_not_echo_is_not_reported_as_no_reply() {
+        let mut line = BadLine {
+            fails: || io::Error::other("nothing echoed back. Something's wrong"),
+            on_send: true,
+            breaks: 0,
+        };
+        let Err(err) = Programmer::connect(&mut line) else {
+            panic!("connected to nothing");
+        };
+        assert_eq!(err, "serial: nothing echoed back. Something's wrong");
+        assert!(!err.contains("no reply"), "{err}");
+    }
+
+    #[test]
+    fn only_a_timeout_is_no_reply_and_any_other_error_keeps_its_words() {
+        let err = io_error(io::Error::new(io::ErrorKind::TimedOut, "took too long"));
+        assert!(err.starts_with("no reply from the chip."), "{err}");
+        for kind in [
+            io::ErrorKind::NotFound,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::Other,
+        ] {
+            let err = io_error(io::Error::new(kind, "the adapter's gone"));
+            assert_eq!(err, "serial: the adapter's gone", "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_link_whose_statusa_reads_zero_after_a_double_break() {
+        let mut tiny = Tiny::new();
+        tiny.statusa = 0;
+        let Err(err) = Programmer::connect(&mut tiny) else {
+            panic!("connected");
+        };
+        assert_eq!(err, "the UPDI link came up but STATUSA reads 0");
+        assert_eq!(tiny.breaks, 1, "one double break and a second try");
+        assert!(!tiny.progmode, "the key went out");
+        assert_eq!(tiny.resets, 0, "the chip was reset");
+    }
+
+    #[test]
+    fn a_chip_that_refuses_the_key_is_not_reset_and_ends_with_updi_off() {
+        let mut tiny = Tiny::new();
+        tiny.ignores_key = true;
+
+        // On its own, entering programming mode stops at the key.
+        let mut p = Programmer::connect(&mut tiny).unwrap();
+        let err = p.enter_progmode().unwrap_err();
+        assert_eq!(err, "the chip didn't accept the NVM programming key");
+        assert_eq!(tiny.resets, 0, "the chip was reset without the key");
+
+        // Connecting for programming lets the chip go afterwards, so the
+        // only reset is the one that leaves.
+        let mut tiny = with_contents(tiny);
+        let Err(err) = Programmer::connect_for_programming(&mut tiny) else {
+            panic!("connected for programming");
+        };
+        assert_eq!(err, "the chip didn't accept the NVM programming key");
+        assert_eq!(tiny.resets, 1, "only the reset that leaves");
+        assert!(!tiny.in_reset, "the chip was left in reset");
+        assert!(!tiny.progmode, "the chip was left in programming mode");
+        assert!(tiny.updi_disabled, "UPDI was left on");
+        assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
+        assert!(tiny.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
+    }
+
+    /// The programmer's rule is that a chip is ready when it reads unlocked
+    /// and in programming mode, both. Either alone is refused, and so is
+    /// neither, however long it's given.
+    #[test]
+    fn only_a_chip_that_reads_unlocked_and_in_programming_mode_is_written_to() {
+        for status in [
+            0,
+            SYS_STATUS_LOCKSTATUS,
+            SYS_STATUS_LOCKSTATUS | SYS_STATUS_NVMPROG,
+        ] {
+            let mut tiny = Tiny::new();
+            tiny.sys_status_after_reset = Some(status);
+            let err = refused(tiny);
+            assert!(
+                err.starts_with("the chip didn't enter programming mode."),
+                "{status:#04x}: {err}"
+            );
+            assert!(err.contains("which this tool won't do"), "{err}");
+        }
+
+        // Other bits in the register don't matter. 0x20 is RSTSYS.
+        let mut tiny = Tiny::new();
+        tiny.sys_status_after_reset = Some(0x20 | SYS_STATUS_NVMPROG);
+        assert!(Programmer::connect_for_programming(tiny).is_ok());
+    }
+
+    #[test]
+    fn a_locked_chip_is_given_the_whole_timeout_and_then_refused() {
+        let mut tiny = Tiny::new();
+        tiny.locked = true;
+        let mut p = Programmer::connect(tiny).unwrap();
+        let before = p.wire.elapsed;
+        let err = p.enter_progmode().unwrap_err();
+        assert!(err.contains("If it's locked, unlocking means erasing it"));
+        let waited = p.wire.elapsed.checked_sub(before).unwrap();
+        assert!(waited >= PROGMODE_TIMEOUT, "gave up after {waited:?}");
+        assert_eq!(p.wire.page_writes + p.wire.page_erase_writes, 0);
+    }
+
+    /// An image over both kinds of page, and the EEPROM to go with it.
+    fn images() -> (Vec<u8>, Vec<u8>) {
+        let flash = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
+        let eeprom = (0..=255).collect();
+        (flash, eeprom)
+    }
+
+    /// Erases, writes and verifies both memories on `tiny`, and leaves.
+    fn write_both(tiny: Tiny) -> Tiny {
+        let (flash, eeprom) = images();
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        p.erase_and_write_flash(&flash).unwrap();
+        p.verify(map::FLASH, &flash).unwrap();
+        p.write(map::EEPROM, map::EEPROM_PAGE, &eeprom).unwrap();
+        p.verify(map::EEPROM, &eeprom).unwrap();
+        p.leave().unwrap()
+    }
+
+    #[test]
+    fn waits_out_every_erase_and_write_before_starting_the_next() {
+        // The datasheet's typical times, then some a slow chip might take,
+        // each on a fast adapter and a slow one.
+        for (write, erase) in [(2, 4), (20, 45)] {
+            for round_trip in [Duration::from_micros(100), Duration::from_millis(16)] {
+                let mut tiny = with_contents(Tiny::new());
+                tiny.write_time = Duration::from_millis(write);
+                tiny.erase_time = Duration::from_millis(erase);
+                tiny.round_trip = round_trip;
+                let tiny = write_both(tiny);
+                let case = format!("{write} and {erase} ms, {round_trip:?} a round trip");
+                assert_eq!(tiny.lost_while_busy, 0, "{case}");
+                assert_eq!(tiny.page_writes, 16, "{case}");
+                assert_eq!(tiny.page_erase_writes, 8, "{case}");
+                if round_trip < tiny.write_time {
+                    assert!(tiny.busy_polls > 0, "{case}: never saw it busy");
+                }
+            }
+        }
+    }
+
+    /// Flash is busy on FBUSY and EEPROM on EEBUSY, and each has to be waited
+    /// for by itself.
+    #[test]
+    fn waits_for_eeprom_as_well_as_flash() {
+        let (_, eeprom) = images();
+        let mut tiny = with_contents(Tiny::new());
+        tiny.erase_time = Duration::from_millis(30);
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        p.write(map::EEPROM, map::EEPROM_PAGE, &eeprom).unwrap();
+        p.verify(map::EEPROM, &eeprom).unwrap();
+        let tiny = p.leave().unwrap();
+        assert_eq!(tiny.lost_while_busy, 0);
+        // Eight pages, and each is busy for 30 round trips or so.
+        assert!(tiny.busy_polls >= 8 * 25, "{} busy polls", tiny.busy_polls);
+        assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
+    }
+
+    /// What the tests above rest on: the fake loses whatever's sent while
+    /// it's busy, so a programmer that doesn't wait can't pass them.
+    #[test]
+    fn the_fake_chip_loses_what_is_sent_while_it_is_busy() {
+        let mut tiny = Tiny::new();
+        tiny.flash.fill(0x42);
+        tiny.erase_time = Duration::from_millis(50);
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        p.nvm_command(NVM_CHIP_ERASE).unwrap();
+        assert_ne!(p.lds(map::NVMCTRL_STATUS).unwrap() & NVM_FBUSY, 0);
+
+        // A page sent without waiting goes nowhere.
+        p.st_ptr(map::FLASH).unwrap();
+        p.send(&[SYNC, ST | PTR_INC | DATA_8, 0x12]).unwrap();
+        p.ack().unwrap();
+        p.nvm_command(NVM_PAGE_WRITE).unwrap();
+        assert_eq!(p.wire.lost_while_busy, 2, "the byte and the command");
+        assert_eq!(p.wire.page_writes, 0);
+
+        // After the wait the same page is written.
+        p.wait_nvm().unwrap();
+        p.write_page(map::FLASH, &[0x12], NVM_PAGE_WRITE).unwrap();
+        assert_eq!(p.read(map::FLASH, 2).unwrap(), [0x12, 0xFF]);
+        assert_eq!(p.wire.lost_while_busy, 2);
+    }
+
+    #[test]
+    fn a_chip_that_never_stops_being_busy_times_out_with_an_error() {
+        // The quickest adapter `wait_nvm`'s notes allow for, which still has
+        // to give the chip a second.
+        let mut tiny = with_contents(Tiny::new());
+        tiny.erase_time = Duration::MAX;
+        tiny.round_trip = Duration::from_micros(100);
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        let before = p.wire.elapsed;
+        let err = p.erase_and_write_flash(&[0x12; 200]).unwrap_err();
+        assert_eq!(err, "timed out waiting for the NVM controller");
+        let waited = p.wire.elapsed.checked_sub(before).unwrap();
+        assert!(waited >= Duration::from_secs(1), "gave up after {waited:?}");
+
+        // It stopped there, so no page went out, and it can still leave.
+        let tiny = p.leave().unwrap();
+        assert_eq!(tiny.page_writes, 0);
+        assert_eq!(tiny.lost_while_busy, 0);
+        assert!(tiny.updi_disabled, "UPDI was left on");
+    }
+
+    #[test]
+    fn a_write_error_is_reported_and_stops_the_flash() {
+        let (image, _) = images();
+        let mut tiny = Tiny::new();
+        tiny.write_error_at = Some(3);
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        let err = p.erase_and_write_flash(&image).unwrap_err();
+        assert_eq!(err, "the NVM controller reported a write error");
+
+        // Three pages went in, the fourth failed, and the other twelve were
+        // never sent.
+        let tiny = p.leave().unwrap();
+        assert_eq!(tiny.page_writes, 3);
+        let written = 3 * map::FLASH_PAGE;
+        assert_eq!(&tiny.flash[..written], &image[..written]);
+        assert!(tiny.flash[written..].iter().all(|&b| b == 0xFF));
+        assert_eq!(tiny.lost_while_busy, 0);
+    }
+
+    #[test]
+    fn a_write_error_in_eeprom_is_reported_too() {
+        let (_, eeprom) = images();
+        let mut tiny = Tiny::new();
+        tiny.write_error_at = Some(0);
+        let mut p = Programmer::connect_for_programming(tiny).unwrap();
+        let err = p.write(map::EEPROM, map::EEPROM_PAGE, &eeprom).unwrap_err();
+        assert_eq!(err, "the NVM controller reported a write error");
+        assert_eq!(p.wire.page_erase_writes, 0);
+    }
+
     /// A pretend ATtiny1616 on the far end of the wire, enough to exercise
     /// the instruction framing, the ACK rules and the NVM controller. It's
     /// written from the same datasheet as the programmer, so it catches
@@ -1145,10 +1472,51 @@ pub(crate) mod tests {
             pub eesave: bool,
             /// A chip erase that silently does nothing.
             pub ignores_chip_erase: bool,
-            /// Plain page writes (PAGEWRITE).
+            /// Plain page writes (PAGEWRITE) that were carried out.
             pub page_writes: usize,
-            /// Page erase-writes (PAGEERASEWRITE).
+            /// Page erase-writes (PAGEERASEWRITE) that were carried out.
             pub page_erase_writes: usize,
+            /// What STATUSA reads. The UPDI revision is in its high nibble,
+            /// so nothing with UPDI in it reads 0 there.
+            pub statusa: u8,
+            /// A chip that doesn't take the NVM programming key, so
+            /// ASI_KEY_STATUS never shows it. Nothing here says why a real
+            /// one wouldn't.
+            pub ignores_key: bool,
+            /// What ASI_SYS_STATUS reads once the chip's been through a
+            /// reset, in place of what its state says. Nothing says a real
+            /// chip reads any of these. It's for showing the programmer
+            /// each reading it should refuse, such as one that's unlocked
+            /// and never in programming mode.
+            pub sys_status_after_reset: Option<u8>,
+            /// How long a plain page write keeps the NVM controller busy.
+            /// The default is the datasheet's typical time, as the notes on
+            /// the programmer's `wait_nvm` have it. `Duration::MAX` is a
+            /// controller that never finishes.
+            pub write_time: Duration,
+            /// The same for a page erase-write and a chip erase.
+            pub erase_time: Duration,
+            /// Reads of NVMCTRL.STATUS that came back busy.
+            pub busy_polls: usize,
+            /// NVM commands and page buffer bytes that arrived while the
+            /// controller was busy. pymcuprog waits for the busy flags to
+            /// clear before each command, and what a real chip does with
+            /// one sent early is unconfirmed. This one drops them, so the
+            /// memory ends up wrong, and counts them here.
+            pub lost_while_busy: usize,
+            /// Which commit of the page buffer fails with WRERROR, counting
+            /// page writes and page erase-writes together from 0. The page
+            /// isn't written. Nothing here models what makes a real
+            /// controller report one.
+            pub write_error_at: Option<usize>,
+            /// Page writes and page erase-writes so far, the failed one too.
+            commits: usize,
+            /// NVMCTRL.STATUS's WRERROR.
+            write_error: bool,
+            /// The busy flags NVMCTRL.STATUS has up, until `busy_until` on
+            /// the fake clock.
+            busy: u8,
+            busy_until: Duration,
             expect: Expect,
             replies: VecDeque<u8>,
             ctrla: u8,
@@ -1187,6 +1555,18 @@ pub(crate) mod tests {
                     ignores_chip_erase: false,
                     page_writes: 0,
                     page_erase_writes: 0,
+                    statusa: 0x30, // UPDI revision 3
+                    ignores_key: false,
+                    sys_status_after_reset: None,
+                    write_time: Duration::from_millis(2),
+                    erase_time: Duration::from_millis(4),
+                    busy_polls: 0,
+                    lost_while_busy: 0,
+                    write_error_at: None,
+                    commits: 0,
+                    write_error: false,
+                    busy: 0,
+                    busy_until: Duration::ZERO,
                     expect: Expect::Sync,
                     replies: VecDeque::new(),
                     ctrla: 0,
@@ -1216,7 +1596,7 @@ pub(crate) mod tests {
                             Expect::Key(key)
                         } else {
                             key.reverse();
-                            if key == KEY_NVMPROG {
+                            if key == KEY_NVMPROG && !self.ignores_key {
                                 self.key_status |= KEY_STATUS_NVMPROG;
                             }
                             Expect::Sync
@@ -1313,8 +1693,12 @@ pub(crate) mod tests {
             }
 
             fn ldcs(&self, reg: u8) -> u8 {
+                match (reg, self.sys_status_after_reset) {
+                    (ASI_SYS_STATUS, Some(status)) if self.resets > 0 => return status,
+                    _ => {}
+                }
                 match reg {
-                    CS_STATUSA => 0x30, // UPDI revision 3
+                    CS_STATUSA => self.statusa,
                     ASI_KEY_STATUS => self.key_status,
                     ASI_SYS_STATUS if self.elapsed < self.started_at => SYS_STATUS_LOCKSTATUS,
                     ASI_SYS_STATUS => {
@@ -1357,8 +1741,25 @@ pub(crate) mod tests {
                 }
             }
 
-            fn load(&self, addr: u16) -> u8 {
+            /// Whether an erase or a write is still going on.
+            fn is_busy(&self) -> bool {
+                self.elapsed < self.busy_until
+            }
+
+            /// NVMCTRL.STATUS, counting the reads that find it busy.
+            fn nvm_status(&mut self) -> u8 {
+                let error = if self.write_error { NVM_WRERROR } else { 0 };
+                if self.is_busy() {
+                    self.busy_polls += 1;
+                    self.busy | error
+                } else {
+                    error
+                }
+            }
+
+            fn load(&mut self, addr: u16) -> u8 {
                 match addr {
+                    map::NVMCTRL_STATUS => self.nvm_status(),
                     map::FLASH..=FLASH_END => self.flash[usize::from(addr - map::FLASH)],
                     map::EEPROM..=EEPROM_END => self.eeprom[usize::from(addr - map::EEPROM)],
                     map::SIGNATURE..=SIGNATURE_END => {
@@ -1377,6 +1778,9 @@ pub(crate) mod tests {
                 );
                 match addr {
                     map::NVMCTRL_CTRLA => self.nvm(value),
+                    map::FLASH..=FLASH_END | map::EEPROM..=EEPROM_END if self.is_busy() => {
+                        self.lost_while_busy += 1;
+                    }
                     map::FLASH..=FLASH_END | map::EEPROM..=EEPROM_END => {
                         let (_, page) = region(addr);
                         self.page_addr = Some(addr - addr % page as u16);
@@ -1387,7 +1791,22 @@ pub(crate) mod tests {
                 }
             }
 
+            /// Raises `flags` in NVMCTRL.STATUS for the next `time` of the
+            /// fake clock.
+            fn start(&mut self, flags: u8, time: Duration) {
+                self.busy = flags;
+                self.busy_until = self.elapsed.saturating_add(time);
+            }
+
             fn nvm(&mut self, command: u8) {
+                if self.is_busy() {
+                    self.lost_while_busy += 1;
+                    return;
+                }
+                // WRERROR is about the last operation, so the next one
+                // starts without it. Which commands clear it on a real chip
+                // is unconfirmed.
+                self.write_error = false;
                 match command {
                     NVM_PAGE_BUFFER_CLEAR => {
                         self.page_buffer.fill(0xFF);
@@ -1397,6 +1816,24 @@ pub(crate) mod tests {
                     NVM_PAGE_WRITE | NVM_PAGE_ERASE_WRITE => {
                         let addr = self.page_addr.take().expect("a page to write");
                         let (base, page) = region(addr);
+                        let commit = self.commits;
+                        self.commits += 1;
+                        if self.write_error_at == Some(commit) {
+                            self.write_error = true;
+                            return;
+                        }
+                        // FBUSY for flash and EEBUSY for EEPROM.
+                        let flag = if base == map::FLASH {
+                            NVM_FBUSY
+                        } else {
+                            NVM_EEBUSY
+                        };
+                        let time = if command == NVM_PAGE_WRITE {
+                            self.write_time
+                        } else {
+                            self.erase_time
+                        };
+                        self.start(flag, time);
                         let mem = if base == map::FLASH {
                             &mut self.flash
                         } else {
@@ -1427,6 +1864,9 @@ pub(crate) mod tests {
                     }
                     NVM_CHIP_ERASE if self.ignores_chip_erase => {}
                     NVM_CHIP_ERASE => {
+                        // It erases both memories, so both flags go up here.
+                        // Which a real chip raises is unconfirmed.
+                        self.start(NVM_FBUSY | NVM_EEBUSY, self.erase_time);
                         self.flash.fill(0xFF);
                         if !self.eesave {
                             self.eeprom.fill(0xFF);
