@@ -61,13 +61,15 @@ impl Torch {
             }
         }
         let before = self.limits.health();
+        let lit = self.level() > 0;
         if !self.resting() && self.limits.tick(self.ui.output_level(), adc).off {
             self.ui.off();
         }
         // Say why, from the moment it's decided, through any fade, and for a
-        // while after the light's out.
+        // while after the light's out. That while is counted from the first
+        // dark tick, the one after the last it was lit, however it went out.
         let health = self.limits.health();
-        if health != Health::Good && (before == Health::Good || self.level() > 0) {
+        if health != Health::Good && (before == Health::Good || lit) {
             self.showing = SHOW_TICKS;
         }
         // Checked again, so a pass that turns the light off has already
@@ -417,7 +419,7 @@ mod tests {
     }
 
     /// The three seconds start again on every tick of the fade, so they run
-    /// from the last tick the light was lit and not from the tick the fault
+    /// from the first tick the light's out and not from the tick the fault
     /// was decided, which is most of two seconds earlier from the top.
     #[test]
     fn a_fault_that_fades_out_shows_white_for_the_three_seconds_after() {
@@ -434,9 +436,9 @@ mod tests {
             fade += 1;
         }
         assert!(fade > TICKS_PER_SECOND, "a fade of {fade} ticks");
-        // That tick was the first with the light out, so the one before it
-        // was the last to start the three seconds.
-        for tick in 2..SHOW_TICKS {
+        // That tick was the first with the light out, which is where the
+        // three seconds count from.
+        for tick in 1..SHOW_TICKS {
             assert_eq!(torch.aux(), Aux::White, "tick {tick}");
             torch.tick(false);
         }
@@ -459,7 +461,7 @@ mod tests {
         assert!(torch.level() > 0, "still fading when the click counts");
         assert_eq!(torch.tick(false), Some(Event::Click(1)));
         assert_eq!(torch.level(), 0);
-        for tick in 2..SHOW_TICKS {
+        for tick in 1..SHOW_TICKS {
             assert_eq!(torch.aux(), Aux::White, "tick {tick}");
             torch.tick(false);
         }
@@ -775,7 +777,7 @@ mod tests {
                 check!(t, health != Health::Good, "off with nothing wrong");
                 model.mode = Mode::Off;
             }
-            if health != Health::Good && (health_before == Health::Good || level > 0) {
+            if health != Health::Good && (health_before == Health::Good || level_before > 0) {
                 model.dark_at = t + u32::from(SHOW_TICKS);
             }
             check!(t, rig.torch.ui.mode() == model.mode, "{model:?}");
@@ -793,7 +795,6 @@ mod tests {
             check!(t, !failed || level == 0, "lit after a failed check");
             let moved = level.abs_diff(level_before);
             let click = event == Some(Event::Click(1));
-            let hold = matches!(event, Some(Event::Hold { .. }));
             if level_before == 0 && level > 0 {
                 check!(t, click, "on without a click: {event:?}");
                 check!(t, health_before == Health::Good, "{health_before:?}");
@@ -807,8 +808,9 @@ mod tests {
                     "went out with nothing wrong and no click"
                 );
             } else {
-                // The ramp moves a level a tick, and so does each ceiling.
-                check!(t, moved <= 1 + u8::from(hold), "{level_before} to {level}");
+                // A level a tick at most, even when the ramp and a ceiling
+                // are both on their way down.
+                check!(t, moved <= 1, "{level_before} to {level}");
             }
 
             // What's wrong.
@@ -842,7 +844,7 @@ mod tests {
                 if level > 0 {
                     check!(t, moved == 1, "{level_before} to {level}");
                 } else if level_before > 0 {
-                    check!(t, click || level_before <= 2, "out from {level_before}");
+                    check!(t, click || level_before == 1, "out from {level_before}");
                     seen.clicked_off_mid_fade += u32::from(click);
                 }
             }

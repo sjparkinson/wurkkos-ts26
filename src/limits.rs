@@ -131,12 +131,16 @@ impl Limits {
         self.on = on;
         // The level the light's at this tick, before the ceilings move. It's
         // last tick's level while the UI holds steady, and the UI's on the
-        // tick it turns on.
+        // tick it turns on. On a tick the UI ramps down it's still last
+        // tick's, the higher of the two, so a ceiling pulled down to it and
+        // then stepped lands where the UI already is. Otherwise the ramp's
+        // level and the ceiling's would both come off in the one tick.
         let ui = ui.min(CEILING);
         let level = match on {
             true => ui
                 .min(self.thermal.ceiling())
-                .min(self.protection.ceiling()),
+                .min(self.protection.ceiling())
+                .max(self.level),
             false => 0,
         };
 
@@ -166,8 +170,10 @@ impl Limits {
         let thermal = self.thermal.tick();
         let battery = self.protection.tick();
         // A fault with the light out keeps it out, and one with it lit lets
-        // the battery ceiling fade it to the bottom first.
-        let fault = self.fault && (self.level == 0 || battery <= 1);
+        // the battery ceiling fade it to the bottom first. Level 1 gets its
+        // tick like every level above it, so it's last tick's level that
+        // decides.
+        let fault = self.fault && self.level <= 1;
         let off = on && (fault || self.protection.flat());
         self.level = if on && !off {
             ui.min(thermal).min(battery)
@@ -431,10 +437,12 @@ mod tests {
             assert_eq!(run.offs, 1, "{garbage}");
             assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
             let lit: Vec<u8> = run.levels.iter().copied().filter(|&l| l > 0).collect();
-            // Out as the ceiling reaches 1, so 2 is the last lit.
-            for level in 2..CEILING {
+            // Every level gets its tick, level 1 included, and that's the
+            // last lit.
+            for level in 1..CEILING {
                 assert!(lit.contains(&level), "{garbage}: faded through {level}");
             }
+            assert_eq!(lit.last(), Some(&1), "{garbage}");
             // It stays a fault with good readings, on or off.
             run.adc.voltage = voltage_reading(380);
             run.secs(10);
@@ -443,6 +451,32 @@ mod tests {
             assert_eq!(run.offs, 2, "{garbage}");
             assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
         }
+    }
+
+    /// The UI's ramp takes a level a tick and so does a fading ceiling. On a
+    /// tick with both, the light still moves one level and not two.
+    #[test]
+    fn ramping_down_through_a_fade_still_moves_a_level_a_tick() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.secs(2);
+        run.adc.voltage = 0;
+        while run.limits.health() == Health::Good {
+            run.tick();
+        }
+        let mut last = run.limits.level();
+        assert_eq!(last, CEILING - 1, "the fade's first step");
+        // The ramp starts on the tick after the fault's decided, and stops
+        // half-way, so the ceiling's seen leading, level and trailing.
+        while last > 0 {
+            if run.ui > CEILING / 2 {
+                run.ui -= 1;
+            }
+            let level = run.tick();
+            assert_eq!(level, last - 1, "from {last} with the UI at {}", run.ui);
+            last = level;
+        }
+        assert_eq!(run.offs, 1);
     }
 
     #[test]

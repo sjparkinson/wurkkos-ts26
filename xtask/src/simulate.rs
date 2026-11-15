@@ -391,13 +391,14 @@ mod tests {
     fn a_cell_it_cant_read_fades_it_out_for_good() {
         let run = script("cell:0V 1C wait:5s");
         assert_eq!(run.level, 0);
-        // The log says so, after the fade, with nothing clicked to explain it.
-        let [.., fade, off] = &run.lines[..] else {
+        // The log says so, as one fade all the way out, level 1 included,
+        // with nothing clicked to explain it.
+        let [.., fade] = &run.lines[..] else {
             panic!("{:#?}", run.lines)
         };
-        assert!(fade.contains("fade from"), "{fade}");
-        let (_, event) = off.split_once(" s ").unwrap();
-        assert_eq!(event.trim_start(), "→ off", "{off}");
+        let (_, event) = fade.split_once(" s ").unwrap();
+        assert!(event.trim_start().starts_with("fade from "), "{fade}");
+        assert!(event.contains(" → off over "), "{fade}");
         assert_eq!(script("cell:0V 1C wait:5s cell:3.8V 1C").level, 0);
     }
 
