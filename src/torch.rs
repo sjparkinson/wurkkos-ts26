@@ -377,6 +377,95 @@ mod tests {
         assert_eq!(torch.level(), 0);
     }
 
+    /// docs/ui.md says three seconds, so this counts them in ticks of the
+    /// 64 Hz clock rather than in [`SHOW_TICKS`].
+    #[test]
+    fn the_aux_says_why_for_three_seconds_to_the_tick() {
+        const THREE_SECONDS: u16 = 3 * 64;
+        assert_eq!(TICKS_PER_SECOND, 64);
+        // From power-on, with a failed check.
+        let mut torch = Rig::new(Faults {
+            hang: true,
+            ..Faults::NONE
+        });
+        for tick in 1..THREE_SECONDS {
+            torch.tick(false);
+            assert_eq!(torch.aux(), Aux::White, "tick {tick}");
+        }
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off);
+        // From a click on a flat cell, counted from the tick the click
+        // counts.
+        let mut torch = Rig::default();
+        click(&mut torch);
+        torch.adc.voltage = voltage_reading(280);
+        run(&mut torch, false, 20 * TICKS_PER_SECOND);
+        assert_eq!(torch.aux(), Aux::Off);
+        run(&mut torch, true, 4);
+        run(&mut torch, false, RELEASE_TICKS);
+        assert_eq!(torch.aux(), Aux::Off, "not before the click counts");
+        assert_eq!(torch.tick(false), Some(Event::Click(1)));
+        assert_eq!(torch.aux(), Aux::Yellow);
+        for tick in 1..THREE_SECONDS {
+            torch.tick(false);
+            assert_eq!(torch.aux(), Aux::Yellow, "tick {tick}");
+        }
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off);
+    }
+
+    /// The three seconds start again on every tick of the fade, so they run
+    /// from the last tick the light was lit and not from the tick the fault
+    /// was decided, which is most of two seconds earlier from the top.
+    #[test]
+    fn a_fault_that_fades_out_shows_white_for_the_three_seconds_after() {
+        let mut torch = Rig::default();
+        at_the_top(&mut torch);
+        torch.adc.voltage = 0;
+        while torch.torch.limits.health() == Health::Good {
+            torch.tick(false);
+        }
+        let mut fade = 0;
+        while torch.level() != 0 {
+            assert_eq!(torch.aux(), Aux::Off, "out while the main LED's lit");
+            torch.tick(false);
+            fade += 1;
+        }
+        assert!(fade > TICKS_PER_SECOND, "a fade of {fade} ticks");
+        // That tick was the first with the light out, so the one before it
+        // was the last to start the three seconds.
+        for tick in 2..SHOW_TICKS {
+            assert_eq!(torch.aux(), Aux::White, "tick {tick}");
+            torch.tick(false);
+        }
+        assert_eq!(torch.aux(), Aux::White);
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off);
+    }
+
+    #[test]
+    fn a_fault_clicked_off_mid_fade_shows_white_for_the_three_seconds_after() {
+        let mut torch = Rig::default();
+        at_the_top(&mut torch);
+        torch.adc.voltage = 0;
+        while torch.torch.limits.health() == Health::Good {
+            torch.tick(false);
+        }
+        run(&mut torch, false, TICKS_PER_SECOND);
+        run(&mut torch, true, 4);
+        run(&mut torch, false, RELEASE_TICKS);
+        assert!(torch.level() > 0, "still fading when the click counts");
+        assert_eq!(torch.tick(false), Some(Event::Click(1)));
+        assert_eq!(torch.level(), 0);
+        for tick in 2..SHOW_TICKS {
+            assert_eq!(torch.aux(), Aux::White, "tick {tick}");
+            torch.tick(false);
+        }
+        assert_eq!(torch.aux(), Aux::White);
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off);
+    }
+
     #[test]
     fn heat_lowers_the_light_and_leaves_the_ui_where_it_was() {
         let mut torch = Rig::default();
