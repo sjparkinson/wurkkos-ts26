@@ -111,7 +111,7 @@
 //!    the deadline, and the chip then stop for good in power-down
 //!    (`oscillator_stops`). A tick lost with the oscillator still running ends
 //!    in a watchdog reset instead, which can't run here.
-//! 5. An ADC that never finishes a conversion, from a click to five minutes
+//! 5. An ADC that never finishes a conversion, from a click to ten seconds
 //!    later, when the light has to be off (`adc_never_answers`). Then twenty
 //!    thousand ticks with the switch held down from the first (`switch_stuck`).
 //! 6. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
@@ -571,19 +571,26 @@ fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     lit(&mut sim, 2 * TICKS_PER_SECOND, report)
 }
 
-/// A click from off, then five minutes with the switch alone, and the ADC
+/// A click from off, then ten seconds with the switch alone, then another
+/// click, and the ADC
 /// never finishing a conversion (`Scene::adc_dead`), so `hw::adc_result` only
 /// ever sees RESRDY clear. docs/ui.md's `cell:0V` rows are the same path seen
-/// as a garbage reading, where this is silence. The light has to settle at
-/// `limits::FAULT_CEILING` within a few seconds and go out at five minutes,
-/// the firmware and the library in step the whole way.
+/// as a garbage reading, where this is silence. The light has to come on,
+/// then fade out within a few seconds as a fault and stay out, the second
+/// click included, the firmware
+/// and the library in step the whole way.
 ///
 /// `in_step` only hands back the last level, so a second rig, fed the same
 /// samples, keeps the one at each tick.
 fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
-    use ts26::limits::FAULT_CEILING;
     let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
-    let script = [Action::Clicks(1), Action::Wait(301 * TICKS_PER_SECOND)];
+    // The second click, after the fault, has to light nothing.
+    let script = [
+        Action::Clicks(1),
+        Action::Wait(10 * TICKS_PER_SECOND),
+        Action::Clicks(1),
+        Action::Wait(2 * TICKS_PER_SECOND),
+    ];
     let levels = std::cell::RefCell::new(Vec::new());
     let mut shadow = Rig::default();
     let samples = testing::samples(script).map(|sample| {
@@ -608,14 +615,13 @@ fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
         .iter()
         .position(|&level| level > 0)
         .ok_or("the light never came on")?;
-    // A few readings may go before the ceiling comes down.
-    let settled = lit + seconds(3);
-    let capped = levels.get(settled..seconds(299));
-    if !capped.is_some_and(|l| !l.is_empty() && l.iter().all(|&l| l == FAULT_CEILING)) {
+    // A second of readings goes before the fault, then a fade from the level
+    // it came on at, a level a tick.
+    let out = lit + seconds(4);
+    if !levels.get(out..).is_some_and(|l| l.iter().all(|&l| l == 0)) {
         return Err(format!(
-            "the light isn't held at level {FAULT_CEILING} from 3 s after it came on until \
-             299 s ({:?} at {settled})",
-            levels.get(settled)
+            "the light isn't out and staying out from 4 s after it came on ({:?} at {out})",
+            levels.get(out)
         ));
     }
     Ok(())
@@ -623,7 +629,7 @@ fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
 
 /// The switch pressed from the first tick and never let go, for about five
 /// minutes of ticks, firmware and library in step. A jammed button is a hold
-/// from off, so the light has to sit at `ui::FLOOR` and nothing else.
+/// from off, which does nothing, so the light has to stay off.
 fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     let samples = iter::repeat_n(
         Sample {
@@ -633,11 +639,8 @@ fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
         20_000,
     );
     let end = in_step(&mut sim, samples, report)?;
-    if end != Some(ts26::ui::FLOOR) {
-        return Err(format!(
-            "ends at level {end:?}, not the floor, {}",
-            ts26::ui::FLOOR
-        ));
+    if end != Some(0) {
+        return Err(format!("ends at level {end:?}, not off"));
     }
     Ok(())
 }

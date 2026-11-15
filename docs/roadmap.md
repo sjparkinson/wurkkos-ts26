@@ -23,10 +23,10 @@ A tick here means the firmware does it and it runs on the simulator. Nothing bel
 - [x] Sleep when off, in power-down, with PB2 low first. Firmware only. The PIT wakes it every tick and the loop samples PA5. On the tick after a watchdog feed it idles instead, because the datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped
 - [ ] Test power-down straight after a feed on a real light (T4 in [breakout.md](breakout.md#test-builds)), then drop that idle if a resting torch doesn't reset. It costs about 0.37 mA at 3 V and about 0.6 mA on a full cell, a third of the datasheet's typical idle current since one tick in three idles, so this isn't fit for a drawer until then
 - [ ] Battery voltage through the divider on PA1 (AIN1), not VCC. The firmware reads it with the stock firmware's slope of 1094. Still needs checking against a multimeter
-- [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge. A cell it can't read holds the light at level 50 and turns it off after five minutes
+- [x] Low-voltage protection. Firmware only, and every threshold's unmeasured. The Wurkkos 21700 is unprotected, so the firmware's the only thing between it and over-discharge. A flat cell keeps the light off until a reading with it off says the cell's charged, and a cell it can't read is a fault
 - [x] Thermal regulation from the internal temperature sensor. Firmware only, and every constant's unmeasured. `ramp::CEILING` holds the light at level 120 until it's been run on a real light
 - [x] A watchdog, so a hang can't leave the boost converter running. Firmware only, with a plain window and no proof at power-on, so it's only been seen to bite on the breakout (docs/breakout.md 0.13), never on a torch. The simulator can't show that either, since it doesn't model resets. The watchdog shares the tick's oscillator, so a tick that stops while the light's on has its own deadline, a count of PWM cycles, which turns the light off and powers down for good
-- [x] Check flash against its CRC, and read the fuses back, at power-on. Firmware only. A failure, or a watchdog reset, caps the light at level 50. Neither check has seen a real chip
+- [x] Check flash against its CRC, and read the fuses back, at power-on. Firmware only. A failure, or a watchdog reset, keeps the light off until the cell comes out, with the aux white after a press. Neither check has seen a real chip
 
 ## Safety evidence
 
@@ -44,7 +44,8 @@ What covers each hazard, and how well, is in [safety.md](safety.md). These are t
 
 - [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on this firmware's own curve
 - [x] The RGB aux LEDs on PC1 to PC3. Firmware only
-- [x] Remember the level in RAM, which a cell swap or any reset loses. Firmware only
+- ~~Remember the level in RAM~~ Struck. Every click on starts at level 52, and there's no turbo (docs/ui.md)
+- [x] A simpler UI. 1C on and off, 1H and 2H ramp, 3C lockout that never lights, and yellow or white on the aux for a flat cell or a fault. Firmware only
 - [x] A simulator. `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
 - ~~Battery check~~ Struck. No magic flashes, so no 3C voltage blink (docs/ui.md)
 

@@ -11,11 +11,12 @@ use crate::ramp::CEILING;
 /// 13 is the first at 36 or over. Unmeasured.
 pub const FLOOR: u8 = 13;
 
-/// Where a fresh torch starts when you click it on, a duty of about 10 of 255.
-pub const DEFAULT_LEVEL: u8 = 52;
+/// Where every click on starts, a duty of about 10 of 255. Nothing's
+/// remembered, so it's this every time.
+pub const ON_LEVEL: u8 = 52;
 
-// The top of the UI's ramp, and turbo, is [`CEILING`].
-const _: () = assert!(FLOOR >= 1 && FLOOR < DEFAULT_LEVEL && DEFAULT_LEVEL < CEILING);
+// The top of the UI's ramp is [`CEILING`].
+const _: () = assert!(FLOOR >= 1 && FLOOR < ON_LEVEL && ON_LEVEL < CEILING);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -24,30 +25,29 @@ pub enum Mode {
     Lockout,
 }
 
-/// What the aux LEDs on PC1 to PC3 should be doing. Any colour is dim and
-/// steady, so they never report anything by flashing.
+/// What the aux LEDs on PC1 to PC3 should be doing.
+///
+/// Any colour is dim and steady, so they never report anything by flashing.
+/// The channels are separate emitters that don't blend well, so the two
+/// states a glance most needs, off and lockout, get one channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aux {
     Off,
+    /// Off, and nothing wrong.
     Blue,
+    /// Locked out.
     Red,
+    /// The cell's flat. Red and green, the usual low-battery warning.
+    Yellow,
+    /// A fault, which nothing short of a cell swap clears. All three.
+    White,
 }
 
 #[derive(Clone, Debug)]
 pub struct Ui {
     mode: Mode,
-    /// The level it's at while on, and the one to come back on at otherwise,
-    /// since [`Ui::off`] is the only way from on to off and leaves it be.
-    /// RAM only, since the torch sleeps rather than losing power, so this
-    /// outlasts sleep and never needs EEPROM. A reset or a cell swap loses it.
+    /// The level it's at while on. Every click on starts it at [`ON_LEVEL`].
     level: u8,
-    /// The level to drop back to when leaving turbo.
-    before_turbo: u8,
-    /// Set when a hold switched the light on, so that the same hold doesn't
-    /// go on to ramp. Cleared on release.
-    swallow_hold: bool,
-    /// Holding the switch in lockout for a momentary light.
-    momentary: bool,
 }
 
 impl Default for Ui {
@@ -60,10 +60,7 @@ impl Ui {
     pub const fn new() -> Self {
         Self {
             mode: Mode::Off,
-            level: DEFAULT_LEVEL,
-            before_turbo: DEFAULT_LEVEL,
-            swallow_hold: false,
-            momentary: false,
+            level: ON_LEVEL,
         }
     }
 
@@ -75,7 +72,6 @@ impl Ui {
     pub const fn output_level(&self) -> u8 {
         match self.mode {
             Mode::On => self.level,
-            Mode::Lockout if self.momentary => FLOOR,
             Mode::Off | Mode::Lockout => 0,
         }
     }
@@ -83,48 +79,21 @@ impl Ui {
     /// The aux LEDs give way to the main LED whenever it's lit.
     pub const fn aux(&self) -> Aux {
         match self.mode {
-            _ if self.output_level() > 0 => Aux::Off,
+            Mode::On => Aux::Off,
             Mode::Lockout => Aux::Red,
-            Mode::Off | Mode::On => Aux::Blue,
+            Mode::Off => Aux::Blue,
         }
     }
 
     pub fn handle(&mut self, event: Event) {
         match (self.mode, event) {
-            (_, Event::Release { .. }) => {
-                self.swallow_hold = false;
-                self.momentary = false;
+            (Mode::Off, Event::Click(1)) => {
+                self.mode = Mode::On;
+                self.level = ON_LEVEL;
             }
-
-            (Mode::Off, Event::Click(1)) => self.turn_on(self.level),
-            (Mode::Off, Event::Click(2)) => {
-                // With turbo remembered, this would leave 2C nowhere to go.
-                if self.level < CEILING {
-                    self.before_turbo = self.level;
-                }
-                self.turn_on(CEILING);
-            }
-            (Mode::Off, Event::Click(4)) => self.mode = Mode::Lockout,
-            // Only the hold's first tick, so a hold that's still going when
-            // `off` puts the light out can't light it again.
-            (
-                Mode::Off,
-                Event::Hold {
-                    clicks: 0,
-                    ticks: 0,
-                },
-            ) => {
-                self.turn_on(FLOOR);
-                self.swallow_hold = true;
-            }
+            (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
 
             (Mode::On, Event::Click(1)) => self.off(),
-            (Mode::On, Event::Click(2)) if self.level == CEILING => self.level = self.before_turbo,
-            (Mode::On, Event::Click(2)) => {
-                self.before_turbo = self.level;
-                self.level = CEILING;
-            }
-            (Mode::On, Event::Hold { .. }) if self.swallow_hold => {}
             (Mode::On, Event::Hold { clicks: 0, .. }) => {
                 self.level = self.level.saturating_add(1).min(CEILING);
             }
@@ -132,34 +101,18 @@ impl Ui {
                 self.level = self.level.saturating_sub(1).max(FLOOR);
             }
 
-            (Mode::Lockout, Event::Click(4)) => self.mode = Mode::Off,
-            // The first tick only, for the same reason as from off.
-            (
-                Mode::Lockout,
-                Event::Hold {
-                    clicks: 0,
-                    ticks: 0,
-                },
-            ) => self.momentary = true,
+            (Mode::Lockout, Event::Click(3)) => self.mode = Mode::Off,
 
             _ => {}
         }
     }
 
-    /// Puts the light out, whatever it was doing, remembering the level. This
-    /// is 1C, and it's also how low-voltage protection will turn the light
-    /// off. A locked torch stays locked.
+    /// Puts the light out. This is 1C, and it's also how low-voltage
+    /// protection turns the light off. A locked torch stays locked.
     pub const fn off(&mut self) {
-        match self.mode {
-            Mode::On => self.mode = Mode::Off,
-            Mode::Lockout => self.momentary = false,
-            Mode::Off => {}
+        if matches!(self.mode, Mode::On) {
+            self.mode = Mode::Off;
         }
-    }
-
-    const fn turn_on(&mut self, level: u8) {
-        self.mode = Mode::On;
-        self.level = level;
     }
 }
 
@@ -195,30 +148,37 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_torch_comes_on_at_a_duty_of_ten() {
-        assert_eq!(output(DEFAULT_LEVEL).dsm >> crate::ramp::DSM_BITS, 10);
+    fn it_comes_on_at_a_duty_of_ten() {
+        assert_eq!(output(ON_LEVEL).dsm >> crate::ramp::DSM_BITS, 10);
     }
 
     #[test]
-    fn click_on_and_off_remembers_the_level() {
+    fn click_on_and_off_forgets_the_level() {
         let mut ui = Ui::new();
         ui.handle(Event::Click(1));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL);
+        assert_eq!(ui.output_level(), ON_LEVEL);
         hold_for(&mut ui, 0, 10);
+        assert_eq!(ui.output_level(), ON_LEVEL + 10);
         ui.handle(Event::Click(1));
         assert_eq!(ui.output_level(), 0);
         ui.handle(Event::Click(1));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL + 10);
+        assert_eq!(ui.output_level(), ON_LEVEL);
     }
 
     #[test]
-    fn hold_from_off_is_the_floor_and_does_not_ramp() {
-        let mut ui = Ui::new();
-        hold_for(&mut ui, 0, 30);
-        assert_eq!(ui.mode(), Mode::On);
-        assert_eq!(ui.output_level(), FLOOR);
-        hold_for(&mut ui, 0, 3);
-        assert_eq!(ui.output_level(), FLOOR + 3);
+    fn off_answers_to_1c_and_3c_and_nothing_else() {
+        for event in [
+            Event::Click(2),
+            Event::Click(4),
+            Event::Click(5),
+            hold(0, 0),
+            hold(1, 0),
+            hold(2, 0),
+        ] {
+            let mut ui = Ui::new();
+            ui.handle(event);
+            assert_eq!(ui.mode(), Mode::Off, "{event:?}");
+        }
     }
 
     #[test]
@@ -232,60 +192,29 @@ mod tests {
     }
 
     #[test]
-    fn double_click_toggles_turbo() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEILING);
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL);
+    fn on_ignores_other_clicks() {
+        for clicks in [2, 3, 4, 5] {
+            let mut ui = Ui::new();
+            ui.handle(Event::Click(1));
+            ui.handle(Event::Click(clicks));
+            assert_eq!(ui.output_level(), ON_LEVEL, "{clicks}C");
+        }
     }
 
     #[test]
-    fn double_click_from_off_is_turbo() {
+    fn lockout_never_lights_and_3c_unlocks() {
         let mut ui = Ui::new();
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEILING);
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL);
-    }
-
-    #[test]
-    fn turbo_is_remembered_and_2c_still_has_somewhere_to_go() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(2));
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), CEILING);
-        ui.handle(Event::Click(2));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL);
-    }
-
-    #[test]
-    fn lockout_ignores_clicks_and_allows_a_momentary_light() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(4));
+        ui.handle(Event::Click(3));
         assert_eq!(ui.mode(), Mode::Lockout);
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(2));
+        for event in [Event::Click(1), Event::Click(2), Event::Click(4)] {
+            ui.handle(event);
+        }
+        hold_for(&mut ui, 0, 100);
+        hold_for(&mut ui, 1, 100);
+        assert_eq!(ui.mode(), Mode::Lockout);
         assert_eq!(ui.output_level(), 0);
-        ui.handle(hold(0, 0));
-        assert_eq!(ui.output_level(), FLOOR);
-        ui.handle(Event::Release { clicks: 0 });
-        assert_eq!(ui.output_level(), 0);
-        ui.handle(Event::Click(4));
+        ui.handle(Event::Click(3));
         assert_eq!(ui.mode(), Mode::Off);
-    }
-
-    #[test]
-    fn off_remembers_the_level_and_1c_still_turns_it_on() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        hold_for(&mut ui, 0, 10);
-        ui.off();
-        assert_eq!(ui.output_level(), 0);
-        ui.handle(Event::Click(1));
-        assert_eq!(ui.output_level(), DEFAULT_LEVEL + 10);
     }
 
     #[test]
@@ -296,20 +225,14 @@ mod tests {
         ui.off();
         ui.handle(hold(0, 1));
         assert_eq!(ui.output_level(), 0);
-        ui.handle(Event::Release { clicks: 0 });
-        ui.handle(hold(0, 0));
-        assert_eq!(ui.output_level(), FLOOR);
     }
 
     #[test]
     fn off_leaves_a_locked_torch_locked() {
         let mut ui = Ui::new();
-        ui.handle(Event::Click(4));
-        ui.handle(hold(0, 0));
+        ui.handle(Event::Click(3));
         ui.off();
-        ui.handle(hold(0, 1));
         assert_eq!(ui.mode(), Mode::Lockout);
-        assert_eq!(ui.output_level(), 0);
     }
 
     #[test]
@@ -319,11 +242,7 @@ mod tests {
         ui.handle(Event::Click(1));
         assert_eq!(ui.aux(), Aux::Off);
         ui.handle(Event::Click(1));
-        ui.handle(Event::Click(4));
-        assert_eq!(ui.aux(), Aux::Red);
-        ui.handle(hold(0, 0));
-        assert_eq!(ui.aux(), Aux::Off);
-        ui.handle(Event::Release { clicks: 0 });
+        ui.handle(Event::Click(3));
         assert_eq!(ui.aux(), Aux::Red);
     }
 }

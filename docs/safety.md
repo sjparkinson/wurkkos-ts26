@@ -29,25 +29,25 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Cause.** The loop stops, so PB2 stays high and the PWM carries on.
 
-**Mitigation.** `hw::start_watchdog` sets a 32-clock window and `watchdog::Feeder` says which passes feed it. A tick that stops while the light's on has its own deadline, `watchdog::TICK_DEADLINE_CYCLES` (2048 PWM cycles, about 104 ms), after which `main` calls `hw::halt`. The next boot after a bite is capped (`selftest::hung`).
+**Mitigation.** `hw::start_watchdog` sets a 32-clock window and `watchdog::Feeder` says which passes feed it. A tick that stops while the light's on has its own deadline, `watchdog::TICK_DEADLINE_CYCLES` (2048 PWM cycles, about 104 ms), after which `main` calls `hw::halt`. The next boot after a bite is a fault and won't light (`selftest::hung`).
 
 **Evidence.** Simulator `slow_ticks` runs every tick as slow as the datasheet allows, and `oscillator_stops` stops the 32 kHz oscillator with the light on. Tests `every_feed_lands_mid_window` and `the_tick_deadline_is_104_ms_against_ticks_of_306_cycles_or_460_at_worst` in src/watchdog.rs, and `a_feed_in_the_open_window_is_fine_and_a_closed_one_bites` and `a_stopped_oscillator_stops_the_pit_and_the_watchdog` in xtask/src/sim.rs. On the breakout, a build that stops feeding after a ten-second hold went out, and the next boot was capped at level 50 until a power cycle (breakout.md 0.13).
 
 **Status.** Simulator.
 
-**What's left.** Nobody has seen the watchdog bite on a torch, only on the breakout's chip (0.13). The simulator has no resets, so a bite is a failed run and what follows one never runs. The watchdog and the tick share an oscillator, which is why the deadline counts PWM cycles off the other one. [breakout.md](breakout.md) T4 is still open, so `main` idles on the tick after a feed and costs about 0.37 mA at 3 V, or about 0.6 mA at 4.2 V (a third of the typical idle current in DS40002204A table 36-4, interpolated between its 3 V and 5 V rows). A dead 32 kHz oscillator with the light off leaves the chip asleep with PB2 low, which is probably the safe state and nobody has seen.
+**What's left.** Nobody has seen the watchdog bite on a torch, only on the breakout's chip (0.13). Since a bite is a fault, one spurious bite, from a window that's off on a real chip for instance, leaves the torch dark until a cell swap, where it used to leave a dim light. That's the trade for never running on after a hang. The simulator has no resets, so a bite is a failed run and what follows one never runs. The watchdog and the tick share an oscillator, which is why the deadline counts PWM cycles off the other one. [breakout.md](breakout.md) T4 is still open, so `main` idles on the tick after a feed and costs about 0.37 mA at 3 V, or about 0.6 mA at 4.2 V (a third of the typical idle current in DS40002204A table 36-4, interpolated between its 3 V and 5 V rows). A dead 32 kHz oscillator with the light off leaves the chip asleep with PB2 low, which is probably the safe state and nobody has seen.
 
 ### H3. Over-discharge of an unprotected 21700
 
 **Cause.** The Wurkkos cell has no protection of its own, and the MP3432 pulls more current as the cell falls.
 
-**Mitigation.** `battery::Protection` steps the ceiling down below `battery::STEP_DOWN_BELOW` (3.00 V) and fades it down and off below `battery::OFF_BELOW` (2.90 V). A rest keeps the ceiling (`Protection::rest`). `battery::BLIND_SAMPLES` covers a cell it can't read (H12).
+**Mitigation.** `battery::Protection` steps the ceiling down below `battery::STEP_DOWN_BELOW` (3.00 V) and fades it down and off below `battery::OFF_BELOW` (2.90 V). A rest keeps the ceiling (`Protection::rest`). Turning off for a flat cell latches `Protection::flat`, and the light stays off until a reading with it off is `battery::CHARGED_AT` (3.60 V) or more, so clicking can't run a flat cell at level 1 again and again. The aux shows yellow for three seconds after a press, then goes dark, so it doesn't drain the cell either (`torch::SHOW_TICKS`). A cell it can't read is a fault (H12).
 
-**Evidence.** `a_low_cell_steps_down_gradually_then_turns_off` and `a_flat_cell_fades_down_the_ramp_before_it_turns_off` in src/limits.rs. In src/battery.rs, `steps_down_after_5_seconds_below_3_volts`, `a_second_below_2_9_volts_drops_a_big_step_rather_than_turning_off`, `turns_off_after_a_second_below_2_9_volts_at_level_1`, `a_long_rest_keeps_the_ceiling_and_forgets_the_filter`, and `every_reading_held_ends_where_the_thresholds_say`, which holds every reading the ADC can give. docs/ui.md's `cell:2.95V` and `cell:2.80V` rows, run by the simulator.
+**Evidence.** `a_low_cell_steps_down_gradually_then_turns_off`, `a_flat_cell_fades_down_the_ramp_before_it_turns_off` and `a_flat_cell_stays_off_until_it_reads_as_charged` in src/limits.rs. `a_flat_cell_turns_off_shows_yellow_and_ignores_clicks_until_charged` in src/torch.rs. `flat_stays_flat_until_a_reading_with_the_light_off_says_its_charged` in src/battery.rs. In src/battery.rs, `steps_down_after_5_seconds_below_3_volts`, `a_second_below_2_9_volts_drops_a_big_step_rather_than_turning_off`, `turns_off_after_a_second_below_2_9_volts_at_level_1`, `a_long_rest_keeps_the_ceiling_and_forgets_the_filter`, and `every_reading_held_ends_where_the_thresholds_say`, which holds every reading the ADC can give. docs/ui.md's `cell:2.95V` and `cell:2.80V` rows, run by the simulator.
 
 **Status.** Simulator.
 
-**What's left.** Every threshold is unmeasured. `battery::SLOPE` (1094) is the stock firmware's figure for another sample and hasn't been checked against a multimeter (7.2). The 2.7 V the MP3432 wants to start leaves little over the 2.90 V cut-off (7.3). Charging the cell down on purpose hasn't been done (7.1).
+**What's left.** Every threshold is unmeasured. `battery::SLOPE` (1094) is the stock firmware's figure for another sample and hasn't been checked against a multimeter (7.2). The 2.7 V the MP3432 wants to start leaves little over the 2.90 V cut-off (7.3). Charging the cell down on purpose hasn't been done (7.1). Nobody knows what a cell that's cut out at level 1 rests at, so 3.60 V as the sign of a charged cell is a guess, and it rests on one reading, since a press has time for no more. Too low and a flat cell lights again on a click, too high and a part-charged one stays dark.
 
 ### H4. Overheating
 
@@ -65,33 +65,33 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Cause.** A click on the switch under pressure.
 
-**Mitigation.** The 4C lockout (docs/ui.md). In lockout `ui::Ui` ignores clicks, and a hold lights level 13 for as long as it's held. The aux shows red.
+**Mitigation.** The 3C lockout (docs/ui.md). In lockout `ui::Ui` never lights, and answers only to 3C, which unlocks it. A hold from off does nothing either, so a switch pressed and held in a bag stays dark. The aux shows red.
 
-**Evidence.** `lockout_ignores_clicks_and_allows_a_momentary_light`, `off_leaves_a_locked_torch_locked` and `aux_is_blue_when_off_red_in_lockout_and_out_with_the_light_on` in src/ui.rs. `lockout_lights_at_the_floor_only_while_held` and `every_example_in_docs_ui_md_holds` in src/torch.rs. The Lockout rows of docs/ui.md, run by the simulator.
+**Evidence.** `lockout_never_lights_and_3c_unlocks`, `off_answers_to_1c_and_3c_and_nothing_else`, `off_leaves_a_locked_torch_locked` and `aux_is_blue_when_off_red_in_lockout_and_out_with_the_light_on` in src/ui.rs. `lockout_never_lights`, `a_switch_held_from_power_on_stays_off` and `every_example_in_docs_ui_md_holds` in src/torch.rs. The Lockout rows of docs/ui.md, run by the simulator.
 
 **Status.** Simulator.
 
-**What's left.** Nothing limits how long a lit light stays lit, so a light that's on in a bag runs until the cell or the heat stops it. Lockout lives in RAM, so a reset (a bite, or a cell swap) drops back to off, unlocked. Nobody's tried the switch's actual feel under pressure.
+**What's left.** Nothing limits how long a lit light stays lit, so a light that's on in a bag runs until the cell or the heat stops it. Lockout lives in RAM, so a cell swap drops back to off, unlocked (a bite is a fault, so that torch won't light anyway). 3C is fewer presses than the 4C it replaced, which makes an accidental unlock a little likelier, and nobody's tried the switch's actual feel under pressure.
 
 ### H6. Corrupt or half-written flash
 
 **Cause.** An interrupted or bad flash, or a bit that's flipped.
 
-**Mitigation.** `hw::flash_ok` runs CRCSCAN over all of flash at power-on and `selftest::Faults::flash` caps the light at `limits::FAULT_CEILING` (level 50). `crc::sign` puts a stamp of the commit just before the CRC in the last two bytes, so `backup` shows which build a torch has, and `cargo xtask hex` writes only that. `signed()` in xtask/src/main.rs makes `flash` refuse a full image whose CRC doesn't check.
+**Mitigation.** `hw::flash_ok` runs CRCSCAN over all of flash at power-on and `selftest::Faults::flash` is a fault, so the light won't come on (`limits::Health::Fault`) and the aux shows white after a press. `crc::sign` puts a stamp of the commit just before the CRC in the last two bytes, so `backup` shows which build a torch has, and `cargo xtask hex` writes only that. `signed()` in xtask/src/main.rs makes `flash` refuse a full image whose CRC doesn't check.
 
-**Evidence.** `the_scan_passes_a_signed_image_and_fails_a_changed_one` in xtask/src/sim.rs. In xtask/src/crc.rs, `matches_the_crc_16_ccitt_false_check_value`, `a_signed_image_fills_flash_and_ends_in_its_checksum` and `the_whole_of_a_signed_flash_checks_to_zero`. `flash_takes_only_a_signed_image` in xtask/src/main.rs. `a_failed_self_test_holds_the_fault_ceiling_for_good` in src/limits.rs. docs/ui.md's `flash:corrupt` row.
+**Evidence.** `the_scan_passes_a_signed_image_and_fails_a_changed_one` in xtask/src/sim.rs. In xtask/src/crc.rs, `matches_the_crc_16_ccitt_false_check_value`, `a_signed_image_fills_flash_and_ends_in_its_checksum` and `the_whole_of_a_signed_flash_checks_to_zero`. `flash_takes_only_a_signed_image` in xtask/src/main.rs. `a_failed_self_test_never_lights` and `random_readings_never_light_a_failed_self_test` in src/limits.rs. `a_fault_never_lights_and_shows_white_after_power_on_and_a_press` in src/torch.rs. docs/ui.md's `flash:corrupt` row.
 
 **Status.** Simulator.
 
-**What's left.** The scan and the CRC convention have only met the simulator's reading of the datasheet (6.1). The check only caps the light at level 50, it doesn't stop it. A flipped bit after power-on isn't noticed until the next power-on.
+**What's left.** The scan and the CRC convention have only met the simulator's reading of the datasheet (6.1). A flipped bit after power-on isn't noticed until the next power-on.
 
 ### H7. Wrong fuses
 
 **Cause.** A torch with a fuse the firmware's timings or its own protection don't expect.
 
-**Mitigation.** `selftest::Fuses::ok` checks `WDTCFG`, `OSCCFG` (frequency select and `OSCLOCK`), `SYSCFG0.RSTPINCFG`, `APPEND` and `BOOTEND`, with `hw::fuses` only ever reading them. A failure caps the light at level 50. Nothing in this repo writes a fuse.
+**Mitigation.** `selftest::Fuses::ok` checks `WDTCFG`, `OSCCFG` (frequency select and `OSCLOCK`), `SYSCFG0.RSTPINCFG`, `APPEND` and `BOOTEND`, with `hw::fuses` only ever reading them. A failure is a fault, so the light won't come on. Nothing in this repo writes a fuse.
 
-**Evidence.** `factory_fuses_pass`, `checks_fields_not_whole_bytes` and `each_wrong_field_fails` in src/selftest.rs. `only_a_fault_caps_the_light` in src/selftest.rs. docs/ui.md's `fault` row, run by the simulator. The check failed on the breakout's chip, whose `SYSCFG0` reads 0xFF (0.3), and the full firmware then held at level 50, though pin 14 was grounded at the time too, so that run can't separate the two causes (0.10).
+**Evidence.** `factory_fuses_pass`, `checks_fields_not_whole_bytes` and `each_wrong_field_fails` in src/selftest.rs. `only_a_fault_counts` in src/selftest.rs. docs/ui.md's `fault` row, run by the simulator. The check failed on the breakout's chip, whose `SYSCFG0` reads 0xFF (0.3), and the full firmware of the time then held at level 50, though pin 14 was grounded at the time too, so that run can't separate the two causes (0.10).
 
 **Status.** Simulator.
 
@@ -149,13 +149,13 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Cause.** A broken ADC, a shorted or open PA1, or a reading from a rest.
 
-**Mitigation.** `battery::plausible` (1.00 to 4.40 V) and `thermal::plausible` reject readings that can't be real. A few are let go and then each side lowers its own ceiling, the battery side to `limits::FAULT_CEILING` and the thermal side to its floor. With the light on, `battery::BLIND_SAMPLES` (five minutes) without one reading it can believe turns it off, and a click brings it back, still capped, for another five minutes.
+**Mitigation.** `battery::plausible` (1.00 to 4.40 V) and `thermal::plausible` reject readings that can't be real. `battery::GLITCHES` (three) are let go. After that a garbage voltage is `battery::Verdict::Blind`, which is a fault, so the light fades down the ramp and stays off until the cell comes out, with the aux white after a press. A garbage temperature drops the thermal ceiling to its floor and does no more.
 
-**Evidence.** `a_dead_adc_brings_both_ceilings_down`, `no_result_at_all_is_garbage_too`, `garbage_voltages_cap_it_at_the_fault_ceiling_then_turn_it_off_at_five_minutes`, `a_garbage_temperature_alone_never_turns_it_off` and `garbage_from_power_on_shows_nothing_from_off` in src/limits.rs. In src/battery.rs, `implausible_samples_never_reach_the_filter`, `a_second_of_garbage_drops_to_the_fault_ceiling` and `five_minutes_of_garbage_turns_it_off_and_not_a_sample_sooner`. In src/thermal.rs, `single_glitches_are_ignored`, `a_jump_that_lasts_is_believed` and `a_broken_sensor_steps_down_to_the_floor`. `a_result_with_no_conversion_started_is_ignored` in src/sensors.rs. docs/ui.md's `cell:0V` rows, and `adc_never_answers` (an ADC that never finishes a conversion), run by the simulator. The breakout ran the can't-read-the-cell path on a real chip with PA1 grounded, and it went off at five minutes (0.10). On the T5 build it did the same at level 50, came back capped on a click, and went back to 51% within seconds of the divider going back on (0.12a).
+**Evidence.** `a_dead_adc_is_a_fault`, `no_result_at_all_is_garbage_too`, `garbage_voltages_fade_it_out_and_latch_a_fault`, `garbage_voltages_with_the_light_off_are_a_fault_too`, `a_glitch_or_three_is_no_fault`, `a_garbage_temperature_alone_never_turns_it_off` and `garbage_from_power_on_shows_nothing_from_off` in src/limits.rs. `a_cell_it_cant_read_fades_it_out_and_shows_white` in src/torch.rs. In src/battery.rs, `implausible_samples_never_reach_the_filter` and `a_second_of_garbage_is_blind_on_or_off`. In src/thermal.rs, `single_glitches_are_ignored`, `a_jump_that_lasts_is_believed` and `a_broken_sensor_steps_down_to_the_floor`. `a_result_with_no_conversion_started_is_ignored` in src/sensors.rs. docs/ui.md's `cell:0V` rows, and `adc_never_answers` (an ADC that never finishes a conversion), run by the simulator. The breakout ran the old can't-read-the-cell path, capped at level 50 and off at five minutes, on a real chip with PA1 grounded (0.10, 0.12a). Nobody has run the fault that replaced it on a real chip.
 
 **Status.** Simulator.
 
-**What's left.** A reading that's plausible and frozen isn't detected, so a stuck ADC that shows a good voltage looks like a good cell. A garbage temperature never turns the light off, only holds it at the floor, which is a choice and unmeasured. Five minutes is a judgement. `a_plausible_voltage_that_never_changes_keeps_the_light_on` and `a_plausible_temperature_that_never_changes_never_steps_down` in src/limits.rs pin that gap down rather than close it.
+**What's left.** A reading that's plausible and frozen isn't detected, so a stuck ADC that shows a good voltage looks like a good cell. A garbage temperature never turns the light off, only holds it at the floor, which is a choice and unmeasured. A second of garbage voltages leaves the torch dark until a cell swap, so an ADC that misbehaves once costs the light, which is the trade for never running a cell blind. The top of `battery::PLAUSIBLE` sits close to a full cell. A 4.20 V cell has about 5 % to the ADC's top, and the 1.1 V reference alone is ±2 % in this torch's range and ±5 % over the chip's full one (DS40002204A table 36-23, characterised, not production tested), before the divider's tolerance and the 1094 calibration. A light that reads high could call a full cell garbage, and so a fault (breakout.md 7.8). `a_plausible_voltage_that_never_changes_keeps_the_light_on` and `a_plausible_temperature_that_never_changes_never_steps_down` in src/limits.rs pin that gap down rather than close it.
 
 ### H13. A wrong clock
 
@@ -173,7 +173,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 This is true of every hazard, so it's kept out of the sections above.
 
-- **Every threshold is unmeasured.** The cell's cut-offs, the temperature limit, the level 120 ceiling, the five minutes, the 104 ms and the fault ceiling are all from the stock firmware, the datasheet or the project's own judgement. None of them has been checked on a TS26.
+- **Every threshold is unmeasured.** The cell's cut-offs, the temperature limit, the level 120 ceiling, the 3.60 V that clears a flat cell, the three seconds of aux, the 104 ms and the second of garbage that makes a fault are all from the stock firmware, the datasheet or the project's own judgement. None of them has been checked on a TS26.
 - **The simulator's limits** are in [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator). The two that matter most here are that it has no chip resets, so a watchdog bite and the boot after it never run, and that it models nothing analogue, so the driver, the cell and the head are all scripted.
 - **Frozen but plausible readings** get past both `battery::plausible` and `thermal::plausible`. Nothing in the firmware can tell a stuck reading from a steady one, and two tests in src/limits.rs pin that down so a change to it shows.
 - **There's no run-time limit.** A lit light with a good cell and a cool head stays lit, whatever pressed the switch.

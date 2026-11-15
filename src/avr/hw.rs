@@ -599,9 +599,10 @@ pub fn fuses() -> Fuses {
     }
 }
 
-/// Lights one aux channel, dimly, or none. Safe to call every tick.
+/// Lights the aux channels for `colour`, dimly, or none. Safe to call every
+/// tick.
 ///
-/// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up. The
+/// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up. Each
 /// lit channel is an input with its pull-up on, and the trickle through the
 /// pull-up is the low setting. The others are
 /// outputs at the 0 in OUT, which holds them dark. That this is what the stock

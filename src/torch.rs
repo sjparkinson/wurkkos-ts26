@@ -1,42 +1,74 @@
 //! One pass of the firmware's loop, minus the hardware. A switch sample and
 //! an ADC result in, a level and the next conversion out.
 
+use crate::TICKS_PER_SECOND;
 use crate::button::{Clicks, Event};
-use crate::limits::Limits;
+use crate::limits::{Health, Limits};
 use crate::ramp::{self, Output};
 use crate::selftest::Faults;
 use crate::sensors::Convert;
 use crate::temp::Calibration;
 use crate::ui::{Aux, Ui};
 
+/// How long the aux LEDs say why the light won't come on.
+///
+/// That's after a press, or after the light goes out. Three seconds, then
+/// dark, so a flat cell with no protection of its own isn't drained by the
+/// aux. Unmeasured.
+pub const SHOW_TICKS: u16 = 3 * TICKS_PER_SECOND;
+
 #[derive(Clone, Debug)]
 pub struct Torch {
     clicks: Clicks,
     ui: Ui,
     limits: Limits,
+    /// Ticks left of [`SHOW_TICKS`].
+    showing: u16,
 }
 
 impl Torch {
     /// `calibration` is the temperature sensor's, from the signature row, and
-    /// `faults` what the power-on self-tests found.
+    /// `faults` what the power-on self-tests found. A fault shows on the aux
+    /// from power-on.
     pub const fn new(calibration: Calibration, faults: Faults) -> Self {
         Self {
             clicks: Clicks::new(),
             ui: Ui::new(),
             limits: Limits::new(calibration, faults),
+            showing: if faults.any() { SHOW_TICKS } else { 0 },
         }
     }
 
     /// One 64 Hz tick, `pressed` meaning the switch is down and `adc` the
     /// ADC's result, if it has one ready. Returns the click or hold this
     /// sample finished, if any.
+    ///
+    /// With a flat cell or a fault, and the light out, clicks and holds never
+    /// reach the UI. They show the aux colour instead, for [`SHOW_TICKS`]
+    /// from the click or from the start of the hold, so a switch held down
+    /// can't keep the aux lit. While a fault's fading the light out they
+    /// still reach it, so 1C turns it off. A press reads the cell before its
+    /// click counts, so a cell that's been charged is [`Health::Good`] by the
+    /// time the click arrives, and that click turns the light on as usual.
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
+        self.showing = self.showing.saturating_sub(1);
         let event = self.clicks.tick(pressed);
         if let Some(event) = event {
-            self.ui.handle(event);
+            if self.limits.health() == Health::Good || self.level() > 0 {
+                self.ui.handle(event);
+            } else if matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. }) {
+                self.showing = SHOW_TICKS;
+            }
         }
+        let before = self.limits.health();
         if !self.resting() && self.limits.tick(self.ui.output_level(), adc).off {
             self.ui.off();
+        }
+        // Say why, from the moment it's decided, through any fade, and for a
+        // while after the light's out.
+        let health = self.limits.health();
+        if health != Health::Good && (before == Health::Good || self.level() > 0) {
+            self.showing = SHOW_TICKS;
         }
         // Checked again, so a pass that turns the light off has already
         // rested if the firmware powers down straight after it.
@@ -69,8 +101,16 @@ impl Torch {
         ramp::output(self.level())
     }
 
+    /// The UI's colour while all's well. Otherwise yellow for a flat cell and
+    /// white for a fault, for [`SHOW_TICKS`] after a press or after the light
+    /// goes out, and dark the rest of the time.
     pub const fn aux(&self) -> Aux {
-        self.ui.aux()
+        match self.limits.health() {
+            Health::Good => self.ui.aux(),
+            _ if self.level() > 0 || self.showing == 0 => Aux::Off,
+            Health::Flat => Aux::Yellow,
+            Health::Fault => Aux::White,
+        }
     }
 }
 
@@ -100,18 +140,16 @@ impl<T: Copy + PartialEq> Changes<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TICKS_PER_SECOND;
     use crate::button::RELEASE_TICKS;
-    use crate::limits::FAULT_CEILING;
     use crate::ramp::CEILING;
     use crate::testing::{Rig, examples, temperature_reading, voltage_reading};
     use crate::thermal;
-    use crate::ui::{DEFAULT_LEVEL, FLOOR};
+    use crate::ui::ON_LEVEL;
 
     const UI_MD: &str = include_str!("../docs/ui.md");
 
     fn dim() -> Output {
-        ramp::output(DEFAULT_LEVEL)
+        ramp::output(ON_LEVEL)
     }
 
     fn run(torch: &mut Rig, pressed: bool, ticks: u16) {
@@ -130,6 +168,14 @@ mod tests {
     fn click(torch: &mut Rig) {
         clicks(torch, 1);
         run(torch, false, RELEASE_TICKS + 1);
+    }
+
+    /// On, and held at the top of the ramp.
+    fn at_the_top(torch: &mut Rig) {
+        click(torch);
+        run(torch, true, 3 * TICKS_PER_SECOND);
+        run(torch, false, RELEASE_TICKS + 1);
+        assert_eq!(torch.level(), CEILING);
     }
 
     /// Every row's example, played the way `cargo xtask simulate` and the
@@ -178,16 +224,17 @@ mod tests {
         assert_eq!(torch.output(), Output::OFF);
     }
 
-    /// Lockout (1H), to the tick it's let go.
     #[test]
-    fn lockout_lights_at_the_floor_only_while_held() {
+    fn lockout_never_lights() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 4);
+        clicks(&mut torch, 3);
         run(&mut torch, false, RELEASE_TICKS + 1);
         run(&mut torch, true, 2 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), FLOOR);
-        run(&mut torch, false, 1);
         assert_eq!(torch.level(), 0);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        click(&mut torch);
+        assert_eq!(torch.level(), 0);
+        assert_eq!(torch.aux(), Aux::Red);
     }
 
     #[test]
@@ -216,7 +263,7 @@ mod tests {
     #[test]
     fn a_locked_torch_rests() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 4);
+        clicks(&mut torch, 3);
         run(&mut torch, false, RELEASE_TICKS + 1);
         assert!(torch.resting());
     }
@@ -230,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn a_flat_cell_turns_the_ui_off_and_it_keeps_the_level() {
+    fn a_flat_cell_turns_off_shows_yellow_and_ignores_clicks_until_charged() {
         let mut torch = Rig::default();
         click(&mut torch);
         torch.adc.voltage = voltage_reading(280);
@@ -239,9 +286,43 @@ mod tests {
         assert_eq!(torch.ui.output_level(), 0, "the UI's off too");
         // Not left with the UI still on and the light out.
         assert!(torch.resting());
+        // Yellow for a while after it went out, then dark.
+        run(&mut torch, false, SHOW_TICKS);
+        assert_eq!(torch.aux(), Aux::Off);
+        // A click shows yellow again, and lights nothing.
+        click(&mut torch);
+        assert_eq!(torch.level(), 0);
+        assert_eq!(torch.aux(), Aux::Yellow);
+        run(&mut torch, false, SHOW_TICKS);
+        assert_eq!(torch.aux(), Aux::Off);
+        // Nor does a hold, or 3C.
+        run(&mut torch, true, TICKS_PER_SECOND);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        clicks(&mut torch, 3);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        assert_eq!(torch.level(), 0);
+        assert_eq!(torch.aux(), Aux::Yellow, "not locked out");
+        // Charged, and the next click turns it on as if new.
         torch.adc.voltage = voltage_reading(380);
         click(&mut torch);
-        assert_eq!(torch.ui.output_level(), DEFAULT_LEVEL);
+        assert_eq!(torch.level(), ON_LEVEL);
+        click(&mut torch);
+        assert_eq!(torch.aux(), Aux::Blue);
+    }
+
+    #[test]
+    fn going_flat_shows_yellow_for_the_three_seconds_after() {
+        let mut torch = Rig::default();
+        click(&mut torch);
+        torch.adc.voltage = voltage_reading(280);
+        while torch.level() != 0 {
+            torch.tick(false);
+        }
+        for _ in 0..SHOW_TICKS {
+            assert_eq!(torch.aux(), Aux::Yellow);
+            torch.tick(false);
+        }
+        assert_eq!(torch.aux(), Aux::Off);
     }
 
     #[test]
@@ -261,53 +342,45 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_it_cant_read_turns_the_ui_off_after_five_minutes_and_a_click_brings_it_back() {
+    fn a_cell_it_cant_read_fades_it_out_and_shows_white() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 2);
-        run(&mut torch, false, RELEASE_TICKS + 1);
+        at_the_top(&mut torch);
         torch.adc.voltage = 0;
-        run(&mut torch, false, 10 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), FAULT_CEILING);
-        assert_eq!(torch.ui.output_level(), CEILING, "only the light's capped");
-        // A second short of five minutes, then a second past.
-        run(&mut torch, false, 289 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), FAULT_CEILING);
+        run(&mut torch, false, TICKS_PER_SECOND);
+        // The fault's in by now, and the light's on its way down.
+        assert!(torch.level() > 0 && torch.level() < CEILING);
+        assert_eq!(torch.aux(), Aux::Off, "out while the main LED's lit");
         run(&mut torch, false, 2 * TICKS_PER_SECOND);
         assert_eq!(torch.level(), 0);
-        assert_eq!(torch.ui.output_level(), 0, "the UI's off too");
-        assert!(torch.resting());
-        assert_eq!(torch.aux(), Aux::Blue, "off, not locked out");
-        // It comes back at the level it was asked for, still capped, and
-        // goes out again five minutes later.
+        assert_eq!(torch.aux(), Aux::White);
+        run(&mut torch, false, SHOW_TICKS);
+        assert_eq!(torch.aux(), Aux::Off);
+        // A good reading changes nothing. Only a reset does.
+        torch.adc.voltage = voltage_reading(380);
         click(&mut torch);
-        assert_eq!(torch.level(), FAULT_CEILING);
-        assert_eq!(torch.ui.output_level(), CEILING);
-        run(&mut torch, false, 299 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), FAULT_CEILING);
-        run(&mut torch, false, 2 * TICKS_PER_SECOND);
-        assert!(torch.resting());
+        assert_eq!(torch.level(), 0);
+        assert_eq!(torch.aux(), Aux::White);
     }
 
     #[test]
-    fn five_minutes_blind_puts_out_a_lockout_hold_and_leaves_it_locked() {
+    fn a_click_still_turns_off_a_fault_thats_fading() {
         let mut torch = Rig::default();
+        at_the_top(&mut torch);
         torch.adc.voltage = 0;
-        clicks(&mut torch, 4);
-        run(&mut torch, false, RELEASE_TICKS + 1);
-        run(&mut torch, true, 299 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), FLOOR);
-        run(&mut torch, true, 2 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), 0, "out, with the switch still down");
-        run(&mut torch, false, 1);
-        assert_eq!(torch.aux(), Aux::Red);
-        assert!(torch.resting());
+        while torch.torch.limits.health() == Health::Good {
+            torch.tick(false);
+        }
+        run(&mut torch, true, 4);
+        run(&mut torch, false, RELEASE_TICKS);
+        assert!(torch.level() > 0, "still fading when the click counts");
+        assert_eq!(torch.tick(false), Some(Event::Click(1)));
+        assert_eq!(torch.level(), 0);
     }
 
     #[test]
     fn heat_lowers_the_light_and_leaves_the_ui_where_it_was() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 2);
-        run(&mut torch, false, RELEASE_TICKS + 1);
+        at_the_top(&mut torch);
         torch.adc.temperature = temperature_reading(thermal::celsius(80));
         run(&mut torch, false, 120 * TICKS_PER_SECOND);
         assert_eq!(torch.level(), thermal::FLOOR);
@@ -316,20 +389,14 @@ mod tests {
     }
 
     /// A switch that's stuck down from the moment the battery goes in, say a
-    /// jammed button. It's a hold from off, so it lights at the floor and
-    /// never ramps.
+    /// jammed button. It's a hold from off, which does nothing.
     #[test]
-    fn a_switch_held_from_power_on_stays_at_the_floor() {
+    fn a_switch_held_from_power_on_stays_off() {
         let mut torch = Rig::default();
-        let mut highest = 0;
-        for tick in 0..10 * 60 * u32::from(TICKS_PER_SECOND) {
+        for _ in 0..10 * 60 * u32::from(TICKS_PER_SECOND) {
             torch.tick(true);
-            highest = highest.max(torch.level());
-            if tick > 2 * u32::from(TICKS_PER_SECOND) {
-                assert_eq!(torch.level(), FLOOR, "tick {tick}");
-            }
+            assert_eq!(torch.level(), 0);
         }
-        assert_eq!(highest, FLOOR);
     }
 
     /// Heat doesn't care whether the switch is down. The light follows the
@@ -350,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fault_caps_the_light_and_only_the_light() {
+    fn a_fault_never_lights_and_shows_white_after_power_on_and_a_press() {
         for faults in [
             Faults {
                 flash: true,
@@ -366,10 +433,18 @@ mod tests {
             },
         ] {
             let mut torch = Rig::new(faults);
-            clicks(&mut torch, 2);
-            run(&mut torch, false, RELEASE_TICKS + 1);
-            assert_eq!(torch.level(), FAULT_CEILING);
-            assert_eq!(torch.ui.output_level(), CEILING);
+            assert_eq!(torch.aux(), Aux::White, "{faults:?}");
+            run(&mut torch, false, SHOW_TICKS);
+            assert_eq!(torch.aux(), Aux::Off, "{faults:?}");
+            click(&mut torch);
+            assert_eq!(torch.level(), 0, "{faults:?}");
+            assert_eq!(torch.aux(), Aux::White, "{faults:?}");
+            run(&mut torch, false, SHOW_TICKS);
+            // A hold shows it from its start, and no longer, however long
+            // the switch stays down.
+            run(&mut torch, true, 30 * TICKS_PER_SECOND);
+            assert_eq!(torch.level(), 0, "{faults:?}");
+            assert_eq!(torch.aux(), Aux::Off, "{faults:?}");
         }
     }
 

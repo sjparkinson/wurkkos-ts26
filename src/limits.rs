@@ -5,48 +5,45 @@
 //! low-voltage protection (`battery::Protection`) or thermal regulation
 //! (`thermal::Thermal`), and runs the light at the lowest of the UI's level,
 //! the thermal ceiling and the battery ceiling. Both ceilings fade
-//! (`gradual::Ceiling`), so a step-down never jumps. A flat cell turns the UI
-//! off, and so does five minutes of a cell that can't be read.
+//! (`gradual::Ceiling`), so a step-down never jumps.
+//!
+//! Two things stop the light altogether, and [`Limits::health`] says which.
+//! A flat cell turns it off and keeps it off until the cell reads as charged
+//! (`battery::Protection::flat`). A fault turns it off and keeps it off until
+//! the cell comes out. A fault is a failed power-on self-test, or a cell that
+//! can't be read (`battery::Verdict::Blind`), since with no reading there's
+//! no low-voltage cut-off, and this cell has no protection of its own. A
+//! fault that comes up with the light on fades it down the ramp first, so it
+//! doesn't snap out in someone's hand.
 //!
 //! Garbage readings fail safe. Each side has its own idea of a reading that
-//! can't be real (`battery::plausible`, `thermal::plausible`), lets a few
-//! go, and then drops its ceiling rather than trusting it or turning the
-//! light off there and then. The battery side drops to [`FAULT_CEILING`], the
-//! thermal side to its floor. A garbage temperature never does more than
-//! that. A garbage voltage means no low-voltage cut-off, so if the light's
-//! been on for five minutes without one reading to believe
-//! (`battery::BLIND_SAMPLES`), the battery side turns it off. A click turns
-//! it on again, still under the ceiling, for another five minutes.
-//!
-//! A failed power-on self-test caps the light at [`FAULT_CEILING`] for as
-//! long as the cell's in.
+//! can't be real (`battery::plausible`, `thermal::plausible`) and lets a few
+//! go. After that a garbage voltage is a fault, and a garbage temperature
+//! drops the thermal ceiling to its floor and does no more.
 
 use crate::battery::{self, Protection, Verdict};
 use crate::ramp::CEILING;
 use crate::selftest::Faults;
 use crate::sensors::{Convert, Reading, Schedule};
 use crate::temp::Calibration;
-use crate::thermal::{self, Thermal};
+use crate::thermal::Thermal;
 
-/// The highest level the torch runs at when something's wrong that it can't
-/// see past, such as a failed self-test or a voltage reading it can't
-/// believe.
-///
-/// This board has no low-current linear channel to fall back on, so this
-/// borrows the thermal floor's level, a few per cent of full duty on this
-/// firmware's curve. Unmeasured. Bright enough to find your way out by,
-/// gentle on the cell as far as anyone can say without a meter on it.
-pub const FAULT_CEILING: u8 = thermal::FLOOR;
-
-const _: () = assert!(FAULT_CEILING <= CEILING);
+/// Whether the light may come on at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Health {
+    Good,
+    /// Turned off for a flat cell, and not yet read as charged.
+    Flat,
+    /// A failed self-test, or a cell it couldn't read. Only a reset clears it.
+    Fault,
+}
 
 /// One tick's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Step {
     /// The level to run at, `0` meaning off.
     pub level: u8,
-    /// The cell's flat, or it's been five minutes since anything could read
-    /// it, so turn the UI off.
+    /// The cell's flat, or there's a fault, so turn the UI off.
     pub off: bool,
 }
 
@@ -61,15 +58,14 @@ pub struct Limits {
     /// The level the light's at, as of the last tick.
     level: u8,
     convert: Option<Convert>,
-    /// The highest level the light may ever run at, which is `ramp::CEILING`,
-    /// or [`FAULT_CEILING`] if a self-test failed.
-    cap: u8,
+    /// A self-test failed, or the cell couldn't be read.
+    fault: bool,
 }
 
 impl Limits {
     /// `calibration` is the chip's own, from the signature row. `faults` is
-    /// what the power-on self-tests found, and any fault holds the light at
-    /// [`FAULT_CEILING`] for as long as this lives.
+    /// what the power-on self-tests found, and any fault keeps the light off
+    /// for as long as this lives.
     pub const fn new(calibration: Calibration, faults: Faults) -> Self {
         Self {
             schedule: Schedule::new(),
@@ -79,7 +75,7 @@ impl Limits {
             on: false,
             level: 0,
             convert: None,
-            cap: if faults.any() { FAULT_CEILING } else { CEILING },
+            fault: faults.any(),
         }
     }
 
@@ -97,6 +93,18 @@ impl Limits {
     /// The battery and thermal ceilings right now.
     pub const fn ceilings(&self) -> (u8, u8) {
         (self.protection.ceiling(), self.thermal.ceiling())
+    }
+
+    /// Whether the light may come on, and if not, why not. A fault outranks
+    /// a flat cell, since a flat cell can be charged and a fault can't.
+    pub const fn health(&self) -> Health {
+        if self.fault {
+            Health::Fault
+        } else if self.protection.flat() {
+            Health::Flat
+        } else {
+            Health::Good
+        }
     }
 
     /// A tick in place of [`Limits::tick`] while the torch rests. The light's
@@ -124,7 +132,7 @@ impl Limits {
         // The level the light's at this tick, before the ceilings move. It's
         // last tick's level while the UI holds steady, and the UI's on the
         // tick it turns on.
-        let ui = ui.min(self.cap);
+        let ui = ui.min(CEILING);
         let level = match on {
             true => ui
                 .min(self.thermal.ceiling())
@@ -134,11 +142,12 @@ impl Limits {
 
         let (reading, convert) = self.schedule.tick(result, on);
         self.convert = convert;
-        let mut off = false;
         match reading {
             Some(Reading::Voltage(raw)) => {
                 let centivolts = battery::centivolts(raw);
-                off = self.protection.sample(centivolts, level) == Verdict::Off;
+                if self.protection.sample(centivolts, level) == Verdict::Blind {
+                    self.fault = true;
+                }
             }
             Some(Reading::Temperature(raw)) => {
                 let sixteenths = self.calibration.sixteenths(raw);
@@ -148,9 +157,18 @@ impl Limits {
             }
             None => {}
         }
+        // Every tick, so a good reading during the fade can't send the
+        // battery ceiling back up and leave a fault lit.
+        if self.fault {
+            self.protection.fail(level);
+        }
 
         let thermal = self.thermal.tick();
         let battery = self.protection.tick();
+        // A fault with the light out keeps it out, and one with it lit lets
+        // the battery ceiling fade it to the bottom first.
+        let fault = self.fault && (self.level == 0 || battery <= 1);
+        let off = on && (fault || self.protection.flat());
         self.level = if on && !off {
             ui.min(thermal).min(battery)
         } else {
@@ -258,6 +276,7 @@ mod tests {
             assert!(run.levels.iter().rev().take(59 * 64).all(|&l| l == ui));
         }
         assert_eq!(run.offs, 0);
+        assert_eq!(run.limits.health(), Health::Good);
     }
 
     #[test]
@@ -319,6 +338,7 @@ mod tests {
         run.secs(30);
         assert_eq!(run.offs, 1);
         assert_eq!(*run.levels.last().unwrap(), 0);
+        assert_eq!(run.limits.health(), Health::Flat);
     }
 
     #[test]
@@ -372,113 +392,115 @@ mod tests {
     }
 
     #[test]
-    fn a_flat_cell_turns_off_again_after_turning_back_on() {
+    fn a_flat_cell_stays_off_until_it_reads_as_charged() {
         let mut run = Run::new();
         run.adc.voltage = voltage_reading(280);
         run.ui = 50;
         run.secs(6);
         assert_eq!(run.offs, 1);
+        // Asked again, it won't light, not even for a tick.
         run.ui = 50;
-        // Straight to where it left off, and off again a second later.
-        assert_eq!(run.ticks(16), 1);
-        run.secs(2);
+        assert_eq!(run.ticks(1), 0);
         assert_eq!(run.offs, 2);
+        // A rested cell that's still low changes nothing.
+        run.adc.voltage = voltage_reading(battery::CHARGED_AT - 1);
+        run.secs(10);
+        assert_eq!(run.limits.health(), Health::Flat);
+        // A charged one, read with the light off, as a press reads it.
+        run.adc.voltage = voltage_reading(380);
+        run.ticks(u32::from(CYCLE_TICKS));
+        assert_eq!(run.limits.health(), Health::Good);
+        run.ui = 50;
+        assert_eq!(run.ticks(1), 50, "as if new, with no ceiling");
+        assert_eq!(run.secs(30), 50);
     }
 
-    /// Five minutes, the time `battery::BLIND_SAMPLES` takes, in seconds.
-    const BLIND_SECS: u32 = (battery::BLIND_SAMPLES / battery::SAMPLES_PER_SECOND) as u32;
-
     #[test]
-    fn garbage_voltages_cap_it_at_the_fault_ceiling_then_turn_it_off_at_five_minutes() {
-        assert_eq!(BLIND_SECS, 5 * 60);
-        let sample = usize::from(CYCLE_TICKS);
+    fn garbage_voltages_fade_it_out_and_latch_a_fault() {
         for garbage in [0, 4 * 1023, 1] {
             let mut run = Run::new();
             run.ui = CEILING;
             run.secs(2);
             run.adc.voltage = garbage;
-            // The round's just started, so its reading, two ticks on, is the
-            // first that's garbage, and the last of five minutes' worth
-            // turns it off.
-            let first = run.levels.len() + 2;
-            let off_at = first + (usize::from(battery::BLIND_SAMPLES) - 1) * sample;
-            run.secs(1);
-            assert_eq!(run.secs(10), FAULT_CEILING, "{garbage}");
-            run.secs(BLIND_SECS);
-            let capped = &run.levels[first + 10 * usize::from(TICKS_PER_SECOND)..off_at];
-            assert!(capped.iter().all(|&l| l == FAULT_CEILING), "{garbage}");
-            assert!(run.levels[off_at..].iter().all(|&l| l == 0), "{garbage}");
+            // Three garbage samples go, the fourth is a fault, and the
+            // light fades from the top a level a tick.
+            run.ticks(3 * u32::from(CYCLE_TICKS));
+            assert_eq!(run.ticks(1), CEILING, "{garbage}");
+            assert_eq!(run.limits.health(), Health::Good, "{garbage}");
+            run.secs(3);
             assert_eq!(run.offs, 1, "{garbage}");
+            assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
+            let lit: Vec<u8> = run.levels.iter().copied().filter(|&l| l > 0).collect();
+            // Out as the ceiling reaches 1, so 2 is the last lit.
+            for level in 2..CEILING {
+                assert!(lit.contains(&level), "{garbage}: faded through {level}");
+            }
+            // It stays a fault with good readings, on or off.
+            run.adc.voltage = voltage_reading(380);
+            run.secs(10);
+            run.ui = CEILING;
+            assert_eq!(run.ticks(1), 0, "{garbage}");
+            assert_eq!(run.offs, 2, "{garbage}");
+            assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
         }
     }
 
     #[test]
-    fn one_good_voltage_reading_starts_the_five_minutes_again() {
+    fn good_readings_during_the_fade_still_see_it_out() {
         let mut run = Run::new();
-        run.adc.voltage = 0;
         run.ui = CEILING;
-        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
-        // One round, so one reading, at 3.1 V, too low to lift the ceiling
-        // and too high to count as low.
-        run.adc.voltage = voltage_reading(310);
-        run.ticks(u32::from(CYCLE_TICKS));
+        run.secs(2);
         run.adc.voltage = 0;
-        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
-        assert_eq!(run.offs, 0);
-        assert_eq!(run.secs(2), 0);
+        while run.limits.health() == Health::Good {
+            run.tick();
+        }
+        // Back to a full cell straight away, for long enough to lift a
+        // ceiling several times over.
+        run.adc.voltage = voltage_reading(420);
+        run.secs(30);
         assert_eq!(run.offs, 1);
+        let out = run.levels.iter().rposition(|&l| l > 0).unwrap();
+        assert!(run.levels[out..].len() > 25 * 64, "out within 5 s");
+        assert!(run.limits.ceilings().0 <= 1);
     }
 
     #[test]
-    fn garbage_voltages_never_count_while_off() {
+    fn garbage_voltages_with_the_light_off_are_a_fault_too() {
         let mut run = Run::new();
         run.adc.voltage = 0;
         // Off but still read, as it is while the switch is held down.
-        assert_eq!(run.secs(2 * BLIND_SECS), 0);
-        assert_eq!(run.offs, 0);
-        // On, capped from the first tick, with its whole five minutes to go.
-        run.ui = CEILING;
-        assert_eq!(run.ticks(1), FAULT_CEILING);
-        assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING);
-        assert_eq!(run.offs, 0);
         assert_eq!(run.secs(2), 0);
-        assert_eq!(run.offs, 1);
-    }
-
-    #[test]
-    fn on_again_after_five_minutes_blind_is_capped_and_gets_five_more() {
-        let mut run = Run::new();
-        run.adc.voltage = 0;
+        assert_eq!(run.limits.health(), Health::Fault);
         run.ui = CEILING;
-        assert_eq!(run.secs(BLIND_SECS + 1), 0);
+        assert_eq!(run.ticks(1), 0);
         assert_eq!(run.offs, 1);
-        // With the rest `torch::Torch` takes once the light's out, and then
-        // without one, as when the switch is still down.
-        for (rest, offs) in [(true, 2), (false, 3)] {
-            if rest {
-                run.limits.rest();
-            }
-            run.ui = CEILING;
-            assert_eq!(run.ticks(1), FAULT_CEILING, "rest: {rest}");
-            assert_eq!(run.secs(BLIND_SECS - 1), FAULT_CEILING, "rest: {rest}");
-            assert_eq!(run.offs, offs - 1, "rest: {rest}");
-            assert_eq!(run.secs(2), 0, "rest: {rest}");
-            assert_eq!(run.offs, offs, "rest: {rest}");
-        }
-        let mut settled = run.levels.iter().skip(5 * usize::from(TICKS_PER_SECOND));
-        assert!(settled.all(|&l| l <= FAULT_CEILING));
     }
 
     #[test]
-    fn a_dead_adc_brings_both_ceilings_down() {
+    fn a_glitch_or_three_is_no_fault() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        for _ in 0..60 {
+            run.adc.voltage = 0;
+            run.ticks(3 * u32::from(CYCLE_TICKS));
+            run.adc.voltage = voltage_reading(380);
+            run.ticks(u32::from(CYCLE_TICKS));
+        }
+        assert_eq!(run.limits.health(), Health::Good);
+        assert_eq!(*run.levels.last().unwrap(), CEILING);
+        assert_eq!(run.offs, 0);
+    }
+
+    #[test]
+    fn a_dead_adc_is_a_fault() {
         let mut run = Run::new();
         run.ui = CEILING;
         run.secs(1);
         run.adc.voltage = 0;
         run.adc.temperature = 0;
-        assert_eq!(run.secs(30), FAULT_CEILING);
-        assert_eq!(run.limits.ceilings(), (FAULT_CEILING, FLOOR));
-        assert_eq!(run.offs, 0);
+        assert_eq!(run.secs(30), 0);
+        assert_eq!(run.limits.health(), Health::Fault);
+        assert_eq!(run.offs, 1);
     }
 
     /// A known gap, docs/safety.md H3 and H12. A reading that's stuck at a
@@ -522,21 +544,18 @@ mod tests {
         let mut run = Run::new();
         run.ui = CEILING;
         run.adc.temperature = 0;
-        assert_eq!(run.secs(2 * BLIND_SECS), FLOOR);
+        assert_eq!(run.secs(600), FLOOR);
         assert_eq!(run.offs, 0);
+        assert_eq!(run.limits.health(), Health::Good);
     }
 
     #[test]
     fn no_result_at_all_is_garbage_too() {
         let mut limits = Limits::new(CALIBRATION, Faults::NONE);
-        for _ in 0..30 * TICKS_PER_SECOND {
-            limits.tick(CEILING, None);
-        }
-        assert_eq!(limits.ceilings(), (FAULT_CEILING, FLOOR));
-        // And by the end of five minutes of it, it's asked for off, once.
-        let ticks = (BLIND_SECS - 30) * u32::from(TICKS_PER_SECOND);
-        let offs = (0..ticks).filter(|_| limits.tick(CEILING, None).off);
-        assert_eq!(offs.count(), 1);
+        let off = (0..5 * TICKS_PER_SECOND).position(|_| limits.tick(CEILING, None).off);
+        assert!(off.is_some());
+        assert_eq!(limits.health(), Health::Fault);
+        assert_eq!(limits.ceilings().1, FLOOR);
     }
 
     #[test]
@@ -619,6 +638,21 @@ mod tests {
     }
 
     #[test]
+    fn a_rest_keeps_a_fault_and_a_flat_cell() {
+        let mut run = Run::with(FAILED);
+        run.limits.rest();
+        assert_eq!(run.limits.health(), Health::Fault);
+        let mut run = Run::new();
+        run.adc.voltage = voltage_reading(280);
+        run.ui = 50;
+        run.secs(6);
+        for _ in 0..battery::FORGET_TICKS {
+            run.limits.rest();
+        }
+        assert_eq!(run.limits.health(), Health::Flat);
+    }
+
+    #[test]
     fn garbage_from_power_on_shows_nothing_from_off() {
         let (voltage, temperature) = (Adc::new().voltage, Adc::new().temperature);
         for (voltage, temperature) in [(0, temperature), (voltage, 0), (0, 0), (4 * 1023, 4 * 1023)]
@@ -636,39 +670,16 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_self_test_holds_the_fault_ceiling_for_good() {
+    fn a_failed_self_test_never_lights() {
         let mut run = Run::with(FAILED);
-        run.secs(3);
-        run.ui = LEVELS;
-        assert_eq!(run.secs(600), FAULT_CEILING);
-        assert!(run.levels.iter().all(|&l| l <= FAULT_CEILING));
-        // Off and on again doesn't clear it. Only a power cycle with a good
-        // self-test does.
-        run.ui = 0;
-        run.secs(1);
-        run.ui = LEVELS;
-        assert_eq!(run.ticks(1), FAULT_CEILING);
-        assert_eq!(run.offs, 0);
-    }
-
-    #[test]
-    fn a_failed_self_test_leaves_lower_levels_alone() {
-        let mut run = Run::with(FAILED);
-        run.secs(3);
-        for ui in [1, 30, FAULT_CEILING] {
+        assert_eq!(run.limits.health(), Health::Fault);
+        assert_eq!(run.secs(10), 0);
+        for ui in [1, 30, CEILING, LEVELS] {
             run.ui = ui;
-            assert_eq!(run.secs(10), ui);
+            assert_eq!(run.secs(10), 0, "{ui}");
         }
-    }
-
-    #[test]
-    fn a_failed_self_test_still_lets_the_battery_turn_it_off() {
-        let mut run = Run::with(FAILED);
-        run.adc.voltage = voltage_reading(280);
-        run.ui = LEVELS;
-        run.secs(10);
-        assert_eq!(run.offs, 1);
-        assert!(run.levels.iter().all(|&l| l <= FAULT_CEILING));
+        assert!(run.levels.iter().all(|&l| l == 0));
+        assert_eq!(run.offs, 4, "asked for off every time");
     }
 
     /// A million ticks of random UI levels and ADC results, checking every
@@ -717,14 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn random_readings_never_lift_a_failed_self_tests_level_over_the_fault_ceiling() {
-        throw_noise_at(Limits::new(CALIBRATION, FAILED), FAULT_CEILING, 0x5EED_0002);
-    }
-
-    #[test]
-    fn a_failed_self_test_shows_nothing_from_off() {
-        let mut run = Run::with(FAILED);
-        assert_eq!(run.secs(10), 0);
-        assert!(run.levels.iter().all(|&l| l == 0));
+    fn random_readings_never_light_a_failed_self_test() {
+        throw_noise_at(Limits::new(CALIBRATION, FAILED), 0, 0x5EED_0002);
     }
 }

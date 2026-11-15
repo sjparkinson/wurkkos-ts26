@@ -151,7 +151,7 @@ The last chance to measure the stock firmware, and the first run of the JLHawaii
 | 1.9 |  | Read `backup/torch/fuses.hex` against `selftest::Fuses::ok`. The bytes run `WDTCFG`, `BODCFG`, `OSCCFG`, reserved, `TCD0CFG`, `SYSCFG0`, `SYSCFG1`, `APPEND`, `BOOTEND`, reserved, `LOCKBIT` | `WDTCFG` 0, `OSCCFG.FREQSEL` 20 MHz with `OSCLOCK` clear, `SYSCFG0.RSTPINCFG` UPDI, `APPEND` and `BOOTEND` 0. Another ATtiny1616 board's were `00 00 02 FF 00 F6 07 00 00 FF C5` | That the fuse check passes on a real TS26 |
 | 1.10 |  | Read `BODCFG` and `SYSCFG1.SUT` from the same file | Another ATtiny1616 board's were `BODCFG` 0x00 and `SUT` 64 ms. This board might differ, and the firmware's hang check wants to know if the BOD's on (see 6.3) | Whether the BOD's on here |
 
-If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signature, and the full firmware would quietly cap itself at level 50. That's worth understanding first.
+If 1.9 fails, stop. `flash` would still go ahead, since it only checks the signature, and the full firmware would never light, showing only white on the aux. That's worth understanding first.
 
 ### What the adapter powers
 
@@ -200,8 +200,8 @@ Write the result in the [table](#results) before going on.
 | 4.3 |  | Cell in, head on, ten times, watching the emitters | No flash, and it's off until clicked. A reset loop would be dark too, so go on to 4.4 | |
 | 4.4 |  | 1C on, 1C off, a few dozen times, then holds | Same feel as the docs/ui.md rows. The 64 Hz tick has the delta-sigma interrupt running under it now, so sluggish clicks mean the interrupt's eating the loop | |
 | 4.5 |  | Tail current, off, on the 4 A range | Reads 0.000 to 0.003 once it's asleep. Anything steadily over about 5 mA isn't a sleeping chip, or it's a reset loop | The rough version of the off current |
-| 4.6 |  | Aux, off, in lockout (4C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from the stock firmware, so the wrong colour means that's wrong here | "Likely" on the aux pins |
-| 4.7 |  | An hour on at a low level, in sight | Stays on and doesn't move. Going out five minutes after it came on, and coming back with 1C, is a cell voltage it can't read ([flashing.md](flashing.md#if-its-capped-at-level-50)). Going out at any other time is the watchdog biting, or the tick deadline, which ends in the same reset while the oscillator's alive | "It never trips in normal use", in part |
+| 4.6 |  | Aux, off, in lockout (3C) and with the light on | Dim steady blue off, dim steady red in lockout, out while the main LED's lit. hardware.md has PC1 blue, PC2 green, PC3 red from the stock firmware, so the wrong colour means that's wrong here | "Likely" on the aux pins |
+| 4.7 |  | An hour on at a low level, in sight | Stays on and doesn't move. Fading out about a second after it came on, then white on the aux after a press, is a cell voltage it can't read ([flashing.md](flashing.md#if-it-wont-come-on)). Going out at any other time is the watchdog biting, or the tick deadline, which ends in the same reset while the oscillator's alive, and the torch is white on a press after that too | "It never trips in normal use", in part |
 | 4.8 |  | Leave it off overnight, then 1C | Comes on at once. 6.2 is the real test | |
 
 ## Stage 5, the ramp
@@ -210,7 +210,7 @@ Short bursts above level 75, and the meter comes out at 3 A.
 
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
-| 5.1 |  | 1H from off, for the lowest level, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
+| 5.1 |  | 1C, then 2H to the bottom of the ramp, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
 | 5.2 |  | The bottom few levels from 13 up, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2. Level 13 was picked to clear that flicker, from a figure on the stock firmware's curve that nobody's checked on this one | "Is the low-end flicker the driver, the delta-sigma, or both" |
 | 5.3 |  | Ramp slowly end to end | Smooth, no steps that jump, no blip, each direction. The curve is the project's own cubic, so an ugly spot is a finding, not a surprise | |
 | 5.4 |  | T1 at levels 25, 50, 75, 100. Tail current, and stop at 3 A. Those are duties of about 0.5%, 3.6%, 12% and 29% | Plot current against duty. That's the first picture of what turns PB0 into current, filtered reference or otherwise | "Measure what PWM duty does to output" |
@@ -220,14 +220,14 @@ Short bursts above level 75, and the meter comes out at 3 A.
 
 ## Stage 6, faults and the watchdog
 
-There's no proof at power-on here, on purpose, so this is where anyone first sees it work. A fault only shows as the light stopping at level 50, so every check here is about getting above it. A cell voltage the firmware can't believe stops it at 50 as well, and that one goes on to turn the light off after five minutes, which no failed check does (0.12a, and [flashing.md](flashing.md#if-its-capped-at-level-50)).
+There's no proof at power-on here, on purpose, so this is where anyone first sees it work. A fault keeps the light off and shows white on the aux for three seconds after power-on and after each press, so every check here is about the light coming on at all. A cell voltage the firmware can't believe is a fault too, and it lets the light come on for about a second before fading it out ([flashing.md](flashing.md#if-it-wont-come-on)).
 
 | # | Status | Do | Needs | Expect | Closes |
 |---|---|---|---|---|---|
-| 6.1 |  | Top of the ramp, right after a flash | Main | Clearly brighter than level 50. If not, it's capped. Suspect, in order, a bite (a cell swap clears it), then `xtask/src/crc.rs`, then the fuses ([flashing.md](flashing.md#if-its-capped-at-level-50)) | The CRC convention, the fuse check |
-| 6.2 |  | Leave it off for an hour, then the top of the ramp | Main | Not capped. `main` idles the tick after each feed, so a `wdr` gets to sync with the clock running. Capped means the watchdog bit it anyway while it rested | That a resting torch doesn't bite |
-| 6.3 |  | Note the cap goes when the cell comes out and back | Main | It does. The hang flag lasts until the next reset. A brown-out reset would clear it, if 1.10 says the BOD's on | |
-| 6.4 |  | After 6.2 and 0.15 pass, T4 on the torch, power-down straight after a feed. Pick a level away from 52, click off, then leave it overnight, watching the aux in the dark for a while first. Then 1C, then the top of the ramp. Tail current off too, on the 4 A range | T4 | Back at the level you left, not capped, steady aux, and 0.000 to 0.003 A. Back at 52 means the chip reset. Capped means a bite. A flickering aux or steady mA means it's resetting over and over, and a `wdr` doesn't survive an immediate power-down. Flash main again and keep the idle. If all of it passes, the idle can go, which saves about 0.37 mA at 3 V and about 0.6 mA at 4.2 V (0.15 has the sums). Drop `&& !fed` from `src/main.rs` and `REST_IDLE_TICKS` from `xtask/src/sim.rs` | "Test power-down straight after a feed" |
+| 6.1 |  | 1C right after a flash, then the top of the ramp | Main | Lights, and stays lit. If it's dark with white on the aux, it's a fault. Suspect, in order, a bite (a cell swap clears it), then `xtask/src/crc.rs`, then the fuses ([flashing.md](flashing.md#if-it-wont-come-on)) | The CRC convention, the fuse check |
+| 6.2 |  | Leave it off for an hour, then 1C | Main | Lights. `main` idles the tick after each feed, so a `wdr` gets to sync with the clock running. Dark with white means the watchdog bit it anyway while it rested | That a resting torch doesn't bite |
+| 6.3 |  | Note a fault goes when the cell comes out and back | Main | It does. The hang flag lasts until the next reset. A brown-out reset would clear it, if 1.10 says the BOD's on | |
+| 6.4 |  | After 6.2 and 0.15 pass, T4 on the torch, power-down straight after a feed. 3C to lock it, then leave it overnight, watching the aux in the dark for a while first. Then 3C to unlock and 1C. Tail current off too, on the 4 A range | T4 | Still red in the morning, then lit on 1C, steady aux, and 0.000 to 0.003 A. Lockout lives in RAM, so blue in the morning means the chip reset. Dark with white means a bite. A flickering aux or steady mA means it's resetting over and over, and a `wdr` doesn't survive an immediate power-down. Flash main again and keep the idle. If all of it passes, the idle can go, which saves about 0.37 mA at 3 V and about 0.6 mA at 4.2 V (0.15 has the sums). Drop `&& !fed` from `src/main.rs` and `REST_IDLE_TICKS` from `xtask/src/sim.rs` | "Test power-down straight after a feed" |
 
 A real bite only gets seen on purpose on the breakout (0.13). On the torch, the check is that 4.7 and 6.2 never see one, which is as far as this kit can say the window suits a real chip.
 
@@ -241,7 +241,8 @@ A real bite only gets seen on purpose on the breakout (0.13). On the torch, the 
 | 7.4 |  | Blink out the temperature at a stable room, three or four readings | T2 | Near the room, ±3 °C by the datasheet. There's no reference to hold it to, so this only finds gross errors | Part of the thermal item |
 | 7.5 |  | Blink out several temperature readings, light off, then at a low, a middle and a high level | T2 | How far they scatter, one against the next | The sensor's noise with the light on |
 | 7.6 |  | Top of the ramp until it steps down, with a thermometer on the head | A thermometer | It steps down before the head's painful, near 50 °C at the sensor, and doesn't go under level 50. 1Lumen's head peaked at 52 °C. Only after this does `ramp::CEILING` get raised, a step at a time | "Thermal regulation", the `ramp::CEILING` decision |
-| 7.7 |  | Charge it over USB with the cell in, watching for the light or a lost level | Main | Nothing odd. A lost level means the charger pulled VCC down far enough to reset the chip | "Level survives charging" |
+| 7.7 |  | 3C to lock it, then charge it over USB with the cell in, watching the light and the aux | Main | Nothing odd, and still red at the end. Lockout lives in RAM, so blue at the end means the charger pulled VCC down far enough to reset the chip | That a reset doesn't come with charging |
+| 7.8 |  | A cell fresh off a full charge, Fluke across it first, then 1C and leave it lit for ten seconds. Then the same with the cell straight off the USB charger in the torch, still on charge | Main | Stays lit. Dark about a second after 1C, with white on the aux after a press, means a full cell reads over 4.40 V, which is a fault. By DS40002204A table 36-23 the 1.1 V reference alone can be 2 % off in this torch's range and 5 % over the chip's full one, and 4.20 V only has about 5 % to the ADC's top, before the divider's tolerance and the 1094 calibration take their share. Write down the Fluke's reading either way, and 7.2's blinked-out figure for the same cell if T2's to hand | Whether a full cell clears `battery::PLAUSIBLE` on this light |
 
 ## Test builds
 
@@ -255,10 +256,10 @@ None exist yet, and they should stay on a throwaway branch, because they aren't 
 
 **T4, power-down after a feed.** `watchdog::Feeder::power_down` in `src/watchdog.rs` returning `resting` alone, dropping the `&& !self.fed`. The simulator checks the firmware against that same function, so it follows without a change. It's one of the two test builds that go on the torch, with T2, after 0.15 passes, and only to find out if the idle in the real firmware can go. It has the real firmware's protection and nothing else changed.
 
-**T5, no fuse check.** The real firmware with `src/main.rs` setting `fuses: false` in place of `!hw::fuses().ok()`. **Breakout only**, for this breakout's SYSCFG0 of `0xFF` (0.3), which caps the real firmware at level 50 for good and makes 0.11, 0.12 and 0.15 unanswerable here. Writing the fuse back would fix it too, but this plan writes no fuses, so the build changes instead. Use it in place of Main for 0.11, 0.12 and 0.12a, and with T4's change as well for 0.15. It needs two things first.
+**T5, no fuse check.** The real firmware with `src/main.rs` setting `fuses: false` in place of `!hw::fuses().ok()`. **Breakout only**, for this breakout's SYSCFG0 of `0xFF` (0.3), which keeps the real firmware dark for good (it capped it at level 50 before the UI was simplified) and makes 0.11, 0.12 and 0.15 unanswerable here. Writing the fuse back would fix it too, but this plan writes no fuses, so the build changes instead. Use it in place of Main for 0.11, 0.12 and 0.12a, and with T4's change as well for 0.15. It needs two things first.
 
-- **`cargo xtask hex --no-examples`**, as T1. Plain `cargo xtask hex` won't write it, because the simulator runs docs/ui.md's `fault 2C` example, and a build that ignores the fuses doesn't cap.
-- **Pin 14's divider in place.** Pin 14 on G is a cell the firmware can't read, which caps it at level 50 all the same. 0.12a does that on purpose.
+- **`cargo xtask hex --no-examples`**, as T1. Plain `cargo xtask hex` won't write it, because the simulator runs docs/ui.md's `fault 1C` example, and a build that ignores the fuses lights.
+- **Pin 14's divider in place.** Pin 14 on G is a cell the firmware can't read, which is a fault all the same. 0.12a did that on purpose, on the firmware of the time.
 
 The torch never gets T5. If its own fuses fail at 1.9, that's a stop, not a reason to skip the check.
 

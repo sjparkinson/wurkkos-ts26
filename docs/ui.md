@@ -10,80 +10,72 @@ Every row has an example, which is a script in that notation, starting from a to
 
 | Action | Does | Example | Status |
 |---|---|---|---|
-| 1C | On, at level 52 on a fresh torch | `1C` → level 52 | Done |
-| 1C, after using it | On, at the last level used | `1C 1H 1C 1C` → level 92 | Done |
-| 1H | On at the lowest level. Keep holding and nothing more happens | `1H:3s` → level 13 | Done |
-| 1H, then 1H again | Let go and hold again to ramp up | `1H 1H` → level 53 | Done |
-| 2C | On at turbo | `2C` → level 120 | Done |
-| 4C | Lockout | `4C 1C` → off | Done |
-| Anything else | Nothing | `3C 5C 2H:2s wait:1s` → off | Done |
+| 1C | On, at level 52 | `1C` → level 52 | Done |
+| 1C, after using it | On at level 52 again, since nothing's remembered | `1C 1H 1C 1C` → level 52 | Done |
+| 3C | Lockout | `3C 1C` → off | Done |
+| Anything else | Nothing | `2C 4C 5C 1H:2s 2H:2s wait:1s` → off | Done |
 
 ## On
 
 | Action | Does | Example | Status |
 |---|---|---|---|
-| 1C | Off, remembering the level | `1C 1C` → off | Done |
-| 1C at turbo | Off, and turbo's the level it remembers | `2C 1C 1C` → level 120 | Done |
-| 1H | Ramp up, stopping at turbo | `1C 1H:3s` → level 120 | Done |
+| 1C | Off | `1C 1C` → off | Done |
+| 1H | Ramp up, stopping at the top | `1C 1H:3s` → level 120 | Done |
 | 2H | Ramp down, stopping at the lowest level | `1C 2H:3s` → level 13 | Done |
-| 2C | Turbo | `1C 2C` → level 120 | Done |
-| 2C at turbo | Back to the level before turbo | `1C 1H 2C 2C` → level 92 | Done |
-| 2C at a remembered turbo | Back to the last level before turbo | `2C 1C 2C 2C` → level 52 | Done |
-| Anything else | Nothing | `1C 3C 4C 5C 3H wait:1s` → level 52 | Done |
+| Anything else | Nothing | `1C 2C 3C 4C 5C 3H wait:1s` → level 52 | Done |
 
 The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.7 seconds.
 
-Turbo is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
-
-The remembered level lives in RAM and never in EEPROM. The torch sleeps rather than losing power, and SRAM is kept through sleep (DS §11.2), so nothing needs writing. The cost is that a cell swap or any reset loses the level, and it comes back on at 52. USB charging should keep it, since the cell stays in, but that's likely and not confirmed.
+The top is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
 
 ## Lockout
 
-For pockets and bags.
+For pockets and bags. The light never comes on.
 
 | Action | Does | Example | Status |
 |---|---|---|---|
-| 1H | The lowest level, for as long as you hold it | `4C 1H:2s` → level 13 | Done |
-| 1H, let go | Off again | `4C 1H:2s wait:1s` → off | Done |
-| 4C | Unlock, back to off | `4C 4C 1C` → level 52 | Done |
-| Anything else | Nothing | `4C 1C 2C 3C 2H:2s wait:1s` → off | Done |
+| 3C | Unlock, back to off | `3C 3C 1C` → level 52 | Done |
+| 1H | Nothing | `3C 1H:2s` → off | Done |
+| Anything else | Nothing | `3C 1C 2C 4C 2H:2s wait:1s` → off | Done |
 
 ## When something's wrong
 
-The light looks after the cell and itself whatever you've asked for. It never flashes to say so. It goes down gently, and the level you asked for comes back once it can.
+The light looks after the cell and itself whatever you've asked for. It never flashes to say so. Heat and a low cell take it down gently, and the level you asked for comes back once it can. A flat cell or a fault puts it out and keeps it out, and the aux LEDs say which.
 
 These scripts have four more words. `cell:2.95V` is the cell's voltage from there on and `heat:80C` the temperature. `cell:0V`, like any voltage outside 1.00 to 4.40 V, is a cell the firmware can't read. `fault` starts a torch whose power-on checks failed (on the simulated chip, a fuse that isn't what the firmware expects), and `flash:corrupt` one whose flash doesn't match its checksum. `cargo test` runs these against the library, and `cargo xtask hex` runs them against the firmware on a simulated chip. Every threshold behind them is unmeasured on this light.
 
 | When | Does | Example | Status |
 |---|---|---|---|
-| Low cell | Steps down | `cell:2.95V 2C wait:6s` → level 105 | Done |
-| Low cell, for long enough | Steps down, then off | `cell:2.95V 2C wait:60s` → off | Done |
-| Flat cell | Fades down the ramp, then off | `cell:2.80V 2C wait:10s` → off | Done |
-| Flat cell, 1C again | On again at the very bottom | `cell:2.80V 2C wait:10s 1C` → level 1 | Done |
-| Flat cell, 1C again, a second later | Off again | `cell:2.80V 2C wait:10s 1C wait:1.5s` → off | Done |
-| A cell it can't read | Holds the light at level 50 | `cell:0V 2C wait:10s` → level 50 | Done |
-| A cell it can't read, for five minutes | Off, in one step | `cell:0V 2C wait:301s` → off | Done |
-| A cell it can't read, 1C again | On again, still held at level 50, for another five minutes | `cell:0V 2C wait:301s 1C` → level 50 | Done |
-| A cell it can read again | Back up to the level you asked for | `cell:0V 2C wait:10s cell:3.8V wait:30s` → level 120 | Done |
-| Hot | Fades down, no further than level 50 | `heat:80C 2C wait:120s` → level 50 | Done |
-| Hot, at a level under 50 | Nothing | `heat:80C 1H:3s wait:120s` → level 13 | Done |
-| Hot, then cool | Back up to the level you asked for | `heat:80C 2C wait:120s heat:25C wait:120s` → level 120 | Done |
-| A failed check at power-on | Holds the light at level 50 until the cell comes out | `fault 2C` → level 50 | Done |
-| Flash that doesn't match its checksum | The same as any failed check | `flash:corrupt 2C` → level 50 | Done |
-| A failed check, at a lower level | Nothing | `fault 1H:3s` → level 13 | Done |
+| Low cell | Steps down | `cell:2.95V 1C wait:6s` → level 37 | Done |
+| Low cell, for long enough | Steps down, then off, as a flat cell | `cell:2.95V 1C wait:60s` → off | Done |
+| Flat cell | Fades down the ramp, then off, with the aux yellow for three seconds | `cell:2.80V 1C wait:10s` → off | Done |
+| Flat cell, 1C again | Nothing, and the aux yellow for three seconds | `cell:2.80V 1C wait:10s 1C` → off | Done |
+| Flat cell, rested but not charged, 1C | Nothing | `cell:2.80V 1C wait:10s cell:3.20V 1C` → off | Done |
+| Flat cell, charged, 1C | On as usual | `cell:2.80V 1C wait:10s cell:3.80V 1C` → level 52 | Done |
+| A cell it can't read | Fades down the ramp, then off, as a fault | `cell:0V 1C wait:5s` → off | Done |
+| A cell it can read again | Still a fault | `cell:0V 1C wait:5s cell:3.80V 1C` → off | Done |
+| Hot | Fades down, no further than level 50 | `heat:80C 1C 1H:3s wait:120s` → level 50 | Done |
+| Hot, at a level under 50 | Nothing | `heat:80C 1C 2H:3s wait:120s` → level 13 | Done |
+| Hot, then cool | Back up to the level you asked for | `heat:80C 1C 1H:3s wait:120s heat:25C wait:120s` → level 120 | Done |
+| A failed check at power-on | A fault | `fault 1C` → off | Done |
+| Flash that doesn't match its checksum | The same as any failed check | `flash:corrupt 1C` → off | Done |
 
-A failed check is flash that doesn't match its checksum, a fuse that isn't what the firmware expects, or the watchdog having reset the chip. The light still works, since one that won't come on tells you nothing.
+A flat cell is one that's gone under 2.90 V at level 1, or under 3.00 V for long enough that the steps down reach level 1. After that the light stays off, and clicks and holds do nothing but light the aux yellow for three seconds. A press reads the cell before its click counts, with the light off, and if that reading is 3.60 V or more the click turns the light on as if the torch were new. That's a cell that's been charged or swapped, since one that cut out at level 1 rests only a little above where it cut, and a rested cell at 3.3 V is close to empty. It's one reading because a press only has time for one. So USB charging brings the light back without taking the cell out, and a flat cell can't be run at level 1 again with every click.
 
-A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also what an ADC that never answers looks like. After a second of that the light fades down to level 50 and stays there. With no reading there's no low-voltage cut-off, and this cell has no protection of its own, so after five minutes lit without one reading it can believe, the light goes out, in one step and with no fade. It doesn't lock out, for the same reason a failed check doesn't, so each 1C buys another five minutes at level 50. The five minutes only count while the light's on, and one good reading starts them again. Readings that come back at 3.30 V or more step the level back up, as they do after a low cell. Five minutes is a judgement, and unmeasured like every other number here.
+A fault is a failed check or a cell it can't read, and it lasts until the cell comes out. The light won't come on, and clicks and holds light the aux white for three seconds. A fault that comes up with the light on fades it down the ramp, a level a tick, so it doesn't snap out in your hand.
+
+A failed check is flash that doesn't match its checksum, a fuse that isn't what the firmware expects, or the watchdog having reset the chip. So one watchdog reset leaves the torch dark until the cell comes out.
+
+A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also what an ADC that never answers looks like. Three readings in a row like that go, and the fourth, about a second in, is a fault. With no reading there's no low-voltage cut-off, and this cell has no protection of its own, so a torch that can't read its cell doesn't light.
 
 ## Always on, in the background
 
 | What | Does | Status |
 |---|---|---|
-| Aux LEDs | Dim and steady, blue when off, red in lockout, out while the main LED's lit. They never flash | Done |
+| Aux LEDs | Dim and steady, blue when off, red in lockout, out while the main LED's lit. Yellow for a flat cell and white for a fault, for three seconds after a press or after the light goes out, and dark otherwise. They never flash | Done |
 | Sleep when off | Powers down, and looks at the switch 64 times a second | Done |
 | A tick that stops | With the light on, off within about a tenth of a second, and it stays off until the watchdog resets the chip or the cell comes out | Done |
 
-The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware.
+The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware. The channels are separate emitters that don't blend well, so off and lockout, the two you'll see most, get a channel each. A flat cell is yellow, red and green together, and a fault white, all three. Neither needs to blend to stand apart from the others. A flat cell and a fault only light the aux for three seconds at a time, since a cell that's already flat, or one the torch can't read, shouldn't be drained by the aux. The watchdog reset after a stopped tick is a failed check, so that torch shows white when pressed.
 
 None of this has met a real light yet, so this isn't firmware to carry. See the [roadmap](roadmap.md).

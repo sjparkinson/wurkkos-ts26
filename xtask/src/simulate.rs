@@ -350,7 +350,7 @@ fn lit(level: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ts26::ui::DEFAULT_LEVEL as LEVEL;
+    use ts26::ui::ON_LEVEL as LEVEL;
 
     fn script(script: &str) -> Run {
         let words: Vec<_> = script.split_whitespace().collect();
@@ -375,27 +375,30 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_flash_goes_first_and_caps_the_light() {
-        assert_eq!(script("flash:corrupt 2C").level, 50);
+    fn corrupt_flash_goes_first_and_keeps_the_light_off() {
+        assert_eq!(script("flash:corrupt 1C").level, 0);
         let err = parse(&["wait:1s", "flash:corrupt"]).unwrap_err();
         assert!(err.contains("power-on"), "{err}");
     }
 
     #[test]
-    fn a_flat_cell_turns_it_off_and_a_fault_caps_it() {
-        assert_eq!(script("cell:2.80V 2C wait:10s").level, 0);
-        assert_eq!(script("fault 2C").level, 50);
+    fn a_flat_cell_turns_it_off_and_a_fault_keeps_it_off() {
+        assert_eq!(script("cell:2.80V 1C wait:10s").level, 0);
+        assert_eq!(script("fault 1C").level, 0);
     }
 
     #[test]
-    fn a_cell_it_cant_read_caps_it_then_turns_it_off_at_five_minutes() {
-        assert_eq!(script("cell:0V 2C wait:299s").level, 50);
-        let run = script("cell:0V 2C wait:301s");
+    fn a_cell_it_cant_read_fades_it_out_for_good() {
+        let run = script("cell:0V 1C wait:5s");
         assert_eq!(run.level, 0);
-        // The log says when, with nothing clicked to explain it.
-        let off = run.lines.last().unwrap();
-        assert!(off.starts_with("300.") && off.ends_with("→ off"), "{off}");
-        assert_eq!(script("cell:0V 2C wait:301s 1C").level, 50);
+        // The log says so, after the fade, with nothing clicked to explain it.
+        let [.., fade, off] = &run.lines[..] else {
+            panic!("{:#?}", run.lines)
+        };
+        assert!(fade.contains("fade from"), "{fade}");
+        let (_, event) = off.split_once(" s ").unwrap();
+        assert_eq!(event.trim_start(), "→ off", "{off}");
+        assert_eq!(script("cell:0V 1C wait:5s cell:3.8V 1C").level, 0);
     }
 
     #[test]

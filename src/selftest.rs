@@ -12,9 +12,10 @@
 //!
 //! And a watchdog reset means something hung ([`hung`]).
 //!
-//! A failure doesn't leave a dead torch, because a light that won't come on
-//! tells you nothing on the bench. It quietly caps the light instead, at
-//! `limits::FAULT_CEILING`, until the cell comes out.
+//! A failure keeps the light off until the cell comes out
+//! (`limits::Health::Fault`), and the aux LEDs show white for a few seconds
+//! after power-on and after each press, so a torch that won't come on still
+//! says why.
 //!
 //! That's the whole of the safety net. The RAM and register tests, the clock
 //! check and a proof that the watchdog bites are left out on purpose (see
@@ -82,7 +83,7 @@ impl Faults {
         hang: false,
     };
 
-    /// Whether anything failed, which caps the light.
+    /// Whether anything failed, which keeps the light off.
     pub const fn any(self) -> bool {
         self.flash || self.fuses || self.hang
     }
@@ -168,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_fault_caps_the_light() {
+    fn only_a_fault_counts() {
         assert!(!Faults::NONE.any());
         let flash = Faults {
             flash: true,

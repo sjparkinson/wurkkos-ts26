@@ -43,12 +43,14 @@ pub const AUX: [(u8, u8); 3] = [
     (AUX_RED, 1 << AUX_RED),
 ];
 
-/// The PORTC pin that lights `colour`, as a mask, or 0 for none.
+/// The PORTC pins that light `colour`, as a mask, or 0 for none.
 pub const fn aux_pin(colour: Aux) -> u8 {
     match colour {
         Aux::Off => 0,
         Aux::Blue => 1 << AUX_BLUE,
         Aux::Red => 1 << AUX_RED,
+        Aux::Yellow => 1 << AUX_RED | 1 << AUX_GREEN,
+        Aux::White => AUX_PINS,
     }
 }
 
@@ -57,14 +59,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_colour_lights_one_aux_pin_or_none() {
+    fn each_colour_lights_the_pins_it_mixes_and_off_none() {
         assert_eq!(aux_pin(Aux::Off), 0);
-        for colour in [Aux::Blue, Aux::Red] {
-            let pin = aux_pin(colour);
-            assert_eq!(pin.count_ones(), 1, "{colour:?}");
-            assert_eq!(pin & !AUX_PINS, 0, "{colour:?}");
+        assert_eq!(aux_pin(Aux::Blue), 1 << AUX_BLUE);
+        assert_eq!(aux_pin(Aux::Red), 1 << AUX_RED);
+        assert_eq!(aux_pin(Aux::Yellow), 1 << AUX_RED | 1 << AUX_GREEN);
+        assert_eq!(aux_pin(Aux::White), AUX_PINS);
+        let colours = [Aux::Off, Aux::Blue, Aux::Red, Aux::Yellow, Aux::White];
+        for (i, &a) in colours.iter().enumerate() {
+            for &b in &colours[i + 1..] {
+                assert_ne!(aux_pin(a), aux_pin(b), "{a:?} and {b:?}");
+            }
         }
-        assert_ne!(aux_pin(Aux::Blue), aux_pin(Aux::Red));
     }
 
     #[test]

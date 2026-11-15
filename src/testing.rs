@@ -1048,7 +1048,7 @@ mod tests {
     fn a_rig_starts_off_and_plays_a_script() {
         assert_eq!(Rig::default().level(), 0);
         let script = parse(["1C"]).map(Result::unwrap);
-        assert_eq!(Rig::play(script).level(), crate::ui::DEFAULT_LEVEL);
+        assert_eq!(Rig::play(script).level(), crate::ui::ON_LEVEL);
         let mut ticks = 0;
         let mut clicks = 0;
         Rig::play_with(parse(["2C", "wait:1s"]).map(Result::unwrap), |_, event| {
@@ -1061,8 +1061,9 @@ mod tests {
 
     #[test]
     fn a_scripts_fault_is_a_power_on_fault() {
-        let rig = Rig::play(parse(["fault", "2C"]).map(Result::unwrap));
-        assert_eq!(rig.level(), crate::limits::FAULT_CEILING);
+        let rig = Rig::play(parse(["fault", "1C"]).map(Result::unwrap));
+        assert_eq!(rig.level(), 0);
+        assert_eq!(rig.torch.aux(), crate::ui::Aux::White);
     }
 
     const SPEC: &str = "\

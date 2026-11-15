@@ -100,17 +100,19 @@ A flash doesn't power-cycle the chip, so take the probe off with the cell out an
 
 If the light goes dark after a flash that verified, run `cargo xtask peek /dev/cu.usbserial-XXXX` before anything else. It reads the running chip's registers and SRAM, which shows how far the firmware got. It finishes the same way as `ping`, with what's most likely a reset, so only the first run shows what the firmware had been doing, and a `ping` before it would spoil that. If it talks, flash T0 again. A light that comes back points at the firmware, and one that doesn't points at the board. If it doesn't talk, see [below](#if-it-doesnt-talk), and stop there.
 
-## If it's capped at level 50
+## If it won't come on
 
-The firmware quietly holds the light at level 50 if a check at power-on fails (flash doesn't match its CRC, the fuses aren't what it expects, or the watchdog reset the chip). It doesn't flash or tell you which, and it still works, so all you'll see is the ramp stopping low and turbo looking dim. None of the three has met a real TS26, so suspect the checks before the torch, in this order.
+The firmware keeps the light off if a check at power-on fails (flash doesn't match its CRC, the fuses aren't what it expects, or the watchdog reset the chip). The aux shows white for three seconds after power-on and after each press, and dark otherwise. It doesn't say which check failed. None of the three has met a real TS26, so suspect the checks before the torch, in this order.
 
-1. **A watchdog reset.** Take the cell out, wait a few seconds, and put it back. That's the only one this clears, so if the cap's gone, something bit. It might be a real hang, or the reset flags left over from before a flash, and if it comes back after use, it's the firmware or the watchdog's window, which nobody's seen on a real chip.
-2. **The CRC.** A cap straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
-3. **The fuses.** Compare `backup/torch/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a cap. A capped torch is a working torch.
+1. **A watchdog reset.** Take the cell out, wait a few seconds, and put it back. That's the only one this clears, so if it lights now, something bit. It might be a real hang, or the reset flags left over from before a flash, and if it comes back after use, it's the firmware or the watchdog's window, which nobody's seen on a real chip.
+2. **The CRC.** A dark torch straight after a flash that verified points at the sum in `xtask/src/crc.rs`, which has never been checked by real hardware. After an interrupted flash, run `cargo xtask flash` again.
+3. **The fuses.** Compare `backup/torch/fuses.hex` with `selftest::Fuses::ok` in `src/selftest.rs`, which has never seen a real TS26's bytes. Nothing here writes fuses, and on this torch that's not something to start doing to clear a fault. A dark torch with a white aux is a chip that's running and says so.
 
-The cap only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
+A watchdog fault only lasts for the boot that saw the watchdog's flag, so a later reset of another kind clears it too, and that probably includes the one at the end of `ping` or `peek`.
 
-One more thing caps the light at level 50, and it isn't a check at power-on. It's a cell voltage the firmware can't believe, under 1.00 V or over 4.40 V by its own sums, which is also what a dead ADC reads as. It's the only cause that then turns the light off after five minutes and lets a click bring it back for five more. So a light that goes out five minutes after coming on, and comes back with 1C, is this and not dead firmware. On a torch it points at the divider on PA1 or the 1094 calibration, and neither has met a real TS26.
+One more thing is a fault, and it isn't a check at power-on. It's a cell voltage the firmware can't believe, under 1.00 V or over 4.40 V by its own sums, which is also what a dead ADC reads as. It's the only cause that lets the light come on, for about a second, before fading it out. So a light that fades out right after 1C and then shows white is this and not dead firmware. On a torch it points at the divider on PA1 or the 1094 calibration, and neither has met a real TS26.
+
+Yellow on the aux after a press, with the light dark, is a flat cell, not a fault. Charge it, and the next click lights it.
 
 ## Going back
 

@@ -89,7 +89,7 @@ The sensor inside the MCU, on the driver.
 
 - The stock firmware's Wurkkos builds raise its default limit from 45 °C to 50 °C, "higher temperature limit because attiny1616 is more accurate". Confirmed.
 - Its TS26 build stops stepping down at level 50 (of 150), and steps faster above 120. Confirmed.
-- This firmware borrows that 50 for its thermal floor and for the cap after a failed check (`thermal::FLOOR`, `limits::FAULT_CEILING`), but on its own curve, where level 50 is about 3.6% of full duty. That isn't the stock firmware's level 50, and nobody's measured how bright either is.
+- This firmware borrows that 50 for its thermal floor (`thermal::FLOOR`), but on its own curve, where level 50 is about 3.6% of full duty. That isn't the stock firmware's level 50, and nobody's measured how bright either is.
 - The sensor's calibration offset is 0 and not overridden. 1Lumen calls the sensor "precalibrated to within ±1 to 2 °C" without saying how they know.
 - 1Lumen's thermocouple on the head peaked at 52 °C. One sample.
 
