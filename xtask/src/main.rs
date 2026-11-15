@@ -8,6 +8,7 @@
 #[cfg(test)]
 mod atdf;
 mod avr;
+mod breakages;
 mod crc;
 mod elf;
 mod ihex;
@@ -42,7 +43,9 @@ commands:
                           stack, loop and handler use
   hex --no-examples       the same, leaving docs/ui.md's examples out of the
                           simulator run, for a breakout test build (T1, T5)
-  ping <port>            check the programmer can see the chip, writing nothing,
+  breakages [name...]     check hex refuses copies of the firmware, each broken on
+                          purpose in one way, and leave the checkout alone
+  ping <port>           check the programmer can see the chip, writing nothing,
                           though expect it to reset as UPDI turns off
   peek <port>             read the running chip's registers and SRAM, to see how
                           far the firmware got; it writes nothing, and the same
@@ -72,6 +75,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["hex"] => hex(true),
         ["hex", "--no-examples"] => hex(false),
+        ["breakages", names @ ..] => breakages::run(&root(), names),
         ["ping", port] => ping(port),
         ["peek", port] => peek(port),
         ["backup", port, dir] => backup(port, Path::new(dir)),

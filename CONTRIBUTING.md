@@ -28,6 +28,23 @@ It's a mistake-finder, not proof. It's one reading of the datasheet, run against
 
 The UPDI programmer has its own, smaller fake chip in `xtask/src/updi.rs`, with the same caveat.
 
+## Breakages
+
+```sh
+cargo xtask breakages          # every breakage
+cargo xtask breakages <name>   # only the ones named
+```
+
+Firmware that's right trips none of the simulator's rules, nor `xtask/src/layout.rs`'s, so a passing `cargo xtask hex` doesn't show they still work. The tests in `xtask/src/sim.rs` trip the ones a test can reach by driving the fake chip. The rest only go off with the real firmware running, and `cargo xtask breakages` is for those.
+
+`xtask/src/breakages.rs` has a table of mistakes, each a line or two of `src/avr/hw.rs` or `src/main.rs` changed. PB2 raised before the duty's set, a 16-bit register written high byte first, a watchdog that's never fed, a handler that changes a register, an array indexed by a reading, a `u16` divided by ten, and so on, one for each kind of alarm. The command copies the source to a temporary directory and runs `cargo xtask hex` there. First on the copy as it is, which has to pass. Then with each mistake in turn, which `hex` has to refuse, at the stage and with the message the table names. A mistake that passes fails the command, and so does one that's refused for some other reason, such as not compiling. The checkout is never edited.
+
+Run it after touching `xtask/src/sim.rs`, `xtask/src/layout.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`, and when bumping the nightly. It takes about a minute on a four-core machine, half of that building the copy's xtask and `core`, which is too long for every pull request, so CI doesn't run it.
+
+Each mistake is found by its exact text, which has to be in the file exactly once. `cargo test` checks that, so a refactor that rewords one of those lines fails there until the table's brought up to date, and can't leave a breakage that changes nothing.
+
+Like the simulator, it finds mistakes and proves nothing. A refusal shows one alarm rings for one mistake. It doesn't show the alarm rings for every mistake of that kind, and a mistake that isn't in the table is as unchecked as it was. Only add a breakage once you've run it and seen it refused for the reason you meant. If `hex` passes a mistake it ought to refuse, that's a gap in the simulator, so write it down and leave it out of the table.
+
 ## Layout
 
 ```
@@ -52,7 +69,8 @@ src/avr/hw.rs     pins, register access and the interrupt handlers (AVR only)
 src/avr/rt.rs     vector table and startup (AVR only)
 examples/link.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
-xtask/            hex, the simulator, simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
+xtask/            hex, the simulator, breakages (xtask/src/breakages.rs, firmware broken on purpose to show
+                  hex refuses it), simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
 docs/             hardware, flashing, bench plan, toolchain, UI spec, roadmap, hazard log
 vendor/           Microchip's ATDF for the part (Apache-2.0)
 ```
@@ -75,7 +93,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Bumping the nightly
 
-AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Symbol names can change between nightlies, so also re-prove the no-panic check still fires. Temporarily index a small array in `src/main.rs`'s loop with a runtime value from `hw::adc_result()`, run `cargo xtask hex`, and confirm it fails naming `panic_bounds_check` and friends (`llvm-nm -C` on the ELF shows what's there). Revert that afterwards. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed.
+AVR is a tier 3 target. Pick a nightly, change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. Symbol names can change between nightlies, so also run `cargo xtask breakages`, which re-proves the no-panic check still fires. Its `bounds-check` indexes a small array in `src/main.rs`'s loop with a runtime value from `hw::adc_result()`, in a copy, and wants `cargo xtask hex` to fail naming `panic_bounds_check` (`llvm-nm -C` on the ELF shows what's there, if it doesn't). Its `wide-multiply` does the same for a 32-bit multiply, which has to fail to link. Then see whether the workarounds in [docs/toolchain.md](docs/toolchain.md) are still needed.
 
 ## Commits
 
