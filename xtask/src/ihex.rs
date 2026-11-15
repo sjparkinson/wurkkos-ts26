@@ -125,6 +125,175 @@ mod tests {
         );
     }
 
+    /// One record as [`encode`] writes them, checksum and newline included.
+    fn rec(address: u16, kind: u8, data: &[u8]) -> String {
+        let mut line = String::new();
+        record(&mut line, address, kind, data);
+        line
+    }
+
+    const END: &str = ":00000001FF\n";
+
+    #[test]
+    fn refuses_a_line_with_half_a_byte_or_too_few_bytes_to_be_a_record() {
+        // A record is five bytes at least, which is ten digits. The first two
+        // have an odd digit, on a line long enough and one too short, and the
+        // rest are whole bytes but too few of them.
+        for bad in [
+            ":00000001FF0",
+            ":00000001F",
+            ":00000001",
+            ":0000",
+            ":00",
+            ":",
+        ] {
+            let err = decode(&format!("{bad}\n{END}")).unwrap_err();
+            assert_eq!(err, "line 1: malformed record", "{bad}");
+        }
+    }
+
+    #[test]
+    fn says_which_line_is_bad() {
+        let good = rec(0, 0x00, &[0x12]);
+        for (bad, what) in [
+            ("00000001FF", "doesn't start with ':'"),
+            (":0000000zFF", "not hex"),
+            (":0200000012EC", "length doesn't match"),
+            (":00000001FE", "bad checksum"),
+            (":00000006FA", "unsupported record type 06"),
+        ] {
+            let err = decode(&format!("{good}\n{bad}\n{END}")).unwrap_err();
+            assert_eq!(err, format!("line 3: {what}"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn skips_blank_lines_and_takes_dos_line_endings() {
+        let text = format!(
+            "\r\n{}\r\n\r\n  {}\r\n",
+            rec(0, 0x00, &[0x12]).trim(),
+            END.trim()
+        );
+        assert_eq!(decode(&text).unwrap(), [0x12]);
+    }
+
+    #[test]
+    fn stops_at_the_end_of_file_record() {
+        let text = format!("{}{END}{}", rec(0, 0x00, &[0x12]), rec(1, 0x00, &[0x34]));
+        assert_eq!(decode(&text).unwrap(), [0x12]);
+    }
+
+    #[test]
+    fn an_extended_segment_address_is_sixteen_times_its_value() {
+        // Segment 0x1000 is 0x10000, where a linear address of 1 also is.
+        let text = format!(
+            "{}{}{END}",
+            rec(0, 0x02, &[0x10, 0x00]),
+            rec(0x0002, 0x00, &[0xAA, 0xBB])
+        );
+        let image = decode(&text).unwrap();
+        assert_eq!(image.len(), 0x1_0004);
+        assert!(image[..0x1_0002].iter().all(|&b| b == 0xFF), "the gap");
+        assert_eq!(&image[0x1_0002..], &[0xAA, 0xBB]);
+
+        // And a small one moves the data by 16 bytes a step.
+        let text = format!(
+            "{}{}{END}",
+            rec(0, 0x02, &[0x00, 0x03]),
+            rec(0x0001, 0x00, &[0xCC])
+        );
+        let image = decode(&text).unwrap();
+        assert_eq!(image.len(), 0x32);
+        assert_eq!(image[0x31], 0xCC);
+    }
+
+    #[test]
+    fn an_extended_linear_address_is_the_high_sixteen_bits() {
+        let text = format!(
+            "{}{}{END}",
+            rec(0, 0x04, &[0x00, 0x02]),
+            rec(0x0010, 0x00, &[0xDD])
+        );
+        let image = decode(&text).unwrap();
+        assert_eq!(image.len(), 0x2_0011);
+        assert_eq!(image[0x2_0010], 0xDD);
+    }
+
+    #[test]
+    fn a_base_address_lasts_until_the_next_one_which_replaces_it() {
+        let text = format!(
+            "{}{}{}{}{}{}{END}",
+            rec(0x0000, 0x00, &[0x01]),
+            rec(0, 0x02, &[0x00, 0x01]),
+            rec(0x0000, 0x00, &[0x02]),
+            rec(0x0001, 0x00, &[0x03]),
+            rec(0, 0x04, &[0x00, 0x00]),
+            rec(0x0002, 0x00, &[0x04]),
+        );
+        let image = decode(&text).unwrap();
+        assert_eq!(image.len(), 0x12);
+        assert_eq!(&image[..3], &[0x01, 0xFF, 0x04]);
+        assert_eq!(&image[0x10..], &[0x02, 0x03]);
+    }
+
+    #[test]
+    fn refuses_an_address_record_that_is_not_two_bytes() {
+        for kind in [0x02, 0x04] {
+            for data in [&[][..], &[0x00], &[0x00, 0x00, 0x00]] {
+                let text = format!("{}{}{END}", rec(0, kind, data), rec(0, 0x00, &[0x12]));
+                let err = decode(&text).unwrap_err();
+                assert_eq!(
+                    err,
+                    format!("line 1: unsupported record type {kind:02X}"),
+                    "{} bytes",
+                    data.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_start_address_records() {
+        let text = format!(
+            "{}{}{}{END}",
+            rec(0, 0x03, &[0x00, 0x00, 0x00, 0x7E]),
+            rec(0, 0x05, &[0x00, 0x00, 0x00, 0x7E]),
+            rec(0, 0x00, &[0x12]),
+        );
+        assert_eq!(decode(&text).unwrap(), [0x12]);
+    }
+
+    #[test]
+    fn records_can_come_in_any_order_and_the_later_one_wins_an_overlap() {
+        let text = format!(
+            "{}{}{}{END}",
+            rec(0x0004, 0x00, &[0x44, 0x55, 0x66]),
+            rec(0x0000, 0x00, &[0x00, 0x11]),
+            rec(0x0001, 0x00, &[0xA1, 0xA2, 0xA3, 0xA4]),
+        );
+        assert_eq!(
+            decode(&text).unwrap(),
+            [0x00, 0xA1, 0xA2, 0xA3, 0xA4, 0x55, 0x66]
+        );
+    }
+
+    #[test]
+    fn a_record_that_stops_where_the_image_does_leaves_its_length_alone() {
+        let text = format!(
+            "{}{}{END}",
+            rec(0x0000, 0x00, &[0x00, 0x11, 0x22, 0x33]),
+            rec(0x0002, 0x00, &[0xB2, 0xB3]),
+        );
+        assert_eq!(decode(&text).unwrap(), [0x00, 0x11, 0xB2, 0xB3]);
+        // One byte further and it grows by that byte.
+        let text = format!(
+            "{}{}{END}",
+            rec(0x0000, 0x00, &[0x00, 0x11, 0x22, 0x33]),
+            rec(0x0003, 0x00, &[0xB3, 0xB4]),
+        );
+        assert_eq!(decode(&text).unwrap(), [0x00, 0x11, 0x22, 0xB3, 0xB4]);
+    }
+
     #[test]
     fn empty_is_just_the_end_record() {
         assert_eq!(encode(&[]), ":00000001FF\n");
