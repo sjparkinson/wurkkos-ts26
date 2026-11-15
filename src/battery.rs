@@ -757,6 +757,14 @@ mod tests {
     }
 
     #[test]
+    fn the_filter_forgets_the_cell_after_five_minutes_of_rest() {
+        // Five minutes of ticks at 64 Hz.
+        assert_eq!(TICKS_PER_SECOND, 64);
+        assert_eq!(FORGET_TICKS, 19_200);
+        assert_eq!(FORGET_TICKS / TICKS_PER_SECOND, 5 * 60);
+    }
+
+    #[test]
     fn a_short_rest_keeps_the_filter() {
         let mut lvp = Protection::new();
         run(&mut lvp, 280, 50, secs(1) - 1);
