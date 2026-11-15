@@ -52,10 +52,19 @@ pub fn current(root: &Path) -> [u8; STAMP_LEN] {
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
-    let hash = git(&["rev-parse", "--short=10", "HEAD"]).filter(|hash| !hash.is_empty());
-    let dirty = git(&["status", "--porcelain", "--untracked-files=no"]);
-    match (hash, dirty) {
-        (Some(hash), Some(dirty)) => format(&hash, !dirty.is_empty()),
+    from_git(
+        git(&["rev-parse", "--short=10", "HEAD"]).as_deref(),
+        git(&["status", "--porcelain", "--untracked-files=no"]).as_deref(),
+    )
+}
+
+/// The stamp for what git said, which is `hash` from `git rev-parse` and
+/// `status` from `git status --porcelain`, each `None` if git failed. A
+/// status with anything in it is a dirty tree. With no hash, an empty one, or
+/// no status, the stamp is `ts26 unknown`.
+fn from_git(hash: Option<&str>, status: Option<&str>) -> [u8; STAMP_LEN] {
+    match (hash.filter(|hash| !hash.is_empty()), status) {
+        (Some(hash), Some(status)) => format(hash, !status.is_empty()),
         _ => format("unknown", false),
     }
 }
@@ -104,6 +113,87 @@ mod tests {
         let short = format("abc", false);
         assert_eq!(&short[..8], b"ts26 abc");
         assert!(short[8..].iter().all(|&b| b == 0xFF));
+    }
+
+    /// A stamp as text, up to its padding.
+    fn text(stamp: &[u8; STAMP_LEN]) -> String {
+        let end = stamp.iter().position(|&b| b == 0xFF).unwrap_or(STAMP_LEN);
+        String::from_utf8(stamp[..end].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn a_clean_tree_is_stamped_with_its_hash_and_a_dirty_one_with_a_plus() {
+        assert_eq!(
+            text(&from_git(Some("abc1234567"), Some(""))),
+            "ts26 abc1234567"
+        );
+        assert_eq!(
+            text(&from_git(Some("abc1234567"), Some(" M src/main.rs"))),
+            "ts26 abc1234567+"
+        );
+    }
+
+    #[test]
+    fn a_build_git_cannot_describe_is_stamped_unknown_and_never_dirty() {
+        for (hash, status) in [
+            (None, None),
+            (None, Some("")),
+            (None, Some(" M src/main.rs")),
+            (Some("abc1234567"), None),
+            // No commits yet, or whatever else leaves git with nothing to say.
+            (Some(""), Some("")),
+            (Some(""), Some(" M src/main.rs")),
+        ] {
+            assert_eq!(
+                text(&from_git(hash, status)),
+                "ts26 unknown",
+                "{hash:?}, {status:?}"
+            );
+        }
+    }
+
+    /// A directory under the system's temporary one that git won't take for
+    /// a checkout, nor look above for one, because its `.git` is a file that
+    /// doesn't say where a repository is. Gone again when the test's done.
+    struct NotACheckout(std::path::PathBuf);
+
+    impl NotACheckout {
+        fn new() -> Self {
+            let name = format!("ts26-xtask-{}-not-a-checkout", std::process::id());
+            let dir = std::env::temp_dir().join(name);
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(".git"), "not a repository\n").unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for NotACheckout {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_build_outside_a_git_checkout_is_stamped_unknown() {
+        let dir = NotACheckout::new();
+        assert_eq!(text(&current(&dir.0)), "ts26 unknown");
+        // And so is one in a directory that isn't there to run git in.
+        assert_eq!(text(&current(&dir.0.join("missing"))), "ts26 unknown");
+    }
+
+    /// Whatever this checkout's state, or with no checkout at all, the stamp
+    /// is one `read` finds and one of the two shapes the module's notes give.
+    #[test]
+    fn the_stamp_for_this_checkout_is_a_hash_or_unknown() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let stamp = text(&current(root));
+        let name = stamp.strip_prefix("ts26 ").expect("the prefix");
+        if name != "unknown" {
+            let hash = name.strip_suffix('+').unwrap_or(name);
+            assert_eq!(hash.len(), 10, "{stamp}");
+            assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{stamp}");
+        }
     }
 
     #[test]
