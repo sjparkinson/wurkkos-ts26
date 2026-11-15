@@ -140,11 +140,13 @@ impl<T: Copy + PartialEq> Changes<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::button::RELEASE_TICKS;
+    use crate::battery;
+    use crate::button::{HOLD_TICKS, RELEASE_TICKS};
     use crate::ramp::CEILING;
-    use crate::testing::{Rig, examples, temperature_reading, voltage_reading};
+    use crate::sensors::Channel;
+    use crate::testing::{Rig, Rng, examples, temperature_reading, voltage_reading};
     use crate::thermal;
-    use crate::ui::ON_LEVEL;
+    use crate::ui::{self, Mode, ON_LEVEL};
 
     const UI_MD: &str = include_str!("../docs/ui.md");
 
@@ -559,6 +561,412 @@ mod tests {
         assert_eq!(torch.output(), dim());
         click(&mut torch);
         assert_eq!(torch.output(), Output::OFF);
+    }
+
+    /// A number from `low` to `high`, both included.
+    fn between(rng: &mut Rng, low: u16, high: u16) -> u16 {
+        low + rng.next_u16() % (high - low + 1)
+    }
+
+    /// How long the switch stays down, or up, this time. Short enough for a
+    /// click, either side of the tick a press becomes a hold or a click
+    /// counts, or long, so that 1C, 3C, 1H, 2H and everything that isn't one
+    /// of them all turn up often.
+    fn span(rng: &mut Rng, pressed: bool) -> u16 {
+        let roll = rng.next_u16() % 16;
+        if pressed {
+            match roll {
+                0..=8 => between(rng, 1, 8),
+                9..=10 => between(rng, HOLD_TICKS - 3, HOLD_TICKS + 3),
+                _ => between(rng, HOLD_TICKS, 4 * TICKS_PER_SECOND),
+            }
+        } else {
+            match roll {
+                0..=6 => between(rng, 1, 8),
+                7..=8 => between(rng, RELEASE_TICKS - 3, RELEASE_TICKS + 3),
+                9..=13 => between(rng, RELEASE_TICKS + 1, TICKS_PER_SECOND),
+                _ => between(rng, TICKS_PER_SECOND, 30 * TICKS_PER_SECOND),
+            }
+        }
+    }
+
+    /// What one ADC channel reads for a while.
+    #[derive(Clone, Copy, Debug)]
+    enum Source {
+        /// The same raw result every time.
+        Steady(u16),
+        /// That result, with one in four anything at all.
+        Glitchy(u16),
+        /// Anything at all, half of it more than the ADC can read.
+        Garbage,
+    }
+
+    impl Source {
+        fn read(self, rng: &mut Rng) -> u16 {
+            match self {
+                Self::Steady(raw) => raw,
+                Self::Glitchy(raw) if rng.next_u16() % 4 != 0 => raw,
+                Self::Glitchy(_) | Self::Garbage => match rng.next_u16() % 2 {
+                    0 => rng.next_u16(),
+                    _ => rng.next_u16() % (4 * 1023 + 1),
+                },
+            }
+        }
+
+        /// A cell that's good, middling, low, flat, or one the firmware
+        /// can't read.
+        fn cell(rng: &mut Rng) -> Self {
+            match rng.next_u16() % 16 {
+                0..=5 => Self::Steady(voltage_reading(between(rng, 340, 420))),
+                6..=7 => Self::Steady(voltage_reading(between(rng, 300, 339))),
+                8..=9 => Self::Steady(voltage_reading(between(rng, 291, 299))),
+                10..=11 => Self::Steady(voltage_reading(between(rng, 150, 289))),
+                12 => Self::Steady(match rng.next_u16() % 3 {
+                    0 => 0,
+                    1 => voltage_reading(60),
+                    _ => 4 * 1023,
+                }),
+                13..=14 => Self::Glitchy(voltage_reading(between(rng, 300, 420))),
+                _ => Self::Garbage,
+            }
+        }
+
+        /// A head that's cool, hot, or one the sensor can't read.
+        fn head(rng: &mut Rng) -> Self {
+            let celsius = |degrees: u16| temperature_reading(thermal::celsius(degrees as u8));
+            match rng.next_u16() % 8 {
+                0..=3 => Self::Steady(celsius(between(rng, 0, 45))),
+                4..=5 => Self::Steady(celsius(between(rng, 55, 95))),
+                6 => Self::Glitchy(celsius(between(rng, 20, 95))),
+                _ => Self::Garbage,
+            }
+        }
+    }
+
+    /// What docs/ui.md says the clicks and holds that reach the UI have done
+    /// so far, kept apart from `Ui` so the two can be compared.
+    #[derive(Debug)]
+    struct Model {
+        mode: Mode,
+        /// The level asked for while on.
+        asked: u8,
+        /// The tick the aux stops showing yellow or white.
+        dark_at: u32,
+    }
+
+    impl Model {
+        fn handle(&mut self, event: Event) {
+            match (self.mode, event) {
+                (Mode::Off, Event::Click(1)) => {
+                    self.mode = Mode::On;
+                    self.asked = ON_LEVEL;
+                }
+                (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
+                (Mode::Lockout, Event::Click(3)) | (Mode::On, Event::Click(1)) => {
+                    self.mode = Mode::Off;
+                }
+                (Mode::On, Event::Hold { clicks: 0, .. }) => {
+                    self.asked = (self.asked + 1).min(CEILING);
+                }
+                (Mode::On, Event::Hold { clicks: 1, .. }) => {
+                    self.asked = (self.asked - 1).max(ui::FLOOR);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// How many ticks the noise spent in each state, so a change that stops
+    /// it reaching one fails rather than quietly checking less.
+    #[derive(Debug, Default)]
+    struct Seen {
+        lit: u32,
+        at_the_top: u32,
+        at_the_bottom: u32,
+        held_down_by_the_cell: u32,
+        held_down_by_heat: u32,
+        locked: u32,
+        resting: u32,
+        flat: u32,
+        faulted: u32,
+        fading_out: u32,
+        failed_at_power_on: u32,
+        blue: u32,
+        red: u32,
+        yellow: u32,
+        white: u32,
+        results_lost: u32,
+        turned_on: u32,
+        went_flat: u32,
+        charged: u32,
+        went_blind: u32,
+        clicked_off_mid_fade: u32,
+        ignored_presses: u32,
+    }
+
+    /// One torch from power-on, for `ticks` ticks of random switching, cells,
+    /// temperatures and ADC results, or until half a minute into a fault,
+    /// checking every tick against docs/ui.md. Returns how many ticks it ran.
+    fn live(rng: &mut Rng, faults: Faults, ticks: u32, seen: &mut Seen, life: u32) -> u32 {
+        macro_rules! check {
+            ($t:expr, $cond:expr, $($why:tt)+) => {
+                assert!($cond, "life {life}, tick {}: {}", $t, format_args!($($why)+))
+            };
+        }
+        let failed = faults.any();
+        let mut rig = Rig::new(faults);
+        let mut model = Model {
+            mode: Mode::Off,
+            asked: 0,
+            dark_at: if failed { SHOW_TICKS.into() } else { 0 },
+        };
+        let (mut pressed, mut switch_left) = (false, 0);
+        let (mut cell, mut head) = (Source::Steady(3516), Source::Steady(2124));
+        // One result in `lose` never arrives, and `0` is none of them.
+        let (mut lose, mut world_left) = (0, 0);
+        // Ticks the switch has been up, and ticks since the fault.
+        let (mut up, mut faulted_for) = (0_u32, 0_u32);
+        for t in 1..=ticks {
+            if switch_left == 0 {
+                pressed = !pressed;
+                switch_left = span(rng, pressed);
+            }
+            switch_left -= 1;
+            if world_left == 0 {
+                cell = Source::cell(rng);
+                head = Source::head(rng);
+                lose = match rng.next_u16() % 16 {
+                    0..=11 => 0,
+                    12..=14 => 4,
+                    _ => 1,
+                };
+                world_left = between(rng, 1, 30 * TICKS_PER_SECOND);
+            }
+            world_left -= 1;
+            up = if pressed { 0 } else { up + 1 };
+
+            let health_before = rig.torch.limits.health();
+            let level_before = rig.level();
+            let resting_before = rig.resting();
+            let mut result = rig.adc.result();
+            if lose != 0 && rng.next_u16().is_multiple_of(lose) {
+                seen.results_lost += u32::from(result.take().is_some());
+            }
+            let event = rig.torch.tick(pressed, result);
+            rig.adc
+                .start_with(rig.torch.convert(), |channel| match channel {
+                    Channel::Voltage => cell.read(rng),
+                    Channel::Temperature => head.read(rng),
+                });
+            let health = rig.torch.limits.health();
+            let level = rig.level();
+
+            // The clicks and holds that should have reached the UI.
+            let mut ignored = false;
+            if let Some(event) = event {
+                if health_before == Health::Good || level_before > 0 {
+                    model.handle(event);
+                } else if matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. }) {
+                    model.dark_at = t + u32::from(SHOW_TICKS);
+                    ignored = true;
+                }
+            }
+            if model.mode == Mode::On && level == 0 {
+                check!(t, health != Health::Good, "off with nothing wrong");
+                model.mode = Mode::Off;
+            }
+            if health != Health::Good && (health_before == Health::Good || level > 0) {
+                model.dark_at = t + u32::from(SHOW_TICKS);
+            }
+            check!(t, rig.torch.ui.mode() == model.mode, "{model:?}");
+            let asked = match model.mode {
+                Mode::On => model.asked,
+                Mode::Off | Mode::Lockout => 0,
+            };
+            check!(t, rig.torch.ui.output_level() == asked, "{model:?}");
+
+            // The level.
+            check!(t, level <= CEILING, "level {level}");
+            check!(t, rig.output() == ramp::output(level), "level {level}");
+            check!(t, level <= asked, "level {level} of {asked}");
+            check!(t, (level > 0) == (model.mode == Mode::On), "level {level}");
+            check!(t, !failed || level == 0, "lit after a failed check");
+            let moved = level.abs_diff(level_before);
+            let click = event == Some(Event::Click(1));
+            let hold = matches!(event, Some(Event::Hold { .. }));
+            if level_before == 0 && level > 0 {
+                check!(t, click, "on without a click: {event:?}");
+                check!(t, health_before == Health::Good, "{health_before:?}");
+                check!(t, health == Health::Good, "{health:?}");
+                check!(t, level <= ON_LEVEL, "on at {level}");
+                seen.turned_on += 1;
+            } else if level_before > 0 && level == 0 {
+                check!(
+                    t,
+                    click || health != Health::Good,
+                    "went out with nothing wrong and no click"
+                );
+            } else {
+                // The ramp moves a level a tick, and so does each ceiling.
+                check!(t, moved <= 1 + u8::from(hold), "{level_before} to {level}");
+            }
+
+            // What's wrong.
+            match (health_before, health) {
+                (Health::Good, Health::Good)
+                | (Health::Flat, Health::Flat)
+                | (Health::Fault, Health::Fault) => {}
+                (Health::Good, Health::Flat) => {
+                    check!(t, level_before == 1, "flat from level {level_before}");
+                    seen.went_flat += 1;
+                }
+                (Health::Flat, Health::Good) => {
+                    let volts = result.map(battery::centivolts);
+                    check!(
+                        t,
+                        volts.is_some_and(|v| v >= battery::CHARGED_AT && battery::plausible(v)),
+                        "charged by {volts:?}"
+                    );
+                    seen.charged += 1;
+                }
+                (Health::Good | Health::Flat, Health::Fault) => seen.went_blind += 1,
+                (Health::Fault, _) => check!(t, false, "a fault cleared to {health:?}"),
+            }
+            check!(t, !failed || health == Health::Fault, "{health:?}");
+            if health == Health::Flat {
+                check!(t, level == 0, "flat at level {level}");
+            }
+            if health_before == Health::Fault {
+                // Down a level a tick, then off, or off at a click.
+                check!(t, level <= level_before, "{level_before} to {level}");
+                if level > 0 {
+                    check!(t, moved == 1, "{level_before} to {level}");
+                } else if level_before > 0 {
+                    check!(t, click || level_before <= 2, "out from {level_before}");
+                    seen.clicked_off_mid_fade += u32::from(click);
+                }
+            }
+
+            // The aux.
+            let aux = rig.aux();
+            check!(t, level == 0 || aux == Aux::Off, "{aux:?} at level {level}");
+            let showing = t < model.dark_at;
+            let expected = match (health, model.mode) {
+                _ if level > 0 => Aux::Off,
+                (Health::Good, Mode::Off) => Aux::Blue,
+                (Health::Good, Mode::Lockout) => Aux::Red,
+                (Health::Flat, _) if showing => Aux::Yellow,
+                (Health::Fault, _) if showing => Aux::White,
+                _ => Aux::Off,
+            };
+            check!(t, aux == expected, "{aux:?}, {health:?}, {model:?}");
+
+            // Resting.
+            let resting = rig.resting();
+            if resting {
+                check!(t, level == 0, "resting at level {level}");
+                check!(t, rig.convert().is_none(), "resting with the ADC busy");
+            }
+            if resting_before && !pressed {
+                check!(t, resting && event.is_none(), "woke with the switch up");
+                check!(t, health == health_before, "{health:?} while resting");
+            }
+            if resting_before && pressed {
+                check!(t, rig.convert().is_some(), "a press that reads nothing");
+            }
+            if up > u32::from(RELEASE_TICKS) && level == 0 {
+                check!(t, resting, "nothing to do and not resting");
+            }
+
+            seen.lit += u32::from(level > 0);
+            seen.at_the_top += u32::from(level == CEILING);
+            seen.at_the_bottom += u32::from(level == ui::FLOOR && asked == ui::FLOOR);
+            if health == Health::Good && level > 0 && level < asked {
+                let (cell, heat) = rig.torch.limits.ceilings();
+                seen.held_down_by_the_cell += u32::from(level == cell);
+                seen.held_down_by_heat += u32::from(level == heat);
+            }
+            seen.locked += u32::from(model.mode == Mode::Lockout);
+            seen.resting += u32::from(resting);
+            seen.flat += u32::from(health == Health::Flat);
+            seen.faulted += u32::from(health == Health::Fault && !failed);
+            seen.fading_out += u32::from(health == Health::Fault && level > 0);
+            seen.failed_at_power_on += u32::from(failed);
+            seen.blue += u32::from(aux == Aux::Blue);
+            seen.red += u32::from(aux == Aux::Red);
+            seen.yellow += u32::from(aux == Aux::Yellow);
+            seen.white += u32::from(aux == Aux::White);
+            seen.ignored_presses += u32::from(ignored);
+
+            // Nothing changes a fault, so it gets long enough for the aux to
+            // go dark and be woken a few times, and no longer.
+            faulted_for = if health == Health::Fault {
+                faulted_for + 1
+            } else {
+                0
+            };
+            if faulted_for > 30 * u32::from(TICKS_PER_SECOND) {
+                return t;
+            }
+        }
+        ticks
+    }
+
+    /// Torches from power-on, one after another, until they've run for
+    /// `ticks` ticks between them. One in eight failed a power-on check. A
+    /// fault lasts until the cell comes out, so each gets a few minutes at
+    /// most.
+    fn throw_noise_at_torches(seed: u32, ticks: u32, seen: &mut Seen) {
+        let mut rng = Rng::new(seed);
+        let (mut life, mut run) = (0, 0);
+        while run < ticks {
+            let faults = match rng.next_u16() % 8 {
+                0 => Faults {
+                    hang: true,
+                    ..Faults::NONE
+                },
+                _ => Faults::NONE,
+            };
+            let length = u32::from(between(&mut rng, 1000, 20_000));
+            run += live(&mut rng, faults, length, seen, life);
+            life += 1;
+        }
+    }
+
+    /// Two million ticks, about nine hours of torch, and every state in
+    /// docs/ui.md reached along the way.
+    #[test]
+    fn random_switching_and_readings_never_break_a_promise() {
+        let mut seen = Seen::default();
+        for seed in [0x5EED_0003, 0x5EED_0004] {
+            throw_noise_at_torches(seed, 1_000_000, &mut seen);
+        }
+        for (what, times) in [
+            ("lit", seen.lit),
+            ("at the top of the ramp", seen.at_the_top),
+            ("at the bottom of the ramp", seen.at_the_bottom),
+            ("held down by the cell", seen.held_down_by_the_cell),
+            ("held down by heat", seen.held_down_by_heat),
+            ("locked out", seen.locked),
+            ("resting", seen.resting),
+            ("flat", seen.flat),
+            ("faulted", seen.faulted),
+            ("fading out for a fault", seen.fading_out),
+            ("failed at power-on", seen.failed_at_power_on),
+            ("blue", seen.blue),
+            ("red", seen.red),
+            ("yellow", seen.yellow),
+            ("white", seen.white),
+            ("missing a result", seen.results_lost),
+            ("turned on", seen.turned_on),
+            ("gone flat", seen.went_flat),
+            ("charged", seen.charged),
+            ("unable to read the cell", seen.went_blind),
+            ("clicked off mid-fade", seen.clicked_off_mid_fade),
+            ("pressed with the light kept out", seen.ignored_presses),
+        ] {
+            assert!(times > 0, "never {what}: {seen:?}");
+        }
     }
 
     #[test]
