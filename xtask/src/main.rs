@@ -835,4 +835,128 @@ mod tests {
         assert_eq!(commas(39062), "39,062");
         assert_eq!(commas(1_234_567), "1,234,567");
     }
+
+    const FLASH_SIZE: usize = super::updi::map::FLASH_SIZE;
+    const EEPROM_SIZE: usize = super::updi::map::EEPROM_SIZE;
+
+    /// Stands in for connecting where nothing should get that far.
+    fn no_connection() -> Result<Programmer<Tiny>, String> {
+        Programmer::connect_for_programming(no_port()?)
+    }
+
+    #[test]
+    fn an_image_bigger_than_flash_is_refused_before_the_port_is_opened() {
+        let err = program(no_connection, &vec![0x12; FLASH_SIZE + 1], None).unwrap_err();
+        assert_eq!(err, "the image is 16385 bytes; the ATtiny1616 has 16384");
+        // And with an EEPROM image that would fit.
+        let eeprom = vec![0x34; EEPROM_SIZE];
+        let err = program(no_connection, &vec![0x12; 2 * FLASH_SIZE], Some(&eeprom)).unwrap_err();
+        assert_eq!(err, "the image is 32768 bytes; the ATtiny1616 has 16384");
+    }
+
+    #[test]
+    fn an_eeprom_image_bigger_than_eeprom_is_refused_before_the_port_is_opened() {
+        let eeprom = vec![0x34; EEPROM_SIZE + 1];
+        let err = program(no_connection, &[0x12], Some(&eeprom)).unwrap_err();
+        assert_eq!(err, "the EEPROM image is bigger than 256 bytes");
+    }
+
+    #[test]
+    fn images_that_fill_flash_and_eeprom_or_fall_short_of_them_are_written() {
+        for (flash_len, eeprom_len) in [
+            (FLASH_SIZE, EEPROM_SIZE),
+            (FLASH_SIZE - 1, EEPROM_SIZE - 1),
+            (1, 1),
+            (0, 0),
+        ] {
+            let flash: Vec<u8> = (0..flash_len).map(|i| (i * 5 + 1) as u8 & 0x7F).collect();
+            let eeprom: Vec<u8> = (0..eeprom_len).map(|i| (i * 3 + 2) as u8 & 0x7F).collect();
+            let mut tiny = Tiny::new();
+            tiny.flash.fill(0x42);
+
+            let open = on(&mut tiny);
+            program(
+                || Programmer::connect_for_programming(open()?),
+                &flash,
+                Some(&eeprom),
+            )
+            .unwrap_or_else(|e| panic!("{flash_len} and {eeprom_len} bytes: {e}"));
+            assert!(tiny.flash[..flash_len] == flash, "{flash_len} bytes");
+            assert!(
+                tiny.flash[flash_len..].iter().all(|&b| b == 0xFF),
+                "{flash_len} bytes: the rest of flash isn't erased"
+            );
+            assert!(tiny.eeprom[..eeprom_len] == eeprom, "{eeprom_len} bytes");
+            assert_eq!(tiny.lost_while_busy, 0);
+            assert!(tiny.updi_disabled, "UPDI was left on");
+        }
+    }
+
+    /// Checks a chip was let go after a flash that failed part way, which is
+    /// out of programming mode and reset, with UPDI off.
+    fn assert_let_go(tiny: &Tiny) {
+        assert!(tiny.updi_disabled, "UPDI was left on");
+        assert!(!tiny.progmode, "the chip was left in programming mode");
+        assert!(!tiny.in_reset, "the chip was left in reset");
+        assert_eq!(tiny.resets, 2, "one reset to enter and one to leave");
+    }
+
+    #[test]
+    fn a_locked_chip_is_refused_and_keeps_what_it_holds() {
+        let mut tiny = chip();
+        tiny.locked = true;
+        let (flash, eeprom) = (tiny.flash.clone(), tiny.eeprom.clone());
+
+        let open = on(&mut tiny);
+        let err = program(
+            || Programmer::connect_for_programming(open()?),
+            &[0x12; 200],
+            Some(&[0x34; 40]),
+        )
+        .unwrap_err();
+        assert!(err.contains("If it's locked"), "{err}");
+        assert!(err.contains("which this tool won't do"), "{err}");
+        assert!(tiny.flash == flash, "flash changed");
+        assert!(tiny.eeprom == eeprom, "EEPROM changed");
+        assert_eq!(tiny.page_writes + tiny.page_erase_writes, 0);
+        assert_let_go(&tiny);
+    }
+
+    #[test]
+    fn a_write_error_stops_the_flash_and_lets_the_chip_go() {
+        let mut tiny = chip();
+        tiny.write_error_at = Some(1);
+
+        let open = on(&mut tiny);
+        let err = program(
+            || Programmer::connect_for_programming(open()?),
+            &[0x12; 200],
+            Some(&[0x34; 40]),
+        )
+        .unwrap_err();
+        assert_eq!(err, "the NVM controller reported a write error");
+        // 200 bytes is four pages, and it stopped at the second, before any
+        // of EEPROM.
+        assert_eq!(tiny.page_writes, 1);
+        assert_eq!(tiny.page_erase_writes, 0);
+        assert_let_go(&tiny);
+    }
+
+    #[test]
+    fn a_chip_that_stays_busy_is_given_up_on_and_let_go() {
+        let mut tiny = chip();
+        tiny.erase_time = std::time::Duration::MAX;
+
+        let open = on(&mut tiny);
+        let err = program(
+            || Programmer::connect_for_programming(open()?),
+            &[0x12; 200],
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, "timed out waiting for the NVM controller");
+        assert_eq!(tiny.page_writes, 0);
+        assert_eq!(tiny.lost_while_busy, 0);
+        assert_let_go(&tiny);
+    }
 }
