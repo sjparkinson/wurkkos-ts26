@@ -3452,4 +3452,837 @@ mod tests {
             .unwrap();
         assert_eq!(chip.aux(), board::aux_pin(Aux::Red), "red");
     }
+
+    // From here on, each test rings one of the alarms that neither the tests
+    // above nor a `cargo xtask hex` of the real firmware ever reaches, since
+    // firmware that's right trips none of them. `cargo xtask breakages` does
+    // the same for the ones only real firmware can reach.
+
+    /// A write of `value` to register `a`.
+    fn poke(chip: &mut Chip, a: usize, value: u8) -> Result<(), String> {
+        chip.write(a as u16, value)
+    }
+
+    /// The error from a write of `value` to register `a`.
+    fn refused(chip: &mut Chip, a: usize, value: u8) -> String {
+        poke(chip, a, value).expect_err("the write went through")
+    }
+
+    /// A write of `value` to protected register `a`, with the key just before.
+    fn unlocked(chip: &mut Chip, a: usize, value: u8) -> Result<(), String> {
+        poke(chip, reg::CPU_CCP, CCP_IOREG)?;
+        poke(chip, a, value)
+    }
+
+    fn start(chip: &mut Chip) -> Result<(), String> {
+        poke(chip, reg::ADC0_COMMAND, ADC_STCONV)
+    }
+
+    #[test]
+    fn a_conversion_only_starts_set_up_as_the_firmware_sets_it_up() {
+        let ctrlc = ADC_SAMPCAP | ADC_REFSEL_INTREF | regs::ADC_PRESC_DIV16;
+        for (a, value, why) in [
+            (reg::ADC0_CTRLA, 0, "wants the ADC enabled"),
+            (
+                reg::ADC0_CTRLA,
+                ADC_ENABLE | regs::ADC_RESSEL_8BIT,
+                "10-bit results",
+            ),
+            (reg::VREF_CTRLB, 0, "ADC0REFEN clear"),
+            (reg::ADC0_CALIB, regs::ADC_DUTYCYC_DUTY50, "25% duty"),
+            // 10 MHz / 2 is 5 MHz, and / 256 is 39 kHz.
+            (
+                reg::ADC0_CTRLC,
+                ADC_SAMPCAP | regs::ADC_PRESC_DIV2,
+                "at 5000000 Hz",
+            ),
+            (
+                reg::ADC0_CTRLC,
+                ADC_SAMPCAP | regs::ADC_PRESC_DIV256,
+                "at 39062 Hz",
+            ),
+            (reg::VREF_CTRLA, regs::VREF_ADC0REFSEL_2V5, "internal 1.1 V"),
+            (
+                reg::ADC0_CTRLC,
+                ctrlc | regs::ADC_REFSEL_VDDREF,
+                "internal 1.1 V",
+            ),
+            (reg::ADC0_CTRLB, 0, "four samples"),
+            (reg::ADC0_MUXPOS, regs::ADC_MUXPOS_AIN2, "neither AIN1 nor"),
+        ] {
+            let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+            poke(&mut chip, a, value).unwrap();
+            let err = start(&mut chip).unwrap_err();
+            assert!(err.contains(why), "{}: {err}", name(a));
+        }
+    }
+
+    /// Section 30.3.2.6.
+    #[test]
+    fn the_temperature_sensor_wants_sampcap_and_32_us_of_initdly_and_samplen() {
+        for (a, value) in [
+            (reg::ADC0_CTRLC, ADC_REFSEL_INTREF | regs::ADC_PRESC_DIV16),
+            (reg::ADC0_CTRLD, regs::ADC_INITDLY_DLY16),
+            (reg::ADC0_SAMPCTRL, 19),
+        ] {
+            let mut chip = adc_ready(ADC_MUXPOS_TEMPSENSE);
+            poke(&mut chip, a, value).unwrap();
+            let err = start(&mut chip).unwrap_err();
+            assert!(err.contains("at least 20 clocks"), "{}: {err}", name(a));
+            // AIN1 needs none of the three.
+            let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+            poke(&mut chip, a, value).unwrap();
+            start(&mut chip).unwrap();
+        }
+        let mut chip = adc_ready(ADC_MUXPOS_TEMPSENSE);
+        poke(&mut chip, reg::ADC0_SAMPCTRL, 20).unwrap();
+        start(&mut chip).unwrap();
+    }
+
+    #[test]
+    fn a_conversion_doesnt_start_while_one_runs() {
+        let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+        start(&mut chip).unwrap();
+        chip.advance_to(chip.now + CONVERSION_INSTRUCTIONS - 1)
+            .unwrap();
+        let err = start(&mut chip).unwrap_err();
+        assert!(err.contains("still running"), "{err}");
+        chip.elapse().unwrap();
+        start(&mut chip).unwrap();
+    }
+
+    #[test]
+    fn the_results_high_byte_needs_its_low_byte_first() {
+        let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+        start(&mut chip).unwrap();
+        chip.advance_to(chip.now + CONVERSION_INSTRUCTIONS).unwrap();
+        let err = chip.read(reg::ADC0_RES as u16 + 1).unwrap_err();
+        assert!(err.contains("without its low byte"), "{err}");
+        chip.read(reg::ADC0_RES as u16).unwrap();
+        chip.read(reg::ADC0_RES as u16 + 1).unwrap();
+        // And only once.
+        assert!(chip.read(reg::ADC0_RES as u16 + 1).is_err());
+    }
+
+    #[test]
+    fn only_the_whole_flash_priority_scan_is_modelled() {
+        let mut chip = Chip::new(Vec::new());
+        let err = refused(
+            &mut chip,
+            reg::CRCSCAN_CTRLA,
+            CRCSCAN_ENABLE | regs::CRCSCAN_NMIEN,
+        );
+        assert!(err.contains("only models ENABLE"), "{err}");
+        poke(&mut chip, reg::CRCSCAN_CTRLB, regs::CRCSCAN_SRC_BOOT).unwrap();
+        let err = refused(&mut chip, reg::CRCSCAN_CTRLA, CRCSCAN_ENABLE);
+        assert!(err.contains("whole-flash"), "{err}");
+    }
+
+    #[test]
+    fn a_chip_left_on_the_wrong_clock_or_pwm_is_refused() {
+        let mut chip = Chip::new(Vec::new());
+        let err = chip.clocked_as_modelled().unwrap_err();
+        assert!(err.contains("never set the clock"), "{err}");
+        unlocked(&mut chip, reg::CLKCTRL_MCLKCTRLB, CLOCK_10MHZ).unwrap();
+        let err = chip.clocked_as_modelled().unwrap_err();
+        assert!(err.contains("never started TCA0"), "{err}");
+        // PER left at its reset value, with the timer started.
+        poke(&mut chip, reg::TCA0_CTRLA, TCA_RUNNING).unwrap();
+        let err = chip.clocked_as_modelled().unwrap_err();
+        assert!(err.contains("TCA0.PER is 65535"), "{err}");
+
+        let mut chip = running();
+        unlocked(&mut chip, reg::CLKCTRL_MCLKCTRLB, CLOCK_10MHZ).unwrap();
+        chip.clocked_as_modelled().unwrap();
+    }
+
+    #[test]
+    fn the_key_lasts_four_instructions_and_one_write() {
+        let a = reg::CLKCTRL_MCLKCTRLB;
+        let mut chip = Chip::new(Vec::new());
+        poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
+        assert!(chip.holds_interrupts());
+        chip.advance_to(chip.now + 4).unwrap();
+        assert!(chip.holds_interrupts());
+        poke(&mut chip, a, CLOCK_10MHZ).unwrap();
+        assert!(!chip.holds_interrupts(), "the write ends the hold");
+        let err = refused(&mut chip, a, CLOCK_10MHZ);
+        assert!(err.contains("without the CCP key"), "spent: {err}");
+
+        poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
+        chip.advance_to(chip.now + 5).unwrap();
+        assert!(!chip.holds_interrupts());
+        let err = refused(&mut chip, a, CLOCK_10MHZ);
+        assert!(err.contains("MCLKCTRLB without the CCP key"), "{err}");
+
+        let err = refused(&mut chip, reg::WDT_CTRLA, 0x33);
+        assert!(err.contains("WDT.CTRLA without the CCP key"), "{err}");
+    }
+
+    #[test]
+    fn only_the_ioreg_key_goes_in_ccp() {
+        let mut chip = Chip::new(Vec::new());
+        let err = refused(&mut chip, reg::CPU_CCP, regs::CPU_CCP_SPM);
+        assert!(err.contains("isn't the IOREG key"), "{err}");
+    }
+
+    #[test]
+    fn power_down_wants_no_duty_waiting_no_conversion_running_and_the_pit_synced() {
+        let mut chip = running();
+        chip.pit_busy = 0;
+        chip.ready_for_power_down().unwrap();
+        wide(&mut chip, reg::TCA0_CMP0BUF, 10).unwrap();
+        let err = chip.ready_for_power_down().unwrap_err();
+        assert!(err.contains("CMP0BUF at 10"), "{err}");
+
+        let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+        chip.pit_busy = 0;
+        start(&mut chip).unwrap();
+        let err = chip.ready_for_power_down().unwrap_err();
+        assert!(err.contains("mid-conversion"), "{err}");
+
+        // Fresh from reset, the PIT still reads busy.
+        let chip = Chip::new(Vec::new());
+        let err = chip.ready_for_power_down().unwrap_err();
+        assert!(err.contains("CTRLBUSY"), "{err}");
+    }
+
+    #[test]
+    fn pa5_isnt_inverted_and_only_pb2_is_driven_by_hand() {
+        let mut chip = Chip::new(Vec::new());
+        let pa5 = reg::PORTA_PIN0CTRL + SWITCH_PIN;
+        let err = refused(&mut chip, pa5, PORT_PULLUPEN | PORT_INVEN);
+        assert!(err.contains("INVEN on PA5"), "{err}");
+        let err = refused(&mut chip, reg::VPORTB_OUT, ENABLE | PWM);
+        assert!(err.contains("only PB2 is driven by hand"), "{err}");
+    }
+
+    #[test]
+    fn a_switch_sense_the_model_doesnt_have_is_refused() {
+        let mut chip = Chip::new(Vec::new());
+        // ISC only goes up to LEVEL, and 6 and 7 are reserved.
+        poke(&mut chip, reg::PORTA_PIN0CTRL + SWITCH_PIN, 0x06).unwrap();
+        let err = chip.set_switch(true).unwrap_err();
+        assert!(err.contains("PA5's ISC is 0x6"), "{err}");
+    }
+
+    #[test]
+    fn per_is_pwm_top_and_only_written_directly_with_the_timer_stopped() {
+        for low in [reg::TCA0_PER, reg::TCA0_PERBUF] {
+            let mut chip = Chip::new(Vec::new());
+            let err = wide(&mut chip, low, PWM_TOP - 1).unwrap_err();
+            assert!(err.contains("assume 255"), "{}: {err}", name(low));
+        }
+        let mut chip = Chip::new(Vec::new());
+        wide(&mut chip, reg::TCA0_PER, PWM_TOP).unwrap();
+        assert_eq!(chip.tca.per, PWM_TOP);
+        let mut chip = running();
+        let err = wide(&mut chip, reg::TCA0_PER, PWM_TOP).unwrap_err();
+        assert!(err.contains("use PERBUF"), "{err}");
+    }
+
+    #[test]
+    fn one_wide_register_at_a_time_goes_through_temp() {
+        let mut chip = running();
+        poke(&mut chip, reg::TCA0_CMP0BUF, 10).unwrap();
+        let err = refused(&mut chip, reg::TCA0_PERBUF, 0xFF);
+        assert!(
+            err.contains("TCA0.CMP0BUF's is still waiting for its high byte"),
+            "{err}"
+        );
+        // Nor does another register's high byte finish it.
+        let err = refused(&mut chip, reg::TCA0_PERBUF + 1, 0);
+        assert!(err.contains("TCA0.PERBUF without its low byte"), "{err}");
+    }
+
+    #[test]
+    fn tca0_only_runs_undivided_and_dual_slope_at_bottom() {
+        let mut chip = Chip::new(Vec::new());
+        for value in [0, regs::TCA_CLKSEL_DIV2 | regs::TCA_ENABLE] {
+            let err = refused(&mut chip, reg::TCA0_CTRLA, value);
+            assert!(err.contains("runs undivided"), "{err}");
+        }
+        for value in [
+            regs::TCA_WGMODE_SINGLESLOPE | TCA_CMP0EN,
+            TCA_DSBOTTOM | regs::TCA_CMP2EN,
+        ] {
+            let err = refused(&mut chip, reg::TCA0_CTRLB, value);
+            assert!(err.contains("dual-slope at BOTTOM on WO0"), "{err}");
+        }
+    }
+
+    #[test]
+    fn the_pits_setup_waits_for_ctrlbusy() {
+        let mut chip = Chip::new(Vec::new());
+        let err = refused(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN);
+        assert!(err.contains("CTRLBUSY is set"), "{err}");
+        while chip.read(reg::RTC_PITSTATUS as u16).unwrap() != 0 {}
+        poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
+        // Busy again after the write.
+        assert!(poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).is_err());
+    }
+
+    #[test]
+    fn the_watchdogs_setup_waits_for_syncbusy_and_takes_no_reserved_value() {
+        let mut chip = Chip::new(Vec::new());
+        for value in [WDT_PERIOD_MAX + 1, (WDT_PERIOD_MAX + 1) << 4 | 0x03] {
+            let err = unlocked(&mut chip, reg::WDT_CTRLA, value).unwrap_err();
+            assert!(err.contains("reserved"), "{err}");
+        }
+        unlocked(&mut chip, reg::WDT_CTRLA, 0x33).unwrap();
+        let err = unlocked(&mut chip, reg::WDT_CTRLA, 0x33).unwrap_err();
+        assert!(err.contains("SYNCBUSY is set"), "{err}");
+    }
+
+    #[test]
+    fn wdt_status_is_never_written() {
+        let mut chip = Chip::new(Vec::new());
+        let err = refused(&mut chip, reg::WDT_STATUS, WDT_LOCK);
+        assert!(err.contains("sets WDT.STATUS.LOCK"), "{err}");
+        let err = refused(&mut chip, reg::WDT_STATUS, 0);
+        assert!(err.contains("only writable bit is LOCK"), "{err}");
+    }
+
+    #[test]
+    fn the_watchdogs_periods_left_stop_one_short_of_the_bite() {
+        let mut chip = Chip::new(Vec::new());
+        assert_eq!(chip.wdt_periods_left(), DOWN_PERIODS, "off");
+        // 64 clocks, four ticks, the fourth being the bite.
+        unlocked(&mut chip, reg::WDT_CTRLA, regs::WDT_PERIOD_64CLK).unwrap();
+        assert_eq!(chip.wdt_periods_left(), 3);
+        ticks(&mut chip, 3).unwrap();
+        assert_eq!(chip.wdt_periods_left(), 0);
+        assert!(ticks(&mut chip, 1).is_err());
+    }
+
+    #[test]
+    fn sleep_wants_sen_and_a_mode_the_model_has() {
+        let mut chip = Chip::new(Vec::new());
+        let err = chip.sleep().unwrap_err();
+        assert!(err.contains("SEN clear"), "{err}");
+        let standby = regs::SLPCTRL_SMODE_STDBY | SLPCTRL_SEN;
+        poke(&mut chip, reg::SLPCTRL_CTRLA, standby).unwrap();
+        let err = chip.sleep().unwrap_err();
+        assert!(err.contains("only models idle and power-down"), "{err}");
+    }
+
+    /// A start-up in the order `main` does it, each step at its place in
+    /// line.
+    const IN_ORDER: Boot = Boot {
+        flags_cleared: Some(1),
+        flash_checked: Some(2),
+        fuses_read: Some(3),
+        set_up: Some(4),
+        pit_on: Some(5),
+        watchdog_on: Some(6),
+    };
+
+    #[test]
+    fn start_up_has_to_do_every_step() {
+        IN_ORDER.in_order().unwrap();
+        let missing = |boot: Boot| boot.in_order().unwrap_err();
+        for (boot, what) in [
+            (
+                Boot {
+                    flags_cleared: None,
+                    ..IN_ORDER
+                },
+                "never cleared RSTCTRL.RSTFR",
+            ),
+            (
+                Boot {
+                    flash_checked: None,
+                    ..IN_ORDER
+                },
+                "never started a CRC scan",
+            ),
+            (
+                Boot {
+                    fuses_read: None,
+                    ..IN_ORDER
+                },
+                "never read the fuses",
+            ),
+            (
+                Boot {
+                    set_up: None,
+                    ..IN_ORDER
+                },
+                "never set anything up",
+            ),
+            (
+                Boot {
+                    pit_on: None,
+                    ..IN_ORDER
+                },
+                "never turned the PIT on",
+            ),
+            (
+                Boot {
+                    watchdog_on: None,
+                    ..IN_ORDER
+                },
+                "never turned the watchdog on",
+            ),
+        ] {
+            assert_eq!(missing(boot), what);
+        }
+    }
+
+    #[test]
+    fn start_up_has_to_be_in_order() {
+        for (boot, why) in [
+            (
+                Boot {
+                    flags_cleared: Some(7),
+                    ..IN_ORDER
+                },
+                "before clearing the reset flags",
+            ),
+            (
+                Boot {
+                    flash_checked: Some(5),
+                    ..IN_ORDER
+                },
+                "before the CRC scan",
+            ),
+            (
+                Boot {
+                    fuses_read: Some(5),
+                    ..IN_ORDER
+                },
+                "before reading the fuses",
+            ),
+            (
+                Boot {
+                    pit_on: Some(7),
+                    ..IN_ORDER
+                },
+                "before the PIT",
+            ),
+        ] {
+            let err = boot.in_order().unwrap_err();
+            assert!(err.contains(why), "{err}");
+        }
+    }
+
+    /// The chip notes each step as `main` gets to it, and PORTB's writes and
+    /// the scan's setup aren't setting the chip up.
+    #[test]
+    fn the_chip_notes_each_step_of_start_up_as_it_happens() {
+        let mut chip = Chip::new(Vec::new());
+        let step = |chip: &mut Chip| {
+            chip.elapse().unwrap();
+            chip.now
+        };
+        poke(&mut chip, reg::VPORTB_OUT, 0).unwrap();
+        poke(&mut chip, reg::VPORTB_DIR, ENABLE | PWM).unwrap();
+        let flags = step(&mut chip);
+        poke(&mut chip, reg::RSTCTRL_RSTFR, RSTCTRL_PORF).unwrap();
+        let flash = step(&mut chip);
+        poke(&mut chip, reg::CRCSCAN_CTRLB, CRCSCAN_FLASH_PRIORITY).unwrap();
+        poke(&mut chip, reg::CRCSCAN_CTRLA, CRCSCAN_ENABLE).unwrap();
+        let fuses = step(&mut chip);
+        chip.read(regs::addr::FUSE_OSCCFG as u16).unwrap();
+        assert_eq!(chip.boot.set_up, None);
+        let set_up = step(&mut chip);
+        poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
+        poke(&mut chip, reg::RTC_PITCTRLA + 1, 0).unwrap_err();
+        chip.pit_busy = 0;
+        let pit = step(&mut chip);
+        poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
+        let watchdog = step(&mut chip);
+        unlocked(&mut chip, reg::WDT_CTRLA, 0x33).unwrap();
+
+        let boot = &chip.boot;
+        assert_eq!(boot.flags_cleared, Some(flags));
+        assert_eq!(boot.flash_checked, Some(flash));
+        assert_eq!(boot.fuses_read, Some(fuses));
+        assert_eq!(boot.set_up, Some(set_up));
+        assert_eq!(boot.pit_on, Some(pit));
+        assert_eq!(boot.watchdog_on, Some(watchdog));
+        boot.in_order().unwrap();
+    }
+
+    /// Three bytes of .data, loaded from the start of flash, then two of .bss.
+    fn statics() -> Layout {
+        Layout {
+            data: SRAM.start..SRAM.start + 3,
+            bss: SRAM.start + 3..SRAM.start + 5,
+            load: MAPPED,
+        }
+    }
+
+    #[test]
+    fn startup_has_to_copy_data_and_zero_bss() {
+        let layout = statics();
+        let mut chip = Chip::new(vec![1, 2, 3]);
+        let err = check_startup(&chip, &layout).unwrap_err();
+        assert!(err.contains(".data in SRAM doesn't match"), "{err}");
+        for (at, value) in (layout.data.start..).zip([1, 2, 3]) {
+            chip.write(at, value).unwrap();
+        }
+        chip.write(layout.bss.start, 0).unwrap();
+        let err = check_startup(&chip, &layout).unwrap_err();
+        assert_eq!(err, ".bss isn't zeroed: 0x3804 holds 0xa5");
+        chip.write(layout.bss.start + 1, 0).unwrap();
+        check_startup(&chip, &layout).unwrap();
+
+        let past = Layout {
+            load: MAPPED + 1,
+            ..statics()
+        };
+        let err = check_startup(&chip, &past).unwrap_err();
+        assert!(err.contains("outside flash"), "{err}");
+    }
+
+    /// `call`, to word 0.
+    const CALL: [u16; 2] = [0x940E, 0];
+
+    /// The `ldi`s src/avr/rt.rs's startup loads `layout` with, in its order.
+    fn loads(layout: &Layout) -> Vec<u16> {
+        [
+            (26, layout.data.start),
+            (30, layout.load),
+            (24, layout.data.end),
+            (26, layout.bss.start),
+            (24, layout.bss.end),
+        ]
+        .into_iter()
+        .flat_map(|(r, value)| {
+            let [lo, hi] = value.to_le_bytes();
+            [ldi(r, lo), ldi(r + 1, hi)]
+        })
+        .collect()
+    }
+
+    fn image(words: impl IntoIterator<Item = u16>) -> Vec<u8> {
+        words.into_iter().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn patching_startup_wants_the_loads_it_knows_then_the_call() {
+        let linked = statics();
+        let moved = Layout {
+            data: 0x3911..0x3916,
+            bss: 0x3916..0x391D,
+            load: MAPPED + 0x123,
+        };
+        let mut patched = image(loads(&linked).into_iter().chain(CALL));
+        patch_startup(&mut patched, 0, &linked, &moved).unwrap();
+        assert_eq!(patched, image(loads(&moved).into_iter().chain(CALL)));
+
+        // The loads in another order, which is some other startup code.
+        let mut swapped = loads(&linked);
+        swapped.swap(0, 2);
+        let mut swapped = image(swapped.into_iter().chain(CALL));
+        let before = swapped.clone();
+        let err = patch_startup(&mut swapped, 0, &linked, &moved).unwrap_err();
+        assert!(err.contains("update `patch_startup`"), "{err}");
+        assert_eq!(swapped, before, "nothing's patched");
+
+        let mut no_call = image(loads(&linked));
+        let err = patch_startup(&mut no_call, 0, &linked, &moved).unwrap_err();
+        assert!(err.contains("no call to main"), "{err}");
+    }
+
+    const NOP: u16 = 0x0000;
+    const SEI: u16 = 0x9478;
+    const SEC: u16 = 0x9408;
+    const SLEEP: u16 = 0x9588;
+    const RETI: u16 = 0x9518;
+    /// `push r0`.
+    const PUSH_R0: u16 = 0x920F;
+    /// `rjmp` to itself.
+    const SPIN: u16 = 0xCFFF;
+
+    /// `jmp`, to a byte address in the first 128 KB.
+    fn jmp(to: u32) -> [u16; 2] {
+        [0x940C, (to / 2) as u16]
+    }
+
+    /// `sts a, r16`.
+    fn sts_r16(a: usize) -> [u16; 2] {
+        [0x9300, a as u16]
+    }
+
+    /// A chip running `words` from reset, with `__unhandled_interrupt` and
+    /// `hw::halt` somewhere it never gets to.
+    fn sim(words: impl IntoIterator<Item = u16>) -> Sim {
+        let ends = Ends {
+            unhandled: 0x1000,
+            halt: 0x2000,
+        };
+        Sim::new(image(words), SRAM.start, ends).unwrap()
+    }
+
+    #[test]
+    fn an_image_bigger_than_flash_is_refused() {
+        let ends = Ends::default();
+        Sim::new(vec![0; FLASH_SIZE], SRAM.start, ends)
+            .map(drop)
+            .unwrap();
+        let err = Sim::new(vec![0; FLASH_SIZE + 1], SRAM.start, ends)
+            .err()
+            .unwrap();
+        assert_eq!(err, "16385 bytes won't fit in flash");
+    }
+
+    #[test]
+    fn a_push_into_bss_is_refused() {
+        // .bss ending a byte short of the top leaves room for one push.
+        let run = |bss_end: u16| {
+            let mut sim = Sim::new(image([PUSH_R0, PUSH_R0]), bss_end, Ends::default())?;
+            sim.step()?;
+            assert_eq!(sim.stack(), 1);
+            sim.step()
+        };
+        assert_eq!(run(SRAM.end - 2), Ok(()));
+        let err = run(SRAM.end - 1).unwrap_err();
+        assert_eq!(err, "0x0002: the stack ran into .bss");
+    }
+
+    #[test]
+    fn enabling_an_interrupt_with_no_handler_is_refused_once_sreg_i_is_set() {
+        let mut sim = sim([NOP, SEI, NOP]);
+        poke(&mut sim.chip, reg::RTC_PITINTCTRL, RTC_PI).unwrap();
+        sim.step().unwrap();
+        let err = sim.step().unwrap_err();
+        assert!(
+            err.contains("enables RTC_PIT (vector 7) with SREG.I set"),
+            "{err}"
+        );
+    }
+
+    /// Words up to `vector`'s slot, starting with `sei`, then a `jmp` in the
+    /// slot to `handler`, which follows the table.
+    fn handled_by(vector: u8, handler: &[u16]) -> Vec<u16> {
+        let slot = usize::from(vector) * VECTOR_WORDS as usize;
+        let after = VECTORS * VECTOR_WORDS as usize;
+        let mut words = vec![NOP; after];
+        words[0] = SEI;
+        words[slot..slot + 2].copy_from_slice(&jmp(after as u32 * 2));
+        words.extend_from_slice(handler);
+        words
+    }
+
+    /// Runs a TCA0 overflow handler made of `body` and a `reti`, as far as
+    /// its return.
+    fn handle(body: &[u16]) -> Result<Sim, String> {
+        let handler: Vec<u16> = body.iter().copied().chain([RETI]).collect();
+        let mut sim = sim(handled_by(VECTOR_TCA0_OVF, &handler));
+        poke(&mut sim.chip, reg::TCA0_INTCTRL, TCA_OVF)?;
+        sim.chip.tca.ovf = true;
+        while sim.cpu.handling.is_none() {
+            sim.step()?;
+        }
+        while sim.cpu.handling.is_some() {
+            sim.step()?;
+        }
+        Ok(sim)
+    }
+
+    #[test]
+    fn a_handler_gives_back_every_register_sreg_and_sp() {
+        let sim = handle(&[NOP, NOP]).map_err(drop).unwrap();
+        assert_eq!(sim.longest_handler, 3, "the jmp and the two nops");
+        for (body, why) in [
+            (ldi(16, 1), "r16 at 0x01, not the 0x00 it found"),
+            (SEC, "SREG at 0x81, not the 0x80 it found"),
+            (PUSH_R0, "SP at 0x3ffe, having found it at 0x3fff"),
+        ] {
+            let why = format!("returns with {why}");
+            let err = handle(&[body]).err().unwrap();
+            assert_eq!(err, format!("the handler for TCA0_OVF (vector 8): {why}"));
+        }
+    }
+
+    #[test]
+    fn a_handler_has_to_fit_in_a_pwm_cycle() {
+        let err = handle(&[SPIN]).err().unwrap();
+        assert!(err.contains("ran past 125 instructions"), "{err}");
+    }
+
+    /// The PIT's slot holds a `jmp`, so it counts as handled, but the slot
+    /// itself is where `__unhandled_interrupt` is.
+    #[test]
+    fn taking_an_interrupt_into_unhandled_interrupt_is_refused() {
+        let words = handled_by(VECTOR_RTC_PIT, &[RETI]);
+        let ends = Ends {
+            unhandled: u32::from(VECTOR_RTC_PIT) * VECTOR_WORDS * 2,
+            halt: 0x2000,
+        };
+        let mut sim = Sim::new(image(words), SRAM.start, ends).unwrap();
+        poke(&mut sim.chip, reg::RTC_PITINTCTRL, RTC_PI).unwrap();
+        sim.chip.pit_flag = true;
+        sim.step().unwrap();
+        sim.step().unwrap();
+        let err = sim.step().unwrap_err();
+        assert_eq!(
+            err,
+            "takes RTC_PIT (vector 7), whose vector goes to __unhandled_interrupt"
+        );
+    }
+
+    #[test]
+    fn code_that_never_gets_there_runs_out_of_budget() {
+        let err = sim([SPIN]).run_to(5, 10).unwrap_err();
+        assert_eq!(err, "didn't reach 0x000a within 10 instructions");
+        let err = sim([SPIN]).tick(false).unwrap_err();
+        assert!(err.contains("ran past 39062 instructions"), "{err}");
+        let err = found_lit(sim([SPIN])).unwrap_err();
+        assert!(err.contains("wrote no register"), "{err}");
+        let err = boot_order(sim([SPIN])).unwrap_err();
+        assert!(err.contains("didn't wait for a tick"), "{err}");
+    }
+
+    #[test]
+    fn start_up_is_judged_at_the_first_wait_for_a_tick() {
+        let mut sim = sim([SLEEP]);
+        sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
+        let err = boot_order(sim).unwrap_err();
+        assert_eq!(err, "never cleared RSTCTRL.RSTFR");
+    }
+
+    /// The least a firmware can be and still tick. It sleeps in idle, and its
+    /// PIT handler clears the flag with r16, which is set up beforehand so
+    /// the handler has nothing to give back. The chip is left as `hw::init`
+    /// would have it, with a watchdog too long to need feeding here.
+    fn ticking() -> Sim {
+        let handler = sts_r16(reg::RTC_PITINTFLAGS).into_iter().chain([RETI]);
+        let mut words = handled_by(VECTOR_RTC_PIT, &handler.collect::<Vec<_>>());
+        // `sleep`, then back to it.
+        words[1] = SLEEP;
+        words[2] = SPIN - 1;
+        let mut sim = sim(words);
+        sim.cpu.r[16] = RTC_PI;
+        let chip = &mut sim.chip;
+        unlocked(chip, reg::CLKCTRL_MCLKCTRLB, CLOCK_10MHZ).unwrap();
+        wide(chip, reg::TCA0_PER, PWM_TOP).unwrap();
+        poke(chip, reg::TCA0_CTRLB, TCA_DSBOTTOM).unwrap();
+        poke(chip, reg::TCA0_CTRLA, TCA_RUNNING).unwrap();
+        poke(chip, reg::RTC_PITINTCTRL, RTC_PI).unwrap();
+        chip.pit_busy = 0;
+        poke(chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
+        poke(chip, reg::SLPCTRL_CTRLA, SLEEP_IDLE | SLPCTRL_SEN).unwrap();
+        unlocked(chip, reg::WDT_CTRLA, WDT_PERIOD_MAX).unwrap();
+        // Blue, dimly, which is what a torch that's off and well shows.
+        poke(chip, reg::VPORTC_DIR, AUX & !board::aux_pin(Aux::Blue)).unwrap();
+        poke(chip, BLUE_CTRL, PORT_PULLUPEN).unwrap();
+        sim
+    }
+
+    /// PORTC's settings for the blue aux pin.
+    const BLUE_CTRL: usize = reg::PORTC_PIN0CTRL + board::AUX_BLUE as usize;
+
+    /// Ticks with the switch left alone and nothing wrong.
+    fn quiet(ticks: usize) -> impl Iterator<Item = Sample> {
+        iter::repeat_n(
+            Sample {
+                pressed: false,
+                scene: Scene::NORMAL,
+            },
+            ticks,
+        )
+    }
+
+    fn in_step_fails(sim: &mut Sim, ticks: usize) -> String {
+        in_step(sim, quiet(ticks), &mut Report::default()).unwrap_err()
+    }
+
+    #[test]
+    fn in_step_wants_the_clock_the_pwm_and_the_watchdog_set_up_by_the_first_tick() {
+        let err = in_step_fails(&mut sim([SPIN]), 1);
+        assert!(err.starts_with("hw::init: a pass of the main"), "{err}");
+
+        let mut sim = ticking();
+        sim.chip.io[reg::CLKCTRL_MCLKCTRLB] = 0;
+        let err = in_step_fails(&mut sim, 1);
+        assert_eq!(err, "hw::init: never set the clock to 10 MHz");
+
+        let mut sim = ticking();
+        sim.chip.io[reg::WDT_CTRLA] = 0;
+        let err = in_step_fails(&mut sim, 1);
+        assert_eq!(err, "hw::start_watchdog never turned the watchdog on");
+    }
+
+    /// A torch that's off rests, and the library has it power down, which
+    /// `ticking` never does.
+    #[test]
+    fn in_step_holds_the_sleep_to_the_librarys() {
+        let err = in_step_fails(&mut ticking(), 8);
+        assert!(
+            err.contains("the library says power down, but the firmware idled"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn in_step_holds_the_aux_pins_to_the_librarys() {
+        let mut sim = ticking();
+        poke(&mut sim.chip, BLUE_CTRL, 0).unwrap();
+        let err = in_step_fails(&mut sim, 8);
+        assert!(
+            err.contains("the aux pins are 0b0000, but the library says Blue"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn in_step_holds_pb2_to_the_librarys() {
+        let mut sim = ticking();
+        wide(&mut sim.chip, reg::TCA0_CMP0BUF, 10).unwrap();
+        poke(&mut sim.chip, reg::TCA0_CTRLB, TCA_DSBOTTOM | TCA_CMP0EN).unwrap();
+        poke(&mut sim.chip, reg::VPORTB_DIR, ENABLE | PWM).unwrap();
+        poke(&mut sim.chip, reg::VPORTB_OUT, ENABLE).unwrap();
+        let err = in_step_fails(&mut sim, 8);
+        assert!(err.contains("PB2 is true, but the library says"), "{err}");
+    }
+
+    /// The watchdog runs while the chip sleeps, and `ticking` never feeds it.
+    #[test]
+    fn a_firmware_that_never_feeds_the_watchdog_is_bitten() {
+        let mut sim = ticking();
+        // 64 clocks, four ticks, the fourth being the bite.
+        sim.chip.io[reg::WDT_CTRLA] = regs::WDT_PERIOD_64CLK;
+        for _ in 0..3 {
+            sim.tick(false).unwrap();
+        }
+        let err = sim.tick(false).unwrap_err();
+        assert!(err.starts_with("asleep: the watchdog went 4"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_run_says_which_it_was_and_whether_overflows_were_landing() {
+        let power_on = || Ok(ticking());
+        let failed = "the library says power down, but the firmware idled";
+        let err = run(&power_on, None, Landing::Watch).err().unwrap();
+        assert_eq!(err, format!("random switching: tick 1: {failed}"));
+        let err = run(&power_on, None, Landing::Until(5)).err().unwrap();
+        assert_eq!(
+            err,
+            format!("with overflows mid-pass: random switching: tick 1: {failed}")
+        );
+
+        let example = spec::examples(spec::UI_MD)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let err = run(&power_on, Some(&example), Landing::Watch)
+            .err()
+            .unwrap();
+        assert!(err.starts_with(&format!("{}: tick ", example.row)), "{err}");
+    }
+
+    /// The forced vector has to be one the firmware leaves unhandled, or the
+    /// run would show nothing about `__unhandled_interrupt`.
+    #[test]
+    fn the_forced_interrupt_has_to_be_one_with_no_handler() {
+        let err = unhandled_interrupt(sim(handled_by(VECTOR_UNHANDLED, &[RETI]))).unwrap_err();
+        assert_eq!(
+            err,
+            "vector 13 has a handler now, so pick another vector to force"
+        );
+    }
 }
