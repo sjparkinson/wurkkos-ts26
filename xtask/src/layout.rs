@@ -365,11 +365,43 @@ mod tests {
 
     #[test]
     fn rejects_a_vector_into_the_table_or_past_the_image() {
-        for bad in [0x10, 0x1000] {
+        // 0x78 is the table's last slot, and 0x86 the first byte past the
+        // image.
+        for bad in [0x10, 0x78, 0x86, 0x1000] {
             let img = image(|slot| if slot == 5 { jmp(bad) } else { standard(slot) });
             let err = vectors(&img, RESET, UNHANDLED, HALT_AT).unwrap_err();
-            assert!(err.contains("vector 5"), "{err}");
+            assert!(err.contains("vector 5"), "{bad:#x}: {err}");
         }
+    }
+
+    #[test]
+    fn the_table_is_four_bytes_a_vector() {
+        assert_eq!(VECTORS * 4, 0x7C, "the ATtiny1616 has 31 vectors");
+        // The first byte after the table is the first a vector can go to, and
+        // the image's last word the last.
+        for good in [0x7C, 0x84] {
+            let img = image(|slot| if slot == 5 { jmp(good) } else { standard(slot) });
+            let checked = vectors(&img, RESET, UNHANDLED, HALT_AT);
+            assert_eq!(checked, Ok(()), "{good:#x}");
+        }
+    }
+
+    #[test]
+    fn rejects_a_halt_that_is_not_in_the_code_after_the_table() {
+        let to = |addr| {
+            let [w0, w1] = jmp(addr);
+            [EOR_R1_R1, w0, w1]
+        };
+        // `__unhandled_interrupt` jumps to where `hw::halt` is said to be,
+        // which is inside the table, or past the end of the image.
+        for bad in [0x10, 0x78, 0x86, 0x1000] {
+            let img = image_with(standard, to(bad));
+            let err = vectors(&img, RESET, UNHANDLED, bad).unwrap_err();
+            assert!(err.contains("hw::halt is at"), "{bad:#x}: {err}");
+        }
+        // Straight after the table is code, so a halt there is fine.
+        let img = image_with(standard, to(0x7C));
+        assert_eq!(vectors(&img, RESET, UNHANDLED, 0x7C), Ok(()));
     }
 
     #[test]
@@ -469,6 +501,46 @@ mod tests {
         assert!(err.contains("mapped-flash"), "{err}");
     }
 
+    /// The mapped-flash window, as data-space addresses.
+    const WINDOW: std::ops::Range<u32> = 0x8000..0xC000;
+
+    #[test]
+    fn accepts_data_loaded_at_either_end_of_the_mapped_window() {
+        assert_eq!(MAPPED_FLASH..MAPPED_FLASH + FLASH_SIZE, WINDOW);
+        // The first four bytes of flash, and the last four.
+        for paddr in [0, 0x3FFC] {
+            let segs = [segment(RAM.start, paddr, 4)];
+            let r = ram_at(RAM.start, 4, 8, WINDOW.start + paddr);
+            assert_eq!(ram(&r, &segs), Ok(()), "flash {paddr:#06x}");
+        }
+        // And a single byte, the very last of flash.
+        let segs = [segment(RAM.start, 0x3FFF, 1)];
+        assert_eq!(ram(&ram_at(RAM.start, 1, 0, WINDOW.end - 1), &segs), Ok(()));
+    }
+
+    #[test]
+    fn rejects_data_that_starts_or_ends_outside_the_mapped_window() {
+        // (flash address the segment says, bytes), each with `__data_load`
+        // agreeing with the segment, so only the window can refuse it. They
+        // start just below the window, run one byte past its end, start at
+        // its end, and start far past it.
+        for (load, len) in [
+            (WINDOW.start - 1, 4),
+            (WINDOW.end - 3, 4),
+            (WINDOW.end, 4),
+            (WINDOW.end, 1),
+            (0x1_0000, 4),
+        ] {
+            let segs = [segment(
+                RAM.start,
+                load.wrapping_sub(WINDOW.start),
+                len as usize,
+            )];
+            let err = ram(&ram_at(RAM.start, len, 0, load), &segs).unwrap_err();
+            assert!(err.contains("mapped-flash"), "{load:#06x}, {len}: {err}");
+        }
+    }
+
     #[test]
     fn rejects_sections_out_of_order_or_outside_sram() {
         let mut r = ram_at(RAM.start, 0, 4, 0x8252);
@@ -488,6 +560,25 @@ mod tests {
         assert!(mapped(&text_moved).is_err());
         let data = [segment(0x80_3800, 0x200, 2)];
         assert_eq!(mapped(&data), Ok(()), ".data is `ram`'s job");
+    }
+
+    #[test]
+    fn data_space_starts_where_program_space_stops() {
+        // The last byte of program space is code, linked where it's loaded.
+        let last = DATA_SPACE - 1;
+        assert_eq!(mapped(&[segment(last, last, 1)]), Ok(()));
+        assert!(mapped(&[segment(last, 0x200, 1)]).is_err());
+        // The first byte of data space isn't, and it's below the window, so
+        // it's left to `ram`.
+        assert_eq!(mapped(&[segment(DATA_SPACE, 0x200, 2)]), Ok(()));
+        // The window's two ends, linked somewhere other than where it's
+        // loaded. Inside is checked, and one past the end isn't.
+        let start = DATA_SPACE + MAPPED_FLASH;
+        let end = start + FLASH_SIZE;
+        assert!(mapped(&[segment(start, 0x200, 2)]).is_err());
+        assert!(mapped(&[segment(end - 1, 0x200, 1)]).is_err());
+        assert_eq!(mapped(&[segment(end, 0x200, 2)]), Ok(()));
+        assert_eq!(mapped(&[segment(start - 1, 0x200, 2)]), Ok(()));
     }
 
     #[test]

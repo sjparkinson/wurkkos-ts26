@@ -209,9 +209,16 @@ mod tests {
     /// Builds a minimal AVR ELF with two loadable segments, a .bss section, a
     /// debug section and a symbol table.
     fn sample() -> Vec<u8> {
-        const PHNUM: usize = 2;
+        sample_with(&[])
+    }
+
+    /// [`sample`], with more program headers after its two. Each is
+    /// `(type, vaddr, paddr, filesz)`, and its bytes in the file are the
+    /// start of the sample's own six.
+    fn sample_with(extra: &[(u32, u32, u32, u32)]) -> Vec<u8> {
         const SHNUM: usize = 5;
-        let shoff = 52 + PHNUM * 32;
+        let phnum = 2 + extra.len();
+        let shoff = 52 + phnum * 32;
         let data_at = shoff + SHNUM * 40;
 
         let mut f = vec![0u8; 52];
@@ -223,7 +230,7 @@ mod tests {
         f[28..32].copy_from_slice(&52u32.to_le_bytes()); // phoff
         f[32..36].copy_from_slice(&(shoff as u32).to_le_bytes());
         f[42..44].copy_from_slice(&32u16.to_le_bytes()); // phentsize
-        f[44..46].copy_from_slice(&(PHNUM as u16).to_le_bytes());
+        f[44..46].copy_from_slice(&(phnum as u16).to_le_bytes());
         f[46..48].copy_from_slice(&40u16.to_le_bytes()); // shentsize
         f[48..50].copy_from_slice(&(SHNUM as u16).to_le_bytes());
         f[50..52].copy_from_slice(&2u16.to_le_bytes()); // shstrndx
@@ -231,9 +238,9 @@ mod tests {
         // The bytes the headers point at, in file order.
         let image = [0x0C, 0x94, 0x1F, 0x00, 0xAA, 0xBB];
         let shstrtab = b"\0.bss\0.shstrtab\0.symtab\0.strtab\0.debug_info\0";
-        let strtab = b"\0__reset\0main\0";
+        let strtab = b"\0__reset\0main\0halt\0";
         let mut symtab = vec![0u8; 16]; // null symbol
-        for (name, value) in [(1u32, 0x7Eu32), (9, 0xB2)] {
+        for (name, value) in [(1u32, 0x7Eu32), (9, 0xB2), (14, 0xC4)] {
             let mut sym = vec![0u8; 16];
             sym[0..4].copy_from_slice(&name.to_le_bytes());
             sym[4..8].copy_from_slice(&value.to_le_bytes());
@@ -245,12 +252,16 @@ mod tests {
         let symtab_at = strtab_at + strtab.len() as u32;
 
         // .text at 0, then .rodata loaded at 6 but linked in mapped flash.
-        for (paddr, vaddr, offset, len) in [
-            (0u32, 0u32, image_at, 4u32),
-            (6, 0x80_8006, image_at + 4, 2),
-        ] {
+        let headers = [
+            (PT_LOAD, 0u32, 0u32, image_at, 4u32),
+            (PT_LOAD, 0x80_8006, 6, image_at + 4, 2),
+        ];
+        let extra = extra
+            .iter()
+            .map(|&(kind, vaddr, paddr, len)| (kind, vaddr, paddr, image_at, len));
+        for (kind, vaddr, paddr, offset, len) in headers.into_iter().chain(extra) {
             let mut ph = vec![0u8; 32];
-            ph[0..4].copy_from_slice(&PT_LOAD.to_le_bytes());
+            ph[0..4].copy_from_slice(&kind.to_le_bytes());
             ph[4..8].copy_from_slice(&offset.to_le_bytes());
             ph[8..12].copy_from_slice(&vaddr.to_le_bytes());
             ph[12..16].copy_from_slice(&paddr.to_le_bytes());
@@ -260,7 +271,9 @@ mod tests {
         // (name, type, flags, addr, offset, size, link)
         let sections = [
             (1u32, 8u32, SHF_ALLOC | 0x1, 0x80_3800u32, 0u32, 12u32, 0u32), // .bss counts
-            (34, 1, 0, 0, 0, 999, 0),                                       // .debug_info doesn't
+            // .debug_info doesn't, wherever it says it is, since it isn't
+            // allocated.
+            (34, 1, 0, 0x80_3900, 0, 999, 0),
             (6, 3, 0, 0, shstrtab_at, shstrtab.len() as u32, 0),
             (16, SHT_SYMTAB, 0, 0, symtab_at, symtab.len() as u32, 4),
             (24, 3, 0, 0, strtab_at, strtab.len() as u32, 0),
@@ -297,6 +310,86 @@ mod tests {
     #[test]
     fn counts_allocated_sram_sections() {
         assert_eq!(Elf::parse(&sample()).unwrap().ram_bytes(), 12);
+    }
+
+    #[test]
+    fn does_not_count_an_allocated_section_outside_sram() {
+        // .bss moved to each end of what isn't SRAM.
+        for addr in [0, RAM.start - 1, RAM.end, DATA_SPACE + 0x8000] {
+            let mut f = sample();
+            let bss = 52 + 2 * 32;
+            f[bss + 12..bss + 16].copy_from_slice(&addr.to_le_bytes());
+            assert_eq!(Elf::parse(&f).unwrap().ram_bytes(), 0, "{addr:#x}");
+        }
+    }
+
+    #[test]
+    fn sram_is_the_same_range_in_elf_and_data_space_addresses() {
+        assert_eq!(RAM, 0x80_3800..0x80_4000);
+        assert_eq!(SRAM, 0x3800..0x4000);
+    }
+
+    #[test]
+    fn takes_only_loadable_bytes_bound_for_flash() {
+        const PT_NOTE: u32 = 4;
+        let extra = [
+            // Not loadable.
+            (PT_NOTE, 0x20, 0x20, 2),
+            // Loadable, with nothing in the file, as .bss is.
+            (PT_LOAD, 0x40, 0x40, 0),
+            // Loaded into data space, at its very start and inside SRAM.
+            (PT_LOAD, DATA_SPACE, DATA_SPACE, 2),
+            (PT_LOAD, RAM.start, RAM.start, 2),
+        ];
+        let elf = Elf::parse(&sample_with(&extra)).unwrap();
+        assert_eq!(elf.segments().len(), 2);
+        assert_eq!(
+            elf.flash_image(),
+            [0x0C, 0x94, 0x1F, 0x00, 0xFF, 0xFF, 0xAA, 0xBB]
+        );
+
+        // The last byte of program space still counts as flash.
+        let elf = Elf::parse(&sample_with(&[(PT_LOAD, 0, DATA_SPACE - 1, 1)])).unwrap();
+        assert_eq!(elf.segments().len(), 3);
+        assert_eq!(elf.segments()[2].paddr, DATA_SPACE - 1);
+        assert_eq!(elf.segments()[2].data, [0x0C]);
+    }
+
+    #[test]
+    fn lists_every_symbol_in_table_order() {
+        let elf = Elf::parse(&sample()).unwrap();
+        let names: Vec<&str> = elf.symbols().collect();
+        assert_eq!(names, ["__reset", "main", "halt"]);
+        assert_eq!(elf.symbol("halt"), Some(0xC4));
+    }
+
+    #[test]
+    fn refuses_a_64_bit_or_a_big_endian_file() {
+        for (byte, what) in [(4, "64-bit"), (5, "big-endian")] {
+            let mut f = sample();
+            f[byte] = 2;
+            let Err(err) = Elf::parse(&f) else {
+                panic!("parsed a {what} file");
+            };
+            assert!(err.contains("32-bit little-endian"), "{what}: {err}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_file_that_was_cut_short() {
+        let f = sample();
+        // The last eight bytes are the end of the last symbol, which nothing
+        // reads.
+        for len in 4..f.len() - 8 {
+            let Err(err) = Elf::parse(&f[..len]) else {
+                panic!("parsed the first {len} bytes");
+            };
+            assert!(
+                err.contains("truncated") || err.contains("unterminated"),
+                "{len} bytes: {err}"
+            );
+        }
+        assert!(Elf::parse(&f[..f.len() - 8]).is_ok());
     }
 
     #[test]
