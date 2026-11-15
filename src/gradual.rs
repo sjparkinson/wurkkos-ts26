@@ -203,6 +203,19 @@ mod tests {
     }
 
     #[test]
+    fn a_cap_at_the_level_its_already_at_doesnt_restart_the_wait() {
+        let mut gradual = Gradual::new(100, 4, 4);
+        run(&mut gradual, 0, 3);
+        gradual.cap(100);
+        assert_eq!(gradual.tick(0), 99, "the fourth tick still steps");
+        // A cap that does lower it starts the wait again.
+        run(&mut gradual, 0, 3);
+        gradual.cap(98);
+        assert_eq!(run(&mut gradual, 0, 3), 98);
+        assert_eq!(gradual.tick(0), 97);
+    }
+
+    #[test]
     fn a_ceiling_starts_at_no_limit_and_fades() {
         let mut ceiling = Ceiling::new(1, 1);
         assert_eq!(ceiling.level(), CEILING);
