@@ -862,10 +862,249 @@ mod tests {
         thermal.sample(start, CEILING);
         // Six kelvin away is believed straight off, and a sixteenth more
         // waits for the readings after it.
-        thermal.sample(start + JUMP, CEILING);
+        thermal.sample(start + fraction(6), CEILING);
         assert_eq!(thermal.rejected, 0);
-        thermal.sample(start + 2 * JUMP + 1, CEILING);
+        thermal.sample(start + 2 * fraction(6) + 1, CEILING);
         assert_eq!(thermal.rejected, 1);
+    }
+
+    /// A reading `sixteenths` of a kelvin over the limit, or under it.
+    fn limit_plus(sixteenths: i16) -> u16 {
+        (LIMIT_SIXTEENTHS + sixteenths).cast_unsigned()
+    }
+
+    /// A light that's stepped down to the floor and then cooled to `reading`.
+    /// The jump's lasted long enough to be believed, so the smoothing has
+    /// started afresh there, with no trend.
+    fn cooled_at_the_floor(reading: u16) -> Thermal {
+        let mut thermal = Thermal::default();
+        for _ in 0..4 * 10 {
+            thermal.sample(fraction(LIMIT + 10), CEILING);
+        }
+        assert_eq!(thermal.ceiling.target(), FLOOR);
+        for _ in 0..=GLITCHES {
+            thermal.sample(reading, CEILING);
+        }
+        assert_eq!(
+            thermal.smoothed.as_ref().map(|s| s.now),
+            Some(reading as i16)
+        );
+        thermal
+    }
+
+    /// Feeds `reading` until the ceiling's target next steps up, and returns
+    /// how many readings that took.
+    fn readings_to_step_up(thermal: &mut Thermal, reading: u16) -> u16 {
+        let from = thermal.ceiling.target();
+        let mut readings = 0;
+        while thermal.ceiling.target() == from {
+            thermal.sample(reading, CEILING);
+            readings += 1;
+            assert!(readings <= 4 * 60 * 5, "never stepped up from {from}");
+        }
+        assert_eq!(thermal.ceiling.target(), from + 1, "more than a level");
+        readings
+    }
+
+    #[test]
+    fn the_rate_down_follows_how_far_over_the_limit_it_is() {
+        // A sixteenth over takes sixteen seconds a level, a kelvin over
+        // steps once a second, and four over steps every reading.
+        for (over, every) in [(1, 64), (FRACTION, 4), (4 * FRACTION, 1)] {
+            let mut thermal = Thermal::default();
+            for step in 1..=3 {
+                for reading in 1..=every {
+                    thermal.sample(limit_plus(over), CEILING);
+                    let stepped = if reading == every { step } else { step - 1 };
+                    assert_eq!(
+                        thermal.ceiling.target(),
+                        CEILING - stepped,
+                        "{over} over, step {step}, reading {reading}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_step_down_is_eight_levels_at_most_and_the_rest_is_not_saved_up() {
+        let mut thermal = Thermal::default();
+        // Forty kelvin over would buy ten levels.
+        thermal.sample(fraction(LIMIT + 40), CEILING);
+        assert_eq!(thermal.ceiling.target(), CEILING - MAX_STEP_DOWN);
+        // Less than a level's worth carries over to the next reading.
+        assert!(thermal.pressure < DOWN_PRESSURE, "{}", thermal.pressure);
+        thermal.sample(fraction(LIMIT + 40), CEILING);
+        assert_eq!(thermal.ceiling.target(), CEILING - 2 * MAX_STEP_DOWN);
+    }
+
+    #[test]
+    fn a_reading_that_buys_no_step_leaves_the_ceiling_alone() {
+        // At a level under the ceiling, a step down first pulls the ceiling
+        // down to the level. A reading that's only a little over mustn't.
+        let mut thermal = Thermal::default();
+        thermal.sample(limit_plus(1), FLOOR + 20);
+        assert_eq!(thermal.ceiling(), CEILING);
+        assert_eq!(thermal.ceiling.target(), CEILING);
+    }
+
+    #[test]
+    fn well_over_the_limit_it_steps_down_even_while_cooling() {
+        let mut thermal = Thermal::default();
+        thermal.sample(fraction(LIMIT + 10), CEILING);
+        let before = thermal.ceiling.target();
+        thermal.sample(fraction(LIMIT + 9), CEILING);
+        assert!(thermal.ceiling.target() < before);
+    }
+
+    #[test]
+    fn cooling_from_the_top_of_the_window_holds_and_keeps_the_pressure() {
+        let mut thermal = Thermal::default();
+        // Two steps down, and over half a step's pressure left.
+        for _ in 0..5 {
+            thermal.sample(limit_plus(WINDOW + 1), CEILING);
+        }
+        assert_eq!(thermal.ceiling.target(), CEILING - 2);
+        // A dip to the top of the window is cooling, so it holds, though
+        // this reading's error would have bought the next step.
+        thermal.sample(limit_plus(WINDOW), CEILING);
+        assert_eq!(thermal.ceiling.target(), CEILING - 2);
+        // Then it turns, and what was saved up before the dip still counts.
+        thermal.sample(limit_plus(WINDOW + 1), CEILING);
+        assert_eq!(thermal.ceiling.target(), CEILING - 3);
+    }
+
+    #[test]
+    fn a_prediction_on_either_edge_of_the_window_holds_and_forgets_the_pressure() {
+        // Over the limit, with pressure to step down, then cooling fast
+        // enough that the prediction is the limit exactly.
+        let mut thermal = Thermal::default();
+        thermal.sample(limit_plus(50), CEILING);
+        assert!(thermal.pressure > 0);
+        thermal.sample(limit_plus(-30), CEILING);
+        let smoothed = thermal.smoothed.as_ref().unwrap();
+        assert_eq!(smoothed.now, LIMIT_SIXTEENTHS + 40);
+        assert_eq!(thermal.pressure, 0);
+        assert_eq!(thermal.ceiling.target(), CEILING);
+
+        // Under the window, with pressure to step up, then warming so the
+        // prediction is the bottom of the window exactly.
+        let mut thermal = cooled_at_the_floor(limit_plus(-WINDOW - 5));
+        for _ in 0..10 {
+            thermal.sample(limit_plus(-WINDOW - 5), CEILING);
+        }
+        assert!(thermal.pressure < 0);
+        thermal.sample(limit_plus(-WINDOW - 4), CEILING);
+        assert_eq!(thermal.pressure, 0);
+        assert_eq!(thermal.ceiling.target(), FLOOR);
+    }
+
+    #[test]
+    fn the_rate_up_follows_how_far_under_the_window_it_is() {
+        // A sixteenth under the window takes 64 seconds a level, a kelvin
+        // under steps every four seconds, and sixteen under or more steps
+        // every reading, which is as fast as it goes.
+        for (under, every) in [
+            (1, 256),
+            (FRACTION, 16),
+            (16 * FRACTION, 1),
+            (25 * FRACTION, 1),
+        ] {
+            let reading = limit_plus(-WINDOW - under);
+            let mut thermal = cooled_at_the_floor(reading);
+            readings_to_step_up(&mut thermal, reading);
+            for step in 1..=3 {
+                assert_eq!(
+                    readings_to_step_up(&mut thermal, reading),
+                    every,
+                    "{under} under, step {step}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_pressure_left_over_from_a_step_up_counts_towards_the_next() {
+        // A kelvin and a half under the window is a step every ten and
+        // two-thirds readings, so six in sixteen seconds. Starting from
+        // nothing after each step would make it five.
+        let reading = limit_plus(-WINDOW - 24);
+        let mut thermal = cooled_at_the_floor(reading);
+        readings_to_step_up(&mut thermal, reading);
+        let from = thermal.ceiling.target();
+        for _ in 0..4 * 16 {
+            thermal.sample(reading, CEILING);
+        }
+        assert_eq!(thermal.ceiling.target(), from + 6);
+    }
+
+    #[test]
+    fn two_kelvin_under_the_limit_is_still_inside_the_window() {
+        let reading = fraction(LIMIT - 2);
+        let mut thermal = cooled_at_the_floor(reading);
+        for _ in 0..4 * 60 * 5 {
+            thermal.sample(reading, CEILING);
+        }
+        assert_eq!(thermal.ceiling.target(), FLOOR);
+    }
+
+    #[test]
+    fn warming_a_kelvin_every_two_seconds_blocks_stepping_up() {
+        // Thirty kelvin under the limit, so nothing but the trend is in the
+        // way of stepping up.
+        let start = fraction(LIMIT - 30);
+        let mut thermal = cooled_at_the_floor(start);
+        let mut reading = start;
+        let mut warm = |thermal: &mut Thermal, readings: u16| {
+            for _ in 0..readings {
+                reading += 2;
+                thermal.sample(reading, CEILING);
+            }
+        };
+        // The smoothed temperature takes a while to follow at the same
+        // rate, and it steps up until then.
+        warm(&mut thermal, 40);
+        let smoothed = thermal.smoothed.as_ref().unwrap();
+        // The oldest sample still in the history is seven readings back. The
+        // trend's taken against the one before it, a kelvin away exactly.
+        let oldest = smoothed.history[usize::from(smoothed.next)];
+        assert_eq!(smoothed.now - oldest, 7 * FRACTION / 8);
+        let held = thermal.ceiling.target();
+        assert!(held < CEILING);
+        warm(&mut thermal, 20);
+        assert_eq!(thermal.ceiling.target(), held);
+        // Once it's steady again, it carries on up.
+        let reading = reading;
+        for _ in 0..HISTORY * 2 {
+            thermal.sample(reading, CEILING);
+        }
+        assert!(thermal.ceiling.target() > held);
+    }
+
+    #[test]
+    fn a_fast_rise_steps_down_long_before_the_smoothed_temperature_gets_there() {
+        let mut thermal = Thermal::default();
+        let start = fraction(LIMIT - 30);
+        thermal.sample(start, CEILING);
+        // Six kelvin a reading, as fast as a reading's believed straight
+        // off, up to the limit.
+        for step in 1..=5 {
+            assert_eq!(thermal.ceiling.target(), CEILING);
+            thermal.sample(start + step * fraction(6), CEILING);
+        }
+        // The trend's over nine kelvin by now, and all of it counts.
+        let smoothed = thermal.smoothed.as_ref().unwrap();
+        assert!(smoothed.now < LIMIT_SIXTEENTHS - 20 * FRACTION);
+        assert!(thermal.ceiling.target() < CEILING);
+    }
+
+    #[test]
+    fn the_fourth_glitch_in_a_row_is_believed() {
+        let mut run = Run::new();
+        run.hold(celsius(30), CEILING, 20);
+        assert_eq!(run.hold(LIMIT + 20, CEILING, u16::from(GLITCHES)), CEILING);
+        assert_eq!(run.thermal.ceiling.target(), CEILING);
+        assert!(run.sample(LIMIT + 20, CEILING) < CEILING);
     }
 
     #[test]
