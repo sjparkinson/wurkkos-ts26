@@ -10,6 +10,7 @@ cargo test --workspace --locked -q                         # host tests, run the
 cargo clippy --workspace --all-targets --locked -- -D warnings   # host lints
 cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings   # firmware lints: the only place hw.rs and rt.rs get linted
 cargo xtask hex                                            # firmware ELF and hex, plus flash/RAM use, after any firmware change
+cargo xtask breakages                                      # about a minute: hex refuses each deliberately broken copy, after touching sim.rs, layout.rs or a breakage's lines
 ```
 
 CONTRIBUTING.md lists every check CI runs. Plain `cargo test` only tests the root package, so always pass `--workspace`.
