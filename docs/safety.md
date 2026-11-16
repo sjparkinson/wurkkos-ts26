@@ -2,14 +2,14 @@
 
 One section for every way identified so far that this torch could hurt someone or itself, what covers it, and what evidence there is that the cover works. It's a log of the current state. A section changes in the same commit as the code it describes, and a hazard nobody has thought of isn't in here, so a short log doesn't mean a short list.
 
-Nothing here has met a real TS26. The [roadmap](roadmap.md) says the same for section 2, and [breakout.md](breakout.md) is the plan that would change it. So read each section's Status strictly.
+The full firmware hasn't met a real TS26. The programmer and T0, the first-light build, have, on one torch on 2026-11-16 ([breakout.md](breakout.md#results), stages 1 to 3), and breakout.md is the plan that takes it further. So read each section's Status strictly.
 
 - **code only** means the code does it and nothing has run it, not even on the simulator.
 - **simulator** means the firmware has run it on the fake chip (`cargo xtask hex`), or a host test checks the library. The simulator is one reading of the datasheet, run against code written from that same reading, so a pass finds mistakes and proves nothing. [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) lists what it leaves out.
 - **bench** means it's been seen working on a real TS26.
 - **measured** means a number from a real TS26 backs the constant.
 
-Nothing is past simulator today. Some sections also cite a run on the breakout's chip, which is an ATtiny1616 but not a torch, and none of those moves a status.
+Nothing is past simulator today, since the statuses are about the full firmware. Some sections also cite a run on the breakout's chip, which is an ATtiny1616 but not a torch, or of T0 on the torch, and none of those moves a status.
 
 ## Hazards
 
@@ -23,7 +23,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Status.** Simulator.
 
-**What's left.** Nobody knows what holds PB2 low on the torch's board, or if anything does (3.1 and 3.7). The order against the MP3432's 180 µs needs a scope. The reset-to-`hw::hold_enable_low` gap isn't covered by any code, and the meter can't see it.
+**What's left.** Nobody knows what holds PB2 low on the torch's board, or if anything does (3.1 and 3.7). With the cell out, the UPDI kit's supply alone lit the emitters once as its probe landed on the pads (1.7), which fits the stock firmware's start-up blink. So the converter can run from the programmer. Programming mode, where PB2 floats for the whole command, stayed dark through a backup (1.8). With T0 on the torch, a bouncing contact as the cap went on gave one brief bright flash from the main emitters, and on another power-up the red aux, which T0 never drives (3.1). The BOD is off on this chip (1.10). `SUT` holds code back for 64 ms after reset with every output tri-stated (DS40002204A §12.3.2.2, §16.3.1), and POR releases at 1.4 to 1.8 V, under the 2.7 V that 10 MHz needs (tables 36-9 and 36-3), so a power-up on a bouncing supply likely isn't clean, and nothing in firmware runs early enough to cover either. About eight clean power-ups stayed dark through the same window, which is indirect evidence that something holds PB2 low. Reasoning, unconfirmed. The order against the MP3432's 180 µs needs a scope. The reset-to-`hw::hold_enable_low` gap isn't covered by any code, and the meter can't see it.
 
 ### H2. A hang with the light on
 
@@ -107,7 +107,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Status.** Code only.
 
-**What's left.** No test shows that no command path writes a fuse. It's true by reading the code, and `nvm_commands_are_the_datasheets` in xtask/src/updi.rs only pins the command numbers. The pads on one TS26 have been found and their `R - +` silkscreen read (1.3), and their pitch fits the kit's probe (1.4). Nobody has measured what they connect to (1.5 and 1.6). The breakout ran the programmer through its own steps, which isn't the torch's board.
+**What's left.** No test shows that no command path writes a fuse. It's true by reading the code, and `nvm_commands_are_the_datasheets` in xtask/src/updi.rs only pins the command numbers. The pads on one TS26 have been found and their `R - +` silkscreen read (1.3), and their pitch fits the kit's probe (1.4). The meter named them ground, supply and UPDI as the silkscreen says (1.5 and 1.6). On 2026-11-16 the kit pinged, backed up and flashed T0 onto that torch, and it still talked afterwards with the pads reading as before (1.7 to 3.8). That's one torch and one adapter, and the full firmware's 16 KB flash hasn't run on it yet.
 
 ### H9. A stray interrupt
 
