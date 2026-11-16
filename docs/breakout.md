@@ -210,7 +210,7 @@ Short bursts above level 75, and the meter comes out at 3 A.
 
 | # | Status | Do | Expect | Closes |
 |---|---|---|---|---|
-| 5.1 |  | 1C, then 2H to the bottom of the ramp, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
+| 5.1 |  | 1C, then 1H to the top and 1H again to the bottom of the ramp, in the dark | Level 13 lights, steadily. If it doesn't, `ui::FLOOR` doesn't suit this light | That the floor holds on this one |
 | 5.2 |  | The bottom few levels from 13 up, waving the light | Write down any flicker, against reviewers' 1/150 to 5/150 and 1.2. Level 13 was picked to clear that flicker, from a figure on the stock firmware's curve that nobody's checked on this one | "Is the low-end flicker the driver, the delta-sigma, or both" |
 | 5.3 |  | Ramp slowly end to end | Smooth, no steps that jump, no blip, each direction. The curve is the project's own cubic, so an ugly spot is a finding, not a surprise | |
 | 5.4 |  | T1 at levels 25, 50, 75, 100. Tail current, and stop at 3 A. Those are duties of about 0.5%, 3.6%, 12% and 29% | Plot current against duty. That's the first picture of what turns PB0 into current, filtered reference or otherwise | "Measure what PWM duty does to output" |

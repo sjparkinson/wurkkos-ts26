@@ -21,10 +21,12 @@ Every row has an example, which is a script in that notation, starting from a to
 |---|---|---|---|
 | 1C | Off | `1C 1C` → off | Done |
 | 1H | Ramp up, stopping at the top | `1C 1H:3s` → level 120 | Done |
-| 2H | Ramp down, stopping at the lowest level | `1C 2H:3s` → level 13 | Done |
-| Anything else | Nothing | `1C 2C 3C 4C 5C 3H wait:1s` → level 52 | Done |
+| 1H again | Ramp the other way from the last 1H, stopping at the end | `1C 1H:3s 1H:3s` → level 13 | Done |
+| 1H, after one that stopped partway | Still the other way, so letting go and holding again turns the ramp round | `1C 1H:1s 1H:500ms` → level 84 | Done |
+| 1H, after turning it off and on | Up, since nothing's remembered | `1C 1H:3s 1C 1C 1H:3s` → level 120 | Done |
+| Anything else | Nothing | `1C 2C 3C 4C 5C 2H 3H wait:1s` → level 52 | Done |
 
-The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.7 seconds.
+The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.7 seconds. Each 1H goes the other way from the one before it, whether or not that one reached the end, and the first after a click on goes up, since the light comes on near the bottom.
 
 The top is `ramp::CEILING`, level 120 of 150, and nothing goes above it until thermal regulation has been checked on a real light. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
 
@@ -55,7 +57,7 @@ These scripts have four more words. `cell:2.95V` is the cell's voltage from ther
 | A cell it can't read | Fades down the ramp, then off, as a fault | `cell:0V 1C wait:5s` → off | Done |
 | A cell it can read again | Still a fault | `cell:0V 1C wait:5s cell:3.80V 1C` → off | Done |
 | Hot | Fades down, no further than level 50 | `heat:80C 1C 1H:3s wait:120s` → level 50 | Done |
-| Hot, at a level under 50 | Nothing | `heat:80C 1C 2H:3s wait:120s` → level 13 | Done |
+| Hot, at a level under 50 | Nothing | `heat:80C 1C 1H:500ms 1H:3s wait:120s` → level 13 | Done |
 | Hot, then cool | Back up to the level you asked for | `heat:80C 1C 1H:3s wait:120s heat:25C wait:120s` → level 120 | Done |
 | A failed check at power-on | A fault | `fault 1C` → off | Done |
 | Flash that doesn't match its checksum | The same as any failed check | `flash:corrupt 1C` → off | Done |
