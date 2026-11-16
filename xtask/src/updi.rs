@@ -310,7 +310,12 @@ impl<W: Wire> Programmer<W> {
     /// Sends the NVM programming key and resets the chip into programming
     /// mode. The firmware stops running from here until [`Self::leave`].
     pub fn enter_progmode(&mut self) -> Result<()> {
-        if self.ldcs(ASI_SYS_STATUS)? & SYS_STATUS_NVMPROG != 0 {
+        // Already there only counts on the same terms as the wait below. The
+        // NVMPROG key needs the lock bits cleared (DS40002204A table 33-4),
+        // so a real chip shouldn't read both bits set, but nothing in the
+        // datasheet says it can't.
+        let status = self.ldcs(ASI_SYS_STATUS)?;
+        if status & SYS_STATUS_LOCKSTATUS == 0 && status & SYS_STATUS_NVMPROG != 0 {
             return Ok(());
         }
 
@@ -1267,6 +1272,19 @@ pub(crate) mod tests {
         let waited = p.wire.elapsed.checked_sub(before).unwrap();
         assert!(waited >= PROGMODE_TIMEOUT, "gave up after {waited:?}");
         assert_eq!(p.wire.page_writes + p.wire.page_erase_writes, 0);
+    }
+
+    /// A chip that's somehow in programming mode and locked at once isn't
+    /// taken as already in programming mode. It's sent the key, and stays
+    /// locked, and is refused.
+    #[test]
+    fn already_in_programming_mode_but_locked_is_refused() {
+        let mut p = Programmer::connect(Tiny::new()).unwrap();
+        p.wire.progmode = true;
+        p.wire.locked = true;
+        let err = p.enter_progmode().unwrap_err();
+        assert!(err.contains("unlocking means erasing it"), "{err}");
+        assert_eq!(p.wire.resets, 1, "never sent the key and reset");
     }
 
     /// An image over both kinds of page, and the EEPROM to go with it.
