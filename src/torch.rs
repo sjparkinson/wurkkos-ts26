@@ -2,6 +2,7 @@
 //! an ADC result in, a level and the next conversion out.
 
 use crate::TICKS_PER_SECOND;
+use crate::battery;
 use crate::button::{Clicks, Event};
 use crate::limits::{Health, Limits};
 use crate::ramp::{self, Output};
@@ -20,19 +21,32 @@ pub const SHOW_TICKS: u16 = 3 * TICKS_PER_SECOND;
 /// How long the aux shows bright red after a press that leaves it locked.
 ///
 /// That's 3C locking it, or any other press while it's locked. Five seconds,
-/// then dark, since nothing reads the cell while it's locked, and steady
-/// bright red would flatten a full one in about a month. Unmeasured.
+/// then dark, since steady bright red would flatten a full cell in about a
+/// month. Unmeasured.
 pub const LOCKED_TICKS: u16 = 5 * TICKS_PER_SECOND;
 
-/// How long the aux stays dim blue, off, after power-on or the last press.
+/// How long the torch rests between readings of the cell, five minutes.
 ///
-/// A day, then dark until the next press, so a torch left in a drawer
-/// doesn't spend its cell on the aux. The 32 kHz oscillator that times it
-/// can be 30 % out, so it's a day give or take a few hours. Unmeasured.
-pub const BLUE_TICKS: u32 = 24 * 60 * 60 * 64;
+/// After that many ticks of rest it takes one voltage reading, the way a
+/// press does, and rests again. The 32 kHz oscillator that times it can be
+/// 30 % out, so it's five minutes give or take a minute and a half.
+/// Unmeasured.
+pub const CHECK_TICKS: u16 = 5 * 60 * TICKS_PER_SECOND;
 
-// `u32::from` isn't const, so the 64 is spelled out above.
-const _: () = assert!(TICKS_PER_SECOND == 64);
+/// Under this many centivolts, read with the light off, off's dim blue goes
+/// dark.
+///
+/// That's 3.30 V, where a rested Li-ion is close to empty. Unmeasured.
+pub const AUX_DARK_BELOW: u16 = 330;
+
+/// At or above this many centivolts, read with the light off, off's dim blue
+/// comes back.
+///
+/// The 0.1 V over [`AUX_DARK_BELOW`] is the hysteresis, so a cell resting on
+/// the line doesn't flick the aux on and off every check. Unmeasured.
+pub const AUX_LIT_FROM: u16 = 340;
+
+const _: () = assert!(AUX_DARK_BELOW < AUX_LIT_FROM);
 
 #[derive(Clone, Debug)]
 pub struct Torch {
@@ -41,8 +55,15 @@ pub struct Torch {
     limits: Limits,
     /// Ticks left of [`SHOW_TICKS`] or [`LOCKED_TICKS`].
     showing: u16,
-    /// Ticks left of [`BLUE_TICKS`].
-    blue: u32,
+    /// Ticks of rest left until the next check of the cell, `0` meaning due.
+    check_in: u16,
+    /// Reading the cell with the switch up and the light off, either a
+    /// check or a conversion that was still running when the torch went
+    /// quiet. The torch doesn't rest until it's done.
+    checking: bool,
+    /// The last plausible reading with the light off was under
+    /// [`AUX_DARK_BELOW`], and none since has been [`AUX_LIT_FROM`] or more.
+    cell_low: bool,
 }
 
 impl Torch {
@@ -55,7 +76,9 @@ impl Torch {
             ui: Ui::new(),
             limits: Limits::new(calibration, faults),
             showing: if faults.any() { SHOW_TICKS } else { 0 },
-            blue: BLUE_TICKS,
+            check_in: 0,
+            checking: false,
+            cell_low: false,
         }
     }
 
@@ -72,17 +95,18 @@ impl Torch {
     /// time the click arrives, and that click turns the light on as usual.
     ///
     /// A click or the start of a hold that leaves the torch locked shows
-    /// bright red for [`LOCKED_TICKS`], counted the same way. Any of them
-    /// starts [`BLUE_TICKS`] again.
+    /// bright red for [`LOCKED_TICKS`], counted the same way.
+    ///
+    /// After [`CHECK_TICKS`] of rest, and on the first tick after power-on,
+    /// it reads the cell, through [`Limits::tick`] with the light off just
+    /// as a press does, and rests again once the reading's in. Any tick
+    /// that isn't resting starts the count again, since the cell's read
+    /// then anyway. Not with a fault, which nothing changes.
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
         self.showing = self.showing.saturating_sub(1);
-        self.blue = self.blue.saturating_sub(1);
         let event = self.clicks.tick_up_to(pressed, self.ui.most_clicks());
         if let Some(event) = event {
             let press = matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. });
-            if press {
-                self.blue = BLUE_TICKS;
-            }
             if self.limits.health() == Health::Good || self.level() > 0 {
                 self.ui.handle(event);
                 if press && self.ui.mode() == Mode::Lockout {
@@ -94,8 +118,29 @@ impl Torch {
         }
         let before = self.limits.health();
         let lit = self.level() > 0;
-        if !self.resting() && self.limits.tick(self.ui.output_level(), adc).off {
-            self.ui.off();
+        // A conversion still running when the torch goes quiet, at the end
+        // of a press with the light already off, finishes before it rests,
+        // so every conversion started gets read.
+        if !self.quiet() {
+            self.checking = false;
+        } else if self.limits.convert().is_some() || (self.check_in == 0 && before != Health::Fault)
+        {
+            self.checking = true;
+        }
+        if !self.resting() {
+            let step = self.limits.tick(self.ui.output_level(), adc);
+            if step.off {
+                self.ui.off();
+            }
+            match step.unloaded {
+                Some(volts) if !battery::plausible(volts) => {}
+                Some(volts) if volts < AUX_DARK_BELOW => self.cell_low = true,
+                Some(volts) if volts >= AUX_LIT_FROM => self.cell_low = false,
+                _ => {}
+            }
+            if self.limits.convert().is_none() {
+                self.checking = false;
+            }
         }
         // Say why, from the moment it's decided, through any fade, and for a
         // while after the light's out. That while is counted from the first
@@ -108,16 +153,26 @@ impl Torch {
         // rested if the firmware powers down straight after it.
         if self.resting() {
             self.limits.rest();
+            self.check_in = self.check_in.saturating_sub(1);
+        } else {
+            self.check_in = CHECK_TICKS;
         }
         event
     }
 
-    /// Whether there's nothing to do until the switch moves, meaning the
-    /// light's off and no click is being counted. The firmware powers down
-    /// between these ticks, and a press ends it on the tick that sees the
-    /// press, in time to read the cell before a click can turn the light on.
-    pub const fn resting(&self) -> bool {
+    /// Whether the switch and the light leave nothing to do, meaning the
+    /// light's off and no click is being counted.
+    const fn quiet(&self) -> bool {
         self.clicks.idle() && self.ui.output_level() == 0 && self.limits.level() == 0
+    }
+
+    /// Whether there's nothing to do until the switch moves or the next
+    /// check of the cell, meaning it's [quiet](Self::quiet) and not reading
+    /// the cell. The firmware powers down between these ticks, and a press
+    /// ends it on the tick that sees the press, in time to read the cell
+    /// before a click can turn the light on.
+    pub const fn resting(&self) -> bool {
+        self.quiet() && !self.checking
     }
 
     /// The level the LEDs should be at right now, `0` meaning off. That's what
@@ -136,15 +191,16 @@ impl Torch {
     }
 
     /// The UI's colour while all's well, but with lockout's red only for
-    /// [`LOCKED_TICKS`] after a press, and blue only for [`BLUE_TICKS`].
-    /// Otherwise yellow for a flat cell and
+    /// [`LOCKED_TICKS`] after a press, and blue only while the cell last read
+    /// [`AUX_LIT_FROM`] or more with the light off, or never read under
+    /// [`AUX_DARK_BELOW`]. Otherwise yellow for a flat cell and
     /// white for a fault, for [`SHOW_TICKS`] after a press or after the light
     /// goes out, and dark the rest of the time.
     pub const fn aux(&self) -> Aux {
         match self.limits.health() {
             Health::Good => match self.ui.aux() {
                 Aux::Red if self.showing == 0 => Aux::Off,
-                Aux::Blue if self.blue == 0 => Aux::Off,
+                Aux::Blue if self.cell_low => Aux::Off,
                 colour => colour,
             },
             _ if self.level() > 0 || self.showing == 0 => Aux::Off,
@@ -355,23 +411,419 @@ mod tests {
         assert_eq!(torch.aux(), Aux::Off, "still held");
     }
 
+    /// Ticks with the switch up until a check of the cell has started and
+    /// finished, and the torch rests again. Returns how many that took.
+    fn next_check(torch: &mut Rig) -> u32 {
+        let mut ticks = 0;
+        while torch.resting() {
+            torch.tick(false);
+            ticks += 1;
+            assert!(ticks <= u32::from(CHECK_TICKS) + 1, "no check");
+        }
+        while !torch.resting() {
+            torch.tick(false);
+            ticks += 1;
+        }
+        ticks
+    }
+
+    /// One check, from the first tick of rest, the way every check after
+    /// power-on goes. Two ticks awake and the third resting again.
+    fn assert_a_check(torch: &mut Rig, why: &str) {
+        torch.tick(false);
+        assert!(!torch.resting(), "{why}: the check's first tick");
+        assert_eq!(
+            torch.convert(),
+            Some(Convert {
+                channel: Channel::Voltage,
+                setup: true
+            }),
+            "{why}"
+        );
+        torch.tick(false);
+        assert!(!torch.resting(), "{why}: the check's second tick");
+        assert!(torch.convert().is_some(), "{why}");
+        torch.tick(false);
+        assert!(torch.resting(), "{why}: the reading's in");
+        assert_eq!(torch.convert(), None, "{why}");
+    }
+
+    /// Ticks with the switch up, every one of them resting.
+    fn rest(torch: &mut Rig, ticks: u16, why: &str) {
+        for tick in 0..ticks {
+            torch.tick(false);
+            assert!(torch.resting(), "{why}: tick {tick} of rest");
+        }
+    }
+
     #[test]
-    fn blue_goes_dark_a_day_after_the_last_press() {
+    fn the_cell_is_read_on_the_first_tick_and_after_every_five_minutes_of_rest() {
+        assert_eq!(CHECK_TICKS, 5 * 60 * 64);
         let mut torch = Rig::default();
-        for _ in 0..BLUE_TICKS - 2 {
+        assert!(torch.resting(), "before the first tick");
+        assert_a_check(&mut torch, "power-on");
+        for why in ["the first after", "the second", "the third"] {
+            // The tick the reading came in was the first of the rest.
+            rest(&mut torch, CHECK_TICKS - 1, why);
+            assert_a_check(&mut torch, why);
+        }
+    }
+
+    #[test]
+    fn a_press_or_the_light_starts_the_five_minutes_again() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, 3);
+        rest(&mut torch, CHECK_TICKS / 2, "half way");
+        // 2C does nothing from off, but the switch reads the cell.
+        tap(&mut torch, 2, Event::Click(2));
+        while !torch.resting() {
             torch.tick(false);
         }
-        assert_eq!(torch.aux(), Aux::Blue, "a day after power-on, nearly");
+        rest(&mut torch, CHECK_TICKS - 1, "after the press");
+        assert_a_check(&mut torch, "five minutes after the press");
+        rest(&mut torch, CHECK_TICKS / 2, "half way");
+        click(&mut torch);
+        run(&mut torch, false, 10 * TICKS_PER_SECOND);
+        tap(&mut torch, 1, Event::Click(1));
+        assert_eq!(torch.level(), 0);
+        assert!(torch.resting(), "out as 1C's let go");
+        rest(&mut torch, CHECK_TICKS - 1, "after the light");
+        assert_a_check(&mut torch, "five minutes after the light");
+    }
+
+    #[test]
+    fn blue_stays_lit_through_three_days_of_rest_with_a_good_cell() {
+        let mut torch = Rig::default();
+        let (mut checks, mut resting) = (0, true);
+        for tick in 0..3 * 24 * 60 * 60 * u32::from(TICKS_PER_SECOND) {
+            torch.tick(false);
+            assert_eq!(torch.aux(), Aux::Blue, "tick {tick}");
+            assert_eq!(torch.level(), 0, "tick {tick}");
+            checks += u32::from(resting && !torch.resting());
+            resting = torch.resting();
+        }
+        // One at power-on and one every five minutes and two ticks after.
+        assert_eq!(checks, 864);
+    }
+
+    #[test]
+    fn a_low_cell_at_power_on_darkens_blue_from_the_first_check() {
+        let mut torch = Rig::default();
+        torch.adc.voltage = voltage_reading(320);
         run(&mut torch, false, 2);
-        assert_eq!(torch.aux(), Aux::Off, "a day after power-on");
+        assert_eq!(torch.aux(), Aux::Blue, "before the reading's in");
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off, "the third tick, as it comes in");
+        for _ in 0..3 {
+            next_check(&mut torch);
+            assert_eq!(torch.aux(), Aux::Off);
+        }
+        // It's only the aux. The light still comes on.
+        click(&mut torch);
+        assert_eq!(torch.level(), ON_LEVEL);
+        click(&mut torch);
+        assert_eq!(torch.aux(), Aux::Off);
+    }
+
+    #[test]
+    fn blue_goes_dark_under_3_30_volts_and_comes_back_at_3_40() {
+        for cv in [329, 330, 335, 339, 340] {
+            assert_eq!(battery::centivolts(voltage_reading(cv)), cv);
+        }
+        let mut torch = Rig::default();
+        for (cv, aux, why) in [
+            (330, Aux::Blue, "3.30 V is still lit"),
+            (329, Aux::Off, "under 3.30 V"),
+            (335, Aux::Off, "3.35 V doesn't light it"),
+            (339, Aux::Off, "nor 3.39 V"),
+            (340, Aux::Blue, "3.40 V does"),
+            (335, Aux::Blue, "3.35 V doesn't darken it"),
+            (329, Aux::Off, "under 3.30 V again"),
+        ] {
+            torch.adc.voltage = voltage_reading(cv);
+            next_check(&mut torch);
+            assert_eq!(torch.aux(), aux, "{why}");
+            // And only at a check.
+            torch.adc.voltage = voltage_reading(if aux == Aux::Off { 420 } else { 300 });
+            rest(&mut torch, CHECK_TICKS - 1, why);
+            assert_eq!(torch.aux(), aux, "{why}, till the next check");
+            torch.adc.voltage = voltage_reading(cv);
+        }
+    }
+
+    #[test]
+    fn charging_a_low_cell_at_rest_brings_blue_back_at_the_next_check() {
+        let mut torch = Rig::default();
+        torch.adc.voltage = voltage_reading(320);
+        next_check(&mut torch);
+        assert_eq!(torch.aux(), Aux::Off);
+        torch.adc.voltage = voltage_reading(380);
+        let ticks = next_check(&mut torch);
+        assert!(ticks <= u32::from(CHECK_TICKS) + 3, "{ticks}");
+        assert_eq!(torch.aux(), Aux::Blue);
+    }
+
+    #[test]
+    fn a_press_reads_the_cell_for_the_aux_without_waiting_for_a_check() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, TICKS_PER_SECOND);
+        assert_eq!(torch.aux(), Aux::Blue);
+        torch.adc.voltage = voltage_reading(320);
+        // Down for long enough for one reading, which is a click's worth.
+        run(&mut torch, true, 4);
+        assert_eq!(torch.aux(), Aux::Off, "pressed");
+        // Made a 2C, which does nothing.
+        run(&mut torch, false, 4);
+        tap(&mut torch, 1, Event::Click(2));
+        assert_eq!(torch.level(), 0);
+        torch.adc.voltage = voltage_reading(380);
         tap(&mut torch, 2, Event::Click(2));
         assert_eq!(torch.aux(), Aux::Blue, "a press that does nothing");
-        for _ in 1..BLUE_TICKS {
+    }
+
+    #[test]
+    fn readings_with_the_light_on_never_move_the_aux() {
+        // A good cell at the press, then low while it's lit, and blue's
+        // still there when it goes out.
+        let mut torch = Rig::default();
+        click(&mut torch);
+        torch.adc.voltage = voltage_reading(310);
+        run(&mut torch, false, 60 * TICKS_PER_SECOND);
+        assert_eq!(torch.level(), ON_LEVEL, "over 3.00 V, so no step down");
+        tap(&mut torch, 1, Event::Click(1));
+        assert_eq!(torch.aux(), Aux::Blue, "as it goes out");
+        rest(&mut torch, CHECK_TICKS - 1, "after the light");
+        assert_eq!(torch.aux(), Aux::Blue, "till the next check");
+        assert_a_check(&mut torch, "five minutes on");
+        assert_eq!(torch.aux(), Aux::Off, "which reads it");
+        // And the other way, a low cell at rest that reads well lit.
+        click(&mut torch);
+        torch.adc.voltage = voltage_reading(400);
+        run(&mut torch, false, 60 * TICKS_PER_SECOND);
+        tap(&mut torch, 1, Event::Click(1));
+        assert_eq!(torch.aux(), Aux::Off, "as it goes out");
+        next_check(&mut torch);
+        assert_eq!(torch.aux(), Aux::Blue, "at the next check");
+    }
+
+    #[test]
+    fn a_check_never_lights_it_or_changes_the_mode() {
+        let mut torch = Rig::default();
+        for _ in 0..3 * u32::from(CHECK_TICKS) {
             torch.tick(false);
+            assert_eq!(torch.level(), 0);
+            assert_eq!(torch.torch.ui.mode(), Mode::Off);
+            assert_eq!(torch.torch.ui.output_level(), 0);
         }
-        assert_eq!(torch.aux(), Aux::Blue, "a day after it, nearly");
+        tap(&mut torch, 3, Event::Click(3));
+        run(&mut torch, false, LOCKED_TICKS);
+        assert_eq!(torch.aux(), Aux::Off, "red for five seconds only");
+        torch.adc.voltage = voltage_reading(320);
+        for _ in 0..3 {
+            next_check(&mut torch);
+            assert_eq!(torch.torch.ui.mode(), Mode::Lockout);
+            assert_eq!(torch.level(), 0);
+            assert_eq!(torch.aux(), Aux::Off);
+        }
+        // A low cell doesn't touch the red.
+        tap(&mut torch, 1, Event::Click(1));
+        for tick in 1..LOCKED_TICKS {
+            torch.tick(false);
+            assert_eq!(torch.aux(), Aux::Red, "tick {tick}");
+        }
         torch.tick(false);
-        assert_eq!(torch.aux(), Aux::Off, "a day after it");
+        assert_eq!(torch.aux(), Aux::Off);
+        // Unlocked, it's off with blue dark for the low cell.
+        tap(&mut torch, 3, Event::Click(3));
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        assert_eq!(torch.torch.ui.mode(), Mode::Off);
+        assert_eq!(torch.aux(), Aux::Off);
+    }
+
+    /// A reading at rest that can't be real leaves the aux as it was, and
+    /// since each rest tick forgives the glitches before it, no run of them
+    /// at rest adds up to a fault. The next press reads the cell four times
+    /// a second, and four of them in a row there still are one.
+    #[test]
+    fn garbage_at_rest_leaves_the_aux_alone_and_is_no_fault() {
+        for garbage in [0, voltage_reading(60), 4 * 1023] {
+            let mut torch = Rig::default();
+            torch.adc.voltage = voltage_reading(320);
+            next_check(&mut torch);
+            assert_eq!(torch.aux(), Aux::Off, "{garbage}");
+            torch.adc.voltage = garbage;
+            for _ in 0..12 {
+                next_check(&mut torch);
+                assert_eq!(torch.aux(), Aux::Off, "{garbage}");
+                assert_eq!(torch.torch.limits.health(), Health::Good, "{garbage}");
+            }
+            torch.adc.voltage = voltage_reading(380);
+            next_check(&mut torch);
+            assert_eq!(torch.aux(), Aux::Blue, "{garbage}");
+            torch.adc.voltage = garbage;
+            for _ in 0..12 {
+                next_check(&mut torch);
+                assert_eq!(torch.aux(), Aux::Blue, "{garbage}");
+                assert_eq!(torch.torch.limits.health(), Health::Good, "{garbage}");
+            }
+            // A good cell at the press, and it lights as usual.
+            torch.adc.voltage = voltage_reading(380);
+            click(&mut torch);
+            assert_eq!(torch.level(), ON_LEVEL, "{garbage}");
+            click(&mut torch);
+            // A second's hold is four readings, which is a fault.
+            torch.adc.voltage = garbage;
+            run(&mut torch, true, 2 * TICKS_PER_SECOND);
+            assert_eq!(torch.torch.limits.health(), Health::Fault, "{garbage}");
+        }
+    }
+
+    /// The rows of docs/ui.md about the cell at rest only say how the light
+    /// ends up. This holds them to the aux they describe as well.
+    #[test]
+    fn the_rest_rows_in_docs_ui_md_end_on_the_aux_they_describe() {
+        let rows = [
+            ("Flat cell, charged, left alone", Aux::Blue),
+            ("Low cell, at rest", Aux::Off),
+            ("Low cell, read by a press", Aux::Off),
+            ("Low cell, charged at rest", Aux::Blue),
+            ("A cell it can't read, at rest", Aux::Off),
+        ];
+        for (row, aux) in rows {
+            let example = examples(UI_MD)
+                .map(|example| example.unwrap())
+                .find(|example| example.row.action == row)
+                .unwrap_or_else(|| panic!("no row {row:?}"));
+            let rig = Rig::play(example.actions());
+            assert_eq!(rig.aux(), aux, "{row}");
+            assert_eq!(rig.torch.limits.health(), Health::Good, "{row}");
+        }
+        // "Low cell, at rest" ends lit, so its dark blue is before the 1C,
+        // and after it's clicked off again.
+        let mut low = Rig::play(
+            examples(UI_MD)
+                .find_map(|e| {
+                    let e = e.unwrap();
+                    (e.row.action == "Low cell, at rest").then(|| e.actions())
+                })
+                .unwrap()
+                .take(2),
+        );
+        assert_eq!(low.aux(), Aux::Off, "dark before the 1C");
+        low.adc.voltage = voltage_reading(320);
+        click(&mut low);
+        assert_eq!(low.level(), ON_LEVEL);
+        click(&mut low);
+        assert_eq!(low.aux(), Aux::Off, "and once it's off again");
+        // "A cell it can't read, at rest" ends lit too, so the blue it
+        // keeps through the garbage is before the 1C.
+        let garbage = Rig::play(
+            examples(UI_MD)
+                .find_map(|e| {
+                    let e = e.unwrap();
+                    (e.row.action == "A cell it can't read, at rest").then(|| e.actions())
+                })
+                .unwrap()
+                .take(2),
+        );
+        assert_eq!(garbage.aux(), Aux::Blue, "blue through the garbage");
+        assert_eq!(garbage.torch.limits.health(), Health::Good, "no fault yet");
+    }
+
+    #[test]
+    fn a_check_whose_result_never_comes_still_ends() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, 3);
+        torch.adc.voltage = voltage_reading(320);
+        next_check(&mut torch);
+        assert_eq!(torch.aux(), Aux::Off);
+        rest(&mut torch, CHECK_TICKS - 1, "to the next check");
+        // No result at all, which reads as zero.
+        for _ in 0..2 {
+            torch.torch.tick(false, None);
+            assert!(!torch.resting());
+        }
+        torch.torch.tick(false, None);
+        assert!(torch.resting());
+        assert_eq!(torch.convert(), None);
+        assert_eq!(torch.aux(), Aux::Off);
+        assert_eq!(torch.torch.limits.health(), Health::Good);
+    }
+
+    #[test]
+    fn a_flat_cell_charged_at_rest_is_good_again_at_the_next_check() {
+        let mut torch = Rig::default();
+        click(&mut torch);
+        torch.adc.voltage = voltage_reading(280);
+        run(&mut torch, false, 10 * TICKS_PER_SECOND);
+        assert_eq!(torch.torch.limits.health(), Health::Flat);
+        // Rested, but not charged.
+        torch.adc.voltage = voltage_reading(350);
+        for _ in 0..3 {
+            next_check(&mut torch);
+            assert_eq!(torch.torch.limits.health(), Health::Flat);
+            assert_eq!(torch.aux(), Aux::Off, "yellow only after a press");
+        }
+        torch.adc.voltage = voltage_reading(380);
+        let ticks = next_check(&mut torch);
+        assert!(ticks <= u32::from(CHECK_TICKS) + 3, "{ticks}");
+        assert_eq!(torch.torch.limits.health(), Health::Good, "with no press");
+        assert_eq!(torch.aux(), Aux::Blue);
+        assert_eq!(torch.level(), 0, "and still off");
+        click(&mut torch);
+        assert_eq!(torch.level(), ON_LEVEL);
+    }
+
+    #[test]
+    fn a_fault_skips_the_checks() {
+        let mut torch = Rig::new(Faults {
+            hang: true,
+            ..Faults::NONE
+        });
+        for tick in 0..2 * u32::from(CHECK_TICKS) {
+            torch.tick(false);
+            assert!(torch.resting(), "tick {tick}");
+            assert_eq!(torch.convert(), None, "tick {tick}");
+        }
+        // And one that comes up later, from a cell it can't read.
+        let mut torch = Rig::default();
+        click(&mut torch);
+        torch.adc.voltage = 0;
+        run(&mut torch, false, 5 * TICKS_PER_SECOND);
+        assert_eq!(torch.torch.limits.health(), Health::Fault);
+        assert!(torch.resting());
+        for tick in 0..2 * u32::from(CHECK_TICKS) {
+            torch.tick(false);
+            assert!(torch.resting(), "tick {tick}");
+        }
+    }
+
+    /// A hold from off goes quiet the tick it's let go. A conversion that's
+    /// still running then gets read before the torch rests, so the cell
+    /// changing on the hold's last tick shows on the aux exactly when a
+    /// conversion was left running. Every one of a round's 16 ticks is the
+    /// last for one of these holds.
+    #[test]
+    fn a_conversion_running_as_a_hold_ends_is_read_before_it_rests() {
+        let (mut read, mut not) = (0, 0);
+        for down in HOLD_TICKS + 1..HOLD_TICKS + 17 {
+            let mut torch = Rig::default();
+            run(&mut torch, false, 3);
+            torch.adc.voltage = voltage_reading(320);
+            run(&mut torch, true, down - 1);
+            assert_eq!(torch.aux(), Aux::Off, "{down}");
+            torch.adc.voltage = voltage_reading(380);
+            torch.tick(true);
+            let running = torch.convert().is_some();
+            assert_eq!(torch.tick(false), Some(Event::Release { clicks: 0 }));
+            run(&mut torch, false, 2);
+            assert!(torch.resting(), "{down}");
+            let aux = if running { Aux::Blue } else { Aux::Off };
+            assert_eq!(torch.aux(), aux, "{down}");
+            read += u32::from(running);
+            not += u32::from(!running);
+        }
+        assert!(read > 0 && not > 0, "{read} read, {not} not");
     }
 
     #[test]
@@ -701,11 +1153,23 @@ mod tests {
         low + rng.next_u16() % (high - low + 1)
     }
 
+    /// How the noise passes the time.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Pace {
+        /// Rests and changes of cell of half a minute at most, so the
+        /// switching's thick and the cell's rarely checked at rest.
+        Quick,
+        /// The same switching, but a quarter of the rests and half the
+        /// changes of cell last minutes, up to three checks' worth.
+        Slow,
+    }
+
     /// How long the switch stays down, or up, this time. Short enough for a
     /// click, either side of the tick a press becomes a hold or a click
     /// counts, or long, so that 1C, 3C, 1H, 2H and everything that isn't one
-    /// of them all turn up often.
-    fn span(rng: &mut Rng, pressed: bool) -> u16 {
+    /// of them all turn up often. At [`Pace::Slow`], some rests are long
+    /// enough for checks of the cell.
+    fn span(rng: &mut Rng, pressed: bool, pace: Pace) -> u16 {
         let roll = rng.next_u16() % 16;
         if pressed {
             match roll {
@@ -715,6 +1179,7 @@ mod tests {
             }
         } else {
             match roll {
+                12..=15 if pace == Pace::Slow => between(rng, CHECK_TICKS / 4, 3 * CHECK_TICKS),
                 0..=6 => between(rng, 1, 8),
                 7..=8 => between(rng, RELEASE_TICKS - 3, RELEASE_TICKS + 3),
                 9..=13 => between(rng, RELEASE_TICKS + 1, TICKS_PER_SECOND),
@@ -789,8 +1254,29 @@ mod tests {
         dark_at: u32,
         /// The tick lockout's red goes dark.
         red_until: u32,
-        /// The tick off's blue goes dark.
-        blue_until: u32,
+        /// The last plausible reading with the light off was under 3.30 V,
+        /// and none since was 3.40 V or more, so off's blue is dark.
+        cell_low: bool,
+        /// Ticks of rest until the next check of the cell, `0` meaning due.
+        check_in: u16,
+        /// The tick the last check of the cell started, `0` for none yet.
+        checked_at: u32,
+    }
+
+    impl Model {
+        /// One voltage reading taken with the light off, from the raw
+        /// result the ADC gave.
+        fn unloaded(&mut self, raw: u16) {
+            let volts = battery::centivolts(raw);
+            if !battery::PLAUSIBLE.contains(&volts) {
+                return;
+            }
+            if volts < 330 {
+                self.cell_low = true;
+            } else if volts >= 340 {
+                self.cell_low = false;
+            }
+        }
     }
 
     impl Model {
@@ -843,12 +1329,27 @@ mod tests {
         went_blind: u32,
         clicked_off_mid_fade: u32,
         ignored_presses: u32,
+        /// Ticks off's blue was dark for a low cell.
+        blue_dark_for_the_cell: u32,
+        darkened_by_a_press: u32,
+        checks: u32,
+        darkened_at_a_check: u32,
+        relit_at_a_check: u32,
+        garbage_at_a_check: u32,
+        charged_at_a_check: u32,
     }
 
     /// One torch from power-on, for `ticks` ticks of random switching, cells,
     /// temperatures and ADC results, or until half a minute into a fault,
     /// checking every tick against docs/ui.md. Returns how many ticks it ran.
-    fn live(rng: &mut Rng, faults: Faults, ticks: u32, seen: &mut Seen, life: u32) -> u32 {
+    fn live(
+        rng: &mut Rng,
+        pace: Pace,
+        faults: Faults,
+        ticks: u32,
+        seen: &mut Seen,
+        life: u32,
+    ) -> u32 {
         macro_rules! check {
             ($t:expr, $cond:expr, $($why:tt)+) => {
                 assert!($cond, "life {life}, tick {}: {}", $t, format_args!($($why)+))
@@ -862,18 +1363,28 @@ mod tests {
             up: false,
             dark_at: if failed { SHOW_TICKS.into() } else { 0 },
             red_until: 0,
-            blue_until: BLUE_TICKS,
+            cell_low: false,
+            check_in: 0,
+            checked_at: 0,
         };
-        let (mut pressed, mut switch_left) = (false, 0);
+        // Slow torches start with the switch up half the time, so the first
+        // tick's check gets a look in.
+        let start_up = pace == Pace::Slow && rng.next_u16().is_multiple_of(2);
+        let (mut pressed, mut switch_left) = (start_up, 0);
         let (mut cell, mut head) = (Source::Steady(3516), Source::Steady(2124));
         // One result in `lose` never arrives, and `0` is none of them.
         let (mut lose, mut world_left) = (0, 0);
         // Ticks the switch has been up, and ticks since the fault.
         let (mut up, mut faulted_for) = (0_u32, 0_u32);
+        // The channels of the conversions started one and two ticks ago,
+        // and whether the light was lit two ticks ago. Two voltage
+        // conversions in a row are a turn, whose second is the reading.
+        let (mut converted, mut converted_before) = (None, None);
+        let mut lit_before_last = false;
         for t in 1..=ticks {
             if switch_left == 0 {
                 pressed = !pressed;
-                switch_left = span(rng, pressed);
+                switch_left = span(rng, pressed, pace);
             }
             switch_left -= 1;
             if world_left == 0 {
@@ -884,7 +1395,12 @@ mod tests {
                     12..=14 => 4,
                     _ => 1,
                 };
-                world_left = between(rng, 1, 30 * TICKS_PER_SECOND);
+                world_left = match pace {
+                    Pace::Slow if rng.next_u16().is_multiple_of(2) => {
+                        between(rng, 60 * TICKS_PER_SECOND, 3 * CHECK_TICKS)
+                    }
+                    _ => between(rng, 1, 30 * TICKS_PER_SECOND),
+                };
             }
             world_left -= 1;
             up = if pressed { 0 } else { up + 1 };
@@ -904,14 +1420,12 @@ mod tests {
                 });
             let health = rig.torch.limits.health();
             let level = rig.level();
+            let convert = rig.convert();
 
             // The clicks and holds that should have reached the UI.
             let mut ignored = false;
             if let Some(event) = event {
                 let press = matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. });
-                if press {
-                    model.blue_until = t + BLUE_TICKS;
-                }
                 if health_before == Health::Good || level_before > 0 {
                     model.handle(event);
                     if press && model.mode == Mode::Lockout {
@@ -922,6 +1436,32 @@ mod tests {
                     ignored = true;
                 }
             }
+            // The reading that came in this tick, if the last two ticks
+            // started a voltage turn's two conversions. It's the cell with
+            // nothing on it if the UI's off now and the light was out for
+            // both conversions' ticks, and then it's what decides off's blue.
+            let at_a_check = model.checked_at != 0 && t == model.checked_at + 2 && up >= 3;
+            let voltage = Some(Channel::Voltage);
+            if converted == voltage && converted_before == voltage {
+                let unloaded = model.mode != Mode::On && level_before == 0 && !lit_before_last;
+                if unloaded {
+                    let low = model.cell_low;
+                    model.unloaded(result.unwrap_or(0));
+                    let plausible = battery::plausible(battery::centivolts(result.unwrap_or(0)));
+                    if at_a_check {
+                        seen.darkened_at_a_check += u32::from(!low && model.cell_low);
+                        seen.relit_at_a_check += u32::from(low && !model.cell_low);
+                        seen.garbage_at_a_check += u32::from(!plausible);
+                    } else {
+                        seen.darkened_by_a_press += u32::from(!low && model.cell_low);
+                    }
+                }
+            } else {
+                check!(t, !at_a_check, "a check with no reading");
+            }
+            converted_before = converted;
+            converted = convert.map(|c| c.channel);
+            lit_before_last = level_before > 0;
             if model.mode == Mode::On && level == 0 {
                 check!(t, health != Health::Good, "off with nothing wrong");
                 model.mode = Mode::Off;
@@ -1004,7 +1544,7 @@ mod tests {
             let showing = t < model.dark_at;
             let expected = match (health, model.mode) {
                 _ if level > 0 => Aux::Off,
-                (Health::Good, Mode::Off) if t < model.blue_until => Aux::Blue,
+                (Health::Good, Mode::Off) if !model.cell_low => Aux::Blue,
                 (Health::Good, Mode::Lockout) if t < model.red_until => Aux::Red,
                 (Health::Flat, _) if showing => Aux::Yellow,
                 (Health::Fault, _) if showing => Aux::White,
@@ -1018,16 +1558,50 @@ mod tests {
                 check!(t, level == 0, "resting at level {level}");
                 check!(t, rig.convert().is_none(), "resting with the ADC busy");
             }
+            // A check of the cell is due after enough rest, never with a
+            // fault, and takes two ticks awake before it rests again.
             if resting_before && !pressed {
-                check!(t, resting && event.is_none(), "woke with the switch up");
-                check!(t, health == health_before, "{health:?} while resting");
+                check!(t, event.is_none(), "an event with the switch up");
+                if model.check_in == 0 && health_before != Health::Fault {
+                    let started = Some(Convert {
+                        channel: Channel::Voltage,
+                        setup: true,
+                    });
+                    check!(t, !resting && convert == started, "no check, {convert:?}");
+                    model.checked_at = t;
+                    seen.checks += 1;
+                } else {
+                    check!(t, resting, "woke with the switch up");
+                    check!(t, health == health_before, "{health:?} while resting");
+                }
             }
+            let checking =
+                model.checked_at != 0 && t - model.checked_at <= 2 && up > t - model.checked_at;
+            if checking {
+                check!(t, level == 0, "lit by a check");
+                check!(
+                    t,
+                    health == health_before
+                        || (health_before == Health::Flat && health == Health::Good),
+                    "a check took it from {health_before:?} to {health:?}"
+                );
+                check!(t, resting == at_a_check, "two ticks awake, then rest");
+                if at_a_check && (health_before, health) == (Health::Flat, Health::Good) {
+                    seen.charged_at_a_check += 1;
+                }
+            }
+            model.check_in = match resting {
+                true => model.check_in.saturating_sub(1),
+                false => CHECK_TICKS,
+            };
             if resting_before && pressed {
                 check!(t, rig.convert().is_some(), "a press that reads nothing");
             }
-            if up > u32::from(RELEASE_TICKS) && level == 0 {
+            if up > u32::from(RELEASE_TICKS) + 2 && level == 0 && !checking {
                 check!(t, resting, "nothing to do and not resting");
             }
+            seen.blue_dark_for_the_cell +=
+                u32::from(health == Health::Good && model.mode == Mode::Off && model.cell_low);
 
             seen.lit += u32::from(level > 0);
             seen.at_the_top += u32::from(level == CEILING);
@@ -1066,8 +1640,8 @@ mod tests {
     /// Torches from power-on, one after another, until they've run for
     /// `ticks` ticks between them. One in eight failed a power-on check. A
     /// fault lasts until the cell comes out, so each gets a few minutes at
-    /// most.
-    fn throw_noise_at_torches(seed: u32, ticks: u32, seen: &mut Seen) {
+    /// most. At [`Pace::Slow`] each lives ten times as long.
+    fn throw_noise_at_torches(seed: u32, pace: Pace, ticks: u32, seen: &mut Seen) {
         let mut rng = Rng::new(seed);
         let (mut life, mut run) = (0, 0);
         while run < ticks {
@@ -1078,9 +1652,39 @@ mod tests {
                 },
                 _ => Faults::NONE,
             };
-            let length = u32::from(between(&mut rng, 1000, 20_000));
-            run += live(&mut rng, faults, length, seen, life);
+            let mut length = u32::from(between(&mut rng, 1000, 20_000));
+            if pace == Pace::Slow {
+                length *= 10;
+            }
+            run += live(&mut rng, pace, faults, length, seen, life);
             life += 1;
+        }
+    }
+
+    /// Eight million ticks, about a day and a half of torch, with rests of
+    /// up to a quarter of an hour, so the cell's checked at rest hundreds of
+    /// times, through every kind of reading.
+    #[test]
+    fn random_switching_with_long_rests_never_breaks_a_promise() {
+        let mut seen = Seen::default();
+        for seed in [0x5EED_0005, 0x5EED_0006] {
+            throw_noise_at_torches(seed, Pace::Slow, 4_000_000, &mut seen);
+        }
+        for (what, times) in [
+            ("resting", seen.resting),
+            ("blue", seen.blue),
+            ("blue dark for the cell", seen.blue_dark_for_the_cell),
+            ("checking the cell", seen.checks),
+            ("darkened at a check", seen.darkened_at_a_check),
+            ("relit at a check", seen.relit_at_a_check),
+            ("reading garbage at a check", seen.garbage_at_a_check),
+            ("charged at a check", seen.charged_at_a_check),
+            ("darkened by a press", seen.darkened_by_a_press),
+            ("locked out", seen.locked),
+            ("flat", seen.flat),
+            ("failed at power-on", seen.failed_at_power_on),
+        ] {
+            assert!(times > 0, "never {what}: {seen:?}");
         }
     }
 
@@ -1090,9 +1694,11 @@ mod tests {
     fn random_switching_and_readings_never_break_a_promise() {
         let mut seen = Seen::default();
         for seed in [0x5EED_0003, 0x5EED_0004] {
-            throw_noise_at_torches(seed, 1_000_000, &mut seen);
+            throw_noise_at_torches(seed, Pace::Quick, 1_000_000, &mut seen);
         }
         for (what, times) in [
+            ("blue dark for the cell", seen.blue_dark_for_the_cell),
+            ("darkened by a press", seen.darkened_by_a_press),
             ("lit", seen.lit),
             ("at the top of the ramp", seen.at_the_top),
             ("at the bottom of the ramp", seen.at_the_bottom),

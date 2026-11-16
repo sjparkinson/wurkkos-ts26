@@ -45,6 +45,11 @@ pub struct Step {
     pub level: u8,
     /// The cell's flat, or there's a fault, so turn the UI off.
     pub off: bool,
+    /// The centivolts of a voltage reading that came due this tick with the
+    /// light off, and off for the two ticks before as well, so the
+    /// conversion ran with no load on the cell. Implausible readings
+    /// included, and a result that never came reads as zero.
+    pub unloaded: Option<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +62,10 @@ pub struct Limits {
     on: bool,
     /// The level the light's at, as of the last tick.
     level: u8,
+    /// Whether the light was lit the tick before that. A conversion starts
+    /// before that tick's output is set, so a reading that comes due now
+    /// ran across the two.
+    lit_before: bool,
     convert: Option<Convert>,
     /// A self-test failed, or the cell couldn't be read.
     fault: bool,
@@ -74,6 +83,7 @@ impl Limits {
             thermal: Thermal::new(),
             on: false,
             level: 0,
+            lit_before: false,
             convert: None,
             fault: faults.any(),
         }
@@ -112,7 +122,9 @@ impl Limits {
     /// conversion started now would come back on waking with an invalid
     /// result (DS40002204A §30.3.5). So a battery ceiling only climbs once
     /// readings start again, and a long rest forgets the last ones
-    /// (`battery::FORGET_TICKS`).
+    /// (`battery::FORGET_TICKS`). The torch's checks of the cell at rest
+    /// (`torch::CHECK_TICKS`) are ordinary ticks with the UI off, three of
+    /// them, between runs of these.
     pub const fn rest(&mut self) {
         self.schedule.rest();
         self.protection.rest();
@@ -146,9 +158,13 @@ impl Limits {
 
         let (reading, convert) = self.schedule.tick(result, on);
         self.convert = convert;
+        let mut unloaded = None;
         match reading {
             Some(Reading::Voltage(raw)) => {
                 let centivolts = battery::centivolts(raw);
+                if level == 0 && self.level == 0 && !self.lit_before {
+                    unloaded = Some(centivolts);
+                }
                 if self.protection.sample(centivolts, level) == Verdict::Blind {
                     self.fault = true;
                 }
@@ -175,6 +191,7 @@ impl Limits {
         // decides.
         let fault = self.fault && self.level <= 1;
         let off = on && (fault || self.protection.flat());
+        self.lit_before = self.level > 0;
         self.level = if on && !off {
             ui.min(thermal).min(battery)
         } else {
@@ -183,6 +200,7 @@ impl Limits {
         Step {
             level: self.level,
             off,
+            unloaded,
         }
     }
 }
@@ -684,6 +702,76 @@ mod tests {
             run.limits.rest();
         }
         assert_eq!(run.limits.health(), Health::Flat);
+    }
+
+    /// Voltage readings come due on the third tick of each round of 16,
+    /// counting from 0. A conversion starts before its tick's output is set,
+    /// so the reading's only the unloaded cell once the light's been out for
+    /// the two ticks before it as well as its own.
+    #[test]
+    fn an_unloaded_reading_is_one_with_the_light_out_for_two_ticks_before_it() {
+        let due = |tick: usize| tick % usize::from(CYCLE_TICKS) == 2;
+        // Off from power-on, and every reading counts, garbage included.
+        for voltage in [voltage_reading(320), 0] {
+            let mut limits = Limits::new(CALIBRATION, Faults::NONE);
+            let mut adc = Adc::new();
+            adc.voltage = voltage;
+            for tick in 0..64 {
+                let step = limits.tick(0, adc.result());
+                adc.start(limits.convert());
+                let read = due(tick).then(|| battery::centivolts(voltage));
+                assert_eq!(step.unloaded, read, "{voltage}: tick {tick}");
+            }
+        }
+        // Lit, then out at every point in the round, with the switch still
+        // down so the readings go on.
+        for out_at in 64..80 {
+            let mut limits = Limits::new(CALIBRATION, Faults::NONE);
+            let mut adc = Adc::new();
+            for tick in 0..out_at + 40 {
+                let ui = if tick < out_at { 50 } else { 0 };
+                let step = limits.tick(ui, adc.result());
+                adc.start(limits.convert());
+                let read = (due(tick) && tick >= out_at + 2).then_some(380);
+                assert_eq!(step.unloaded, read, "out at {out_at}: tick {tick}");
+            }
+        }
+    }
+
+    /// A check of the cell at rest, five minutes after the last, the way
+    /// `torch::Torch` runs one. The rest before it is `battery::FORGET_TICKS`
+    /// long, so each check finds the filter forgotten and seeds it afresh,
+    /// as a press after a long rest always did. A press within five minutes
+    /// of a check blends in with that check's reading instead. A check takes
+    /// one reading with the light off, which can't raise a battery ceiling,
+    /// since that takes four seconds of readings in a row.
+    #[test]
+    fn a_check_at_rest_seeds_the_filter_afresh_and_leaves_the_ceiling() {
+        use crate::torch::CHECK_TICKS;
+        assert_eq!(CHECK_TICKS, battery::FORGET_TICKS);
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.adc.voltage = voltage_reading(295);
+        run.secs(6);
+        let ceiling = run.limits.ceilings().0;
+        assert!(ceiling < CEILING);
+        run.ui = 0;
+        run.ticks(1);
+        run.limits.rest();
+        for cv in [380, 330, 400] {
+            // Two ticks of the check, with the rest that follows the
+            // reading's own tick counted in with the next.
+            for _ in 1..CHECK_TICKS {
+                run.limits.rest();
+            }
+            assert_eq!(run.limits.protection.centivolts(), None, "{cv}");
+            run.adc.voltage = voltage_reading(cv);
+            run.ticks(3);
+            run.limits.rest();
+            assert_eq!(run.limits.protection.centivolts(), Some(cv));
+            assert_eq!(run.limits.ceilings().0, ceiling, "{cv}");
+            assert_eq!(run.limits.health(), Health::Good, "{cv}");
+        }
     }
 
     #[test]
