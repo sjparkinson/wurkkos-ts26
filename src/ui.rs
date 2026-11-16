@@ -82,6 +82,19 @@ impl Ui {
         }
     }
 
+    /// The most clicks that mean anything right now, for
+    /// `button::Clicks::tick_up_to`, so the click that makes it that many
+    /// counts as it's let go. On, only 1C does anything. Off, 3C is the most.
+    /// Locked, it waits as long as it ever did, so a fourth press in a pocket
+    /// is a 4C, which does nothing, rather than 3C to unlock and 1C to light.
+    pub const fn most_clicks(&self) -> Option<u8> {
+        match self.mode {
+            Mode::On => Some(1),
+            Mode::Off => Some(3),
+            Mode::Lockout => None,
+        }
+    }
+
     /// The aux LEDs give way to the main LED whenever it's lit.
     pub const fn aux(&self) -> Aux {
         match self.mode {
@@ -242,6 +255,28 @@ mod tests {
             ui.handle(Event::Click(1));
             ui.handle(Event::Click(clicks));
             assert_eq!(ui.output_level(), ON_LEVEL, "{clicks}C");
+        }
+    }
+
+    /// Clicks past `most_clicks` would never reach `handle`, so none may mean
+    /// anything.
+    #[test]
+    fn nothing_past_most_clicks_does_anything() {
+        for setup in [&[][..], &[Event::Click(1)], &[Event::Click(3)]] {
+            let mut ui = Ui::new();
+            for &event in setup {
+                ui.handle(event);
+            }
+            let Some(most) = ui.most_clicks() else {
+                continue;
+            };
+            for n in most + 1..=most + 4 {
+                let mut after = ui.clone();
+                after.handle(Event::Click(n));
+                after.handle(hold(n, 0));
+                assert_eq!(after.mode(), ui.mode(), "{n}C");
+                assert_eq!(after.output_level(), ui.output_level(), "{n}C");
+            }
         }
     }
 

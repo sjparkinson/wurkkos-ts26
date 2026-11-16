@@ -77,7 +77,7 @@ impl Torch {
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
         self.showing = self.showing.saturating_sub(1);
         self.blue = self.blue.saturating_sub(1);
-        let event = self.clicks.tick(pressed);
+        let event = self.clicks.tick_up_to(pressed, self.ui.most_clicks());
         if let Some(event) = event {
             let press = matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. });
             if press {
@@ -279,8 +279,17 @@ mod tests {
         assert_eq!(torch.aux(), Aux::Red);
     }
 
-    /// Ticks with the switch up until `event` arrives.
-    fn until(torch: &mut Rig, event: Event) {
+    /// Clicks `n` times and stops on the tick `event` arrives, whether that's
+    /// as the last click is let go or once the switch has been left alone.
+    fn tap(torch: &mut Rig, n: u8, event: Event) {
+        for _ in 0..n {
+            run(torch, true, 4);
+            for _ in 0..4 {
+                if torch.tick(false) == Some(event) {
+                    return;
+                }
+            }
+        }
         for _ in 0..TICKS_PER_SECOND {
             if torch.tick(false) == Some(event) {
                 return;
@@ -290,10 +299,35 @@ mod tests {
     }
 
     #[test]
+    fn a_click_counts_as_it_is_let_go_when_no_more_would_mean_anything() {
+        let mut torch = Rig::default();
+        click(&mut torch);
+        run(&mut torch, true, 4);
+        assert_eq!(torch.tick(false), Some(Event::Click(1)), "off, from on");
+        assert_eq!(torch.level(), 0);
+        clicks(&mut torch, 2);
+        run(&mut torch, true, 4);
+        assert_eq!(torch.tick(false), Some(Event::Click(3)), "3C, from off");
+        assert_eq!(torch.torch.ui.mode(), Mode::Lockout);
+    }
+
+    /// Locked, it still waits, so four presses in a pocket are a 4C, which
+    /// does nothing, rather than 3C to unlock and 1C to light.
+    #[test]
+    fn four_clicks_in_lockout_neither_unlock_it_nor_light_it() {
+        let mut torch = Rig::default();
+        tap(&mut torch, 3, Event::Click(3));
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        tap(&mut torch, 4, Event::Click(4));
+        assert_eq!(torch.torch.ui.mode(), Mode::Lockout);
+        run(&mut torch, false, TICKS_PER_SECOND);
+        assert_eq!(torch.level(), 0);
+    }
+
+    #[test]
     fn lockout_shows_bright_red_for_five_seconds_after_each_press() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 3);
-        until(&mut torch, Event::Click(3));
+        tap(&mut torch, 3, Event::Click(3));
         assert_eq!(torch.aux(), Aux::Red, "as 3C locks it");
         for tick in 1..LOCKED_TICKS {
             torch.tick(false);
@@ -301,21 +335,18 @@ mod tests {
         }
         torch.tick(false);
         assert_eq!(torch.aux(), Aux::Off);
-        clicks(&mut torch, 1);
-        until(&mut torch, Event::Click(1));
+        tap(&mut torch, 1, Event::Click(1));
         assert_eq!(torch.aux(), Aux::Red, "a press that does nothing");
         run(&mut torch, false, LOCKED_TICKS);
         assert_eq!(torch.aux(), Aux::Off);
-        clicks(&mut torch, 3);
-        until(&mut torch, Event::Click(3));
+        tap(&mut torch, 3, Event::Click(3));
         assert_eq!(torch.aux(), Aux::Blue, "3C unlocks it");
     }
 
     #[test]
     fn a_hold_in_lockout_cannot_keep_the_red_lit() {
         let mut torch = Rig::default();
-        clicks(&mut torch, 3);
-        until(&mut torch, Event::Click(3));
+        tap(&mut torch, 3, Event::Click(3));
         run(&mut torch, false, LOCKED_TICKS);
         assert_eq!(torch.aux(), Aux::Off);
         run(&mut torch, true, HOLD_TICKS + 1);
@@ -333,8 +364,7 @@ mod tests {
         assert_eq!(torch.aux(), Aux::Blue, "a day after power-on, nearly");
         run(&mut torch, false, 2);
         assert_eq!(torch.aux(), Aux::Off, "a day after power-on");
-        clicks(&mut torch, 2);
-        until(&mut torch, Event::Click(2));
+        tap(&mut torch, 2, Event::Click(2));
         assert_eq!(torch.aux(), Aux::Blue, "a press that does nothing");
         for _ in 1..BLUE_TICKS {
             torch.tick(false);
@@ -478,9 +508,8 @@ mod tests {
             torch.tick(false);
         }
         run(&mut torch, true, 4);
-        run(&mut torch, false, RELEASE_TICKS);
         assert!(torch.level() > 0, "still fading when the click counts");
-        assert_eq!(torch.tick(false), Some(Event::Click(1)));
+        assert_eq!(torch.tick(false), Some(Event::Click(1)), "as it's let go");
         assert_eq!(torch.level(), 0);
     }
 
@@ -560,7 +589,6 @@ mod tests {
         }
         run(&mut torch, false, TICKS_PER_SECOND);
         run(&mut torch, true, 4);
-        run(&mut torch, false, RELEASE_TICKS);
         assert!(torch.level() > 0, "still fading when the click counts");
         assert_eq!(torch.tick(false), Some(Event::Click(1)));
         assert_eq!(torch.level(), 0);

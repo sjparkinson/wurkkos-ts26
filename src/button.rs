@@ -9,12 +9,14 @@ use crate::TICKS_PER_SECOND;
 /// Counted from the tick the press is first seen, which is tick 0.
 pub const HOLD_TICKS: u16 = TICKS_PER_SECOND * 3 / 8;
 
-/// Leave the switch alone this long and the clicks so far count (about 280 ms).
-pub const RELEASE_TICKS: u16 = TICKS_PER_SECOND * 9 / 32;
+/// Leave the switch alone this long and the clicks so far count (about 220 ms).
+pub const RELEASE_TICKS: u16 = TICKS_PER_SECOND * 7 / 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// `n` quick clicks, then nothing for [`RELEASE_TICKS`].
+    /// `n` quick clicks, then nothing for [`RELEASE_TICKS`], or the click
+    /// that made it as many as [`Clicks::tick_up_to`]'s `most`, as it's let
+    /// go.
     Click(u8),
     /// The switch is being held after `clicks` quick clicks (so `2` is
     /// click, click, hold). Sent every tick while held; `ticks` counts from
@@ -47,6 +49,14 @@ impl Clicks {
 
     /// Feeds in one sample, `true` meaning the switch is down.
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
+        self.tick_up_to(pressed, None)
+    }
+
+    /// [`Clicks::tick`], but with `Some(most)` the click that makes it
+    /// `most` counts as it's let go, with no wait for more. That's for when
+    /// more clicks than `most` mean nothing, so waiting to see them would
+    /// only be slow. `None` always waits.
+    pub fn tick_up_to(&mut self, pressed: bool, most: Option<u8>) -> Option<Event> {
         self.ticks = self.ticks.saturating_add(1);
 
         match (self.pressed, pressed) {
@@ -71,7 +81,8 @@ impl Clicks {
                     })
                 } else {
                     self.count = self.count.saturating_add(1);
-                    None
+                    let enough = most.is_some_and(|most| self.count >= most);
+                    enough.then(|| Event::Click(core::mem::take(&mut self.count)))
                 }
             }
             (false, false) if self.count > 0 && self.ticks >= RELEASE_TICKS => {
@@ -219,12 +230,55 @@ mod tests {
     }
 
     #[test]
-    fn clicks_count_after_the_switch_is_left_alone_for_about_280_ms() {
-        // docs/ui.md promises about 280 ms, which is 18 ticks at 64 Hz.
-        assert_eq!(RELEASE_TICKS, 18);
+    fn clicks_count_after_the_switch_is_left_alone_for_about_220_ms() {
+        // docs/ui.md promises about 220 ms, which is 14 ticks at 64 Hz.
+        assert_eq!(RELEASE_TICKS, 14);
         assert_eq!(
             u32::from(RELEASE_TICKS) * 1000 / u32::from(TICKS_PER_SECOND),
-            281
+            218
+        );
+    }
+
+    #[test]
+    fn the_click_that_reaches_most_counts_as_it_is_let_go() {
+        for most in 1..=3 {
+            let mut clicks = Clicks::new();
+            for n in 1..most {
+                assert_eq!(clicks.tick_up_to(true, Some(most)), None);
+                assert_eq!(
+                    clicks.tick_up_to(false, Some(most)),
+                    None,
+                    "click {n} of {most}"
+                );
+            }
+            assert_eq!(clicks.tick_up_to(true, Some(most)), None);
+            assert_eq!(
+                clicks.tick_up_to(false, Some(most)),
+                Some(Event::Click(most))
+            );
+            assert!(clicks.idle());
+            for _ in 0..2 * RELEASE_TICKS {
+                assert_eq!(clicks.tick_up_to(false, Some(most)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hold_is_a_hold_whatever_most_is() {
+        let mut clicks = Clicks::new();
+        for _ in 0..HOLD_TICKS {
+            assert_eq!(clicks.tick_up_to(true, Some(1)), None);
+        }
+        assert_eq!(
+            clicks.tick_up_to(true, Some(1)),
+            Some(Event::Hold {
+                clicks: 0,
+                ticks: 0
+            })
+        );
+        assert_eq!(
+            clicks.tick_up_to(false, Some(1)),
+            Some(Event::Release { clicks: 0 })
         );
     }
 
