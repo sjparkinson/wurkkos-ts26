@@ -19,7 +19,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Mitigation.** `hw::hold_enable_low` is the first call in `main`, and writes OUT before DIR. `hw::set_output` sets the duty and then raises the enable, and drops the enable and then zeroes the duty. `hw::halt` (also the panic handler) goes through the same off order. `hw::init` never gives PB2 a pull-up.
 
-**Evidence.** Simulator `found_lit` starts with PORTB dirty. The simulator turns PB2 high with no duty into an error, and so a PB2 that stays high with the duty at 0 for longer than the delta-sigma's longest gap. Tests `the_enable_goes_after_the_duty`, `a_dsm_gap_is_fine_but_a_longer_zero_duty_is_not`, `the_dangerous_pins_never_get_a_pull_up`, `power_down_wants_pb2_low` and `found_lit_wants_out_cleared_by_the_first_register_write` in xtask/src/sim.rs. On the breakout, T0 read 0 V on PB2 off and VCC on, through several power cycles (0.7), at 3 readings a second.
+**Evidence.** Simulator `found_lit` starts with PORTB dirty. The simulator turns PB2 high with no duty into an error, and so a PB2 that stays high with the duty at 0 for longer than the delta-sigma's longest gap. Tests `the_enable_goes_after_the_duty`, `a_dsm_gap_is_fine_but_a_longer_zero_duty_is_not`, `the_dangerous_pins_never_get_a_pull_up`, `power_down_wants_pb2_low` and `found_lit_wants_out_cleared_by_the_first_register_write` in xtask/src/sim.rs. Power-down with PB0 still on TCA0, or a duty left in CMP0 or CMP0BUF, is an error too (`power_down_wants_no_duty_waiting_no_conversion_running_and_the_pit_synced`). The firmware never asks to rest with the light on, so `prepare_sleep`'s guard against powering down with PB2 high is run by examples/guards.rs instead (`sim::guards`). On the breakout, T0 read 0 V on PB2 off and VCC on, through several power cycles (0.7), at 3 readings a second.
 
 **Status.** Simulator.
 
@@ -115,7 +115,7 @@ Nothing is past simulator today. Some sections also cite a run on the breakout's
 
 **Mitigation.** `__unhandled_interrupt` in src/avr/rt.rs zeroes r1 and jumps into `hw::halt`, which turns interrupts off, drops PB2, zeroes the duty and powers down. A `reti` would instead have returned with the flag still up, so the loop would crawl one instruction per interrupt with PB2 possibly high. Nothing enables any interrupt but the PIT and TCA0's overflow.
 
-**Evidence.** The simulator makes it an error to enable an interrupt when its vector goes to `__unhandled_interrupt`. `vectors` in xtask/src/layout.rs insists the vector is `eor r1, r1` and a `jmp` to exactly `hw::halt` (`accepts_an_unhandled_interrupt_that_clears_r1_and_jumps_to_halt`, `rejects_an_unhandled_interrupt_that_doesnt_clear_r1_and_jump`). The simulator run `unhandled_interrupt` forces one on a lit torch and checks it ends dark in power-down.
+**Evidence.** The simulator makes it an error to enable an interrupt when its vector goes to `__unhandled_interrupt`. `vectors` in xtask/src/layout.rs insists the vector is `eor r1, r1` and a `jmp` to exactly `hw::halt` (`accepts_an_unhandled_interrupt_that_clears_r1_and_jumps_to_halt`, `rejects_an_unhandled_interrupt_that_doesnt_clear_r1_and_jump`). The simulator run `unhandled_interrupt` forces one on a lit torch and checks it ends dark in power-down. Stopping for good with SREG.I still set is an error, so `hw::halt`'s `cli` can't go missing (`stopping_for_good_wants_sreg_i_clear_too`), and so is turning TCA0's overflow on with its flag still up from before (`the_overflow_goes_on_with_its_flag_cleared_first`).
 
 **Status.** Simulator.
 
