@@ -65,9 +65,9 @@ Nothing is past simulator today, since the statuses are about the full firmware.
 
 **Cause.** A click on the switch under pressure.
 
-**Mitigation.** The 3C lockout (docs/ui.md). In lockout `ui::Ui` never lights, and answers only to 3C, which unlocks it. A hold from off does nothing either, so a switch pressed and held in a bag stays dark. The aux shows bright red for five seconds after a press, so a locked torch is easy to tell from an off one, and a held switch can't keep it lit.
+**Mitigation.** The 3C lockout (docs/ui.md). In lockout `ui::Ui` never lights, and answers only to 3C, which unlocks it. A hold from off does nothing either, so a switch pressed and held in a bag stays dark. Clicks count as they're let go when no more would mean anything (`ui::Ui::most_clicks`), but never in lockout, so four presses there are a 4C, which does nothing, rather than 3C to unlock and 1C to light. The aux shows bright red for five seconds after a press, so a locked torch is easy to tell from an off one, and a held switch can't keep it lit.
 
-**Evidence.** `lockout_never_lights_and_3c_unlocks`, `off_answers_to_1c_and_3c_and_nothing_else`, `off_leaves_a_locked_torch_locked` and `aux_is_blue_when_off_red_in_lockout_and_out_with_the_light_on` in src/ui.rs. `lockout_never_lights`, `a_switch_held_from_power_on_stays_off` and `every_example_in_docs_ui_md_holds` in src/torch.rs. The Lockout rows of docs/ui.md, run by the simulator.
+**Evidence.** `lockout_never_lights_and_3c_unlocks`, `off_answers_to_1c_and_3c_and_nothing_else`, `off_leaves_a_locked_torch_locked` and `aux_is_blue_when_off_red_in_lockout_and_out_with_the_light_on` in src/ui.rs. `lockout_never_lights`, `four_clicks_in_lockout_neither_unlock_it_nor_light_it`, `a_switch_held_from_power_on_stays_off` and `every_example_in_docs_ui_md_holds` in src/torch.rs. The Lockout rows of docs/ui.md, run by the simulator.
 
 **Status.** Simulator.
 
