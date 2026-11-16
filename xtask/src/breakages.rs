@@ -165,6 +165,16 @@ const BREAKAGES: &[Breakage] = &[
         stage: Stage::Simulator,
         expect: "stops for good with SREG.I still set",
     },
+    // `prepare_sleep` idles rather than power down with PB2 high, whatever
+    // it's asked. The firmware never asks, so examples/guards.rs does.
+    Breakage {
+        name: "power-down-with-the-light-on",
+        file: HW,
+        find: "    let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {\n",
+        replace: "    let mode = if rest {\n",
+        stage: Stage::Simulator,
+        expect: "powers down with PB2 high",
+    },
     Breakage {
         name: "pb2-pull-up",
         file: HW,

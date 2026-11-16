@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace.lints.rust]
 # Only src/avr/hw.rs, src/avr/rt.rs, the #[unsafe(no_mangle)] on main and the
-# no_mangle items in examples/link.rs may opt back in.
+# no_mangle items in examples/link.rs and examples/guards.rs may opt back in.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
@@ -51,6 +51,12 @@ bench = false
 # Checks link.x and src/avr/rt.rs with real statics. Never flashed.
 [[example]]
 name = "link"
+test = false
+bench = false
+
+# Runs src/avr/hw.rs's guards that the firmware never reaches. Never flashed.
+[[example]]
+name = "guards"
 test = false
 bench = false
 

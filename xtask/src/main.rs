@@ -66,6 +66,8 @@ or /dev/ttyUSB0 on Linux. <dir> names one chip's backup, e.g. backup/torch.
 const ELF: &str = "target/avr-none/release/ts26.elf";
 /// examples/link.rs, which `build` builds alongside the firmware.
 const PROBE: &str = "target/avr-none/release/examples/link.elf";
+/// examples/guards.rs, which `build` builds alongside the firmware too.
+const GUARDS: &str = "target/avr-none/release/examples/guards.elf";
 const HEX: &str = "target/wurkkos-ts26-0721.hex";
 
 fn main() -> ExitCode {
@@ -112,8 +114,8 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Builds the firmware and the link probe, and refuses either if the layout
-/// checks or the simulator fail. `examples` is `sim::check`'s.
+/// Builds the firmware, the link probe and the guards probe, and refuses any
+/// of them if the layout checks or the simulator fail. `examples` is `sim::check`'s.
 fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     run(Command::new(cargo).current_dir(root()).args([
@@ -123,6 +125,8 @@ fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
         "--bins",
         "--example",
         "link",
+        "--example",
+        "guards",
         "--release",
         "--target",
         "avr-none",
@@ -141,6 +145,11 @@ fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
     probe_sections(&probe_elf).map_err(at(&probe))?;
     layout::memory(&probe_elf).map_err(at(&probe))?;
     sim::probe(&probe_elf).map_err(|e| format!("{}: simulator: {e}", probe.display()))?;
+
+    let guards = root().join(GUARDS);
+    let bytes = fs::read(&guards).map_err(at(&guards))?;
+    let guards_elf = elf::Elf::parse(&bytes).map_err(at(&guards))?;
+    sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))?;
     Ok((elf, report))
 }
 

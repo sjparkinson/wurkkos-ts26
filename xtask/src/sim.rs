@@ -138,7 +138,8 @@
 //! the pins show the library's output on every tick, the fourth until the
 //! oscillator stops. So does the last part of the second, until the forced
 //! interrupt. `probe` separately runs examples/link.rs, which has real
-//! statics.
+//! statics, and `guards` runs examples/guards.rs, which asks src/avr/hw.rs
+//! for power-down with the light on.
 
 use std::iter;
 use std::ops::Range;
@@ -938,6 +939,26 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Runs the guards probe, examples/guards.rs, from reset to `guards_done`.
+/// It asks `hw::wait_for_tick` for power-down on every wait, four times with
+/// the light on and once with it off, so it has to power down exactly once.
+/// Powering down with PB2 high is refused on the way, by
+/// `ready_for_power_down`, so a missing guard fails before the count does.
+pub fn guards(elf: &Elf) -> Result<(), String> {
+    let linked = Linked::of(elf)?;
+    let mut sim = Sim::new(elf.flash_image(), linked.layout.bss.end, linked.ends)?;
+    sim.run_to(
+        symbol(elf, "guards_done")? / 2,
+        BOOT_BUDGET + 8 * TICK_BUDGET,
+    )?;
+    match sim.chip.power_downs {
+        1 => Ok(()),
+        n => Err(format!(
+            "powered down {n} times, but only its one wait with the light off should"
+        )),
+    }
 }
 
 /// Where src/avr/rt.rs's startup copies and zeroes, as data-space addresses.

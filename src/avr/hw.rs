@@ -309,7 +309,8 @@ const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 /// Power-down stops TCA0 wherever it is, so it only happens with PB2 low. If
 /// the torch ever says it's resting with the boost converter on, this idles
 /// instead. The light stays as it was, and the loop keeps running, so the
-/// protection does too.
+/// protection does too. The firmware never asks for that, so only
+/// examples/guards.rs runs this on the simulator.
 ///
 /// It also turns the ADC and its forced reference off. The datasheet gives no
 /// current for either left on in power-down, and the stock firmware does the

@@ -12,7 +12,7 @@ cargo clippy --package ts26 --lib --bins --examples --release --target avr-none 
 cargo xtask hex
 ```
 
-The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume. That's the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write, and that no panic or bounds-check symbol is linked, so nothing can reach the panic handler (the checks are in `xtask/src/layout.rs`). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator. If that passes, it pads the image to 16 KB, puts a 16-byte stamp of the commit (`xtask/src/stamp.rs`) just before the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
+The first three run on your machine's own target. The second clippy lints the firmware as the AVR sees it, which is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the real firmware and checks the linked image against what those two files assume. That's the vector table, where startup copies and zeroes memory, and that each protected-register unlock is followed straight away by its write, and that no panic or bounds-check symbol is linked, so nothing can reach the panic handler (the checks are in `xtask/src/layout.rs`). It does the same layout checks on `examples/link.rs`, a throwaway program with a const table, a `.data` static and a `.bss` static, since the firmware has none of those yet. Then it runs both on the simulator, along with `examples/guards.rs`, which drives `src/avr/hw.rs` in ways the firmware never does so its guards get run too. If that passes, it pads the image to 16 KB, puts a 16-byte stamp of the commit (`xtask/src/stamp.rs`) just before the CRC in the last two bytes, and writes the file you'd flash. It prints how much of the 16 KB of flash and 2 KB of RAM the firmware uses, its stack, and how many instructions a tick and a PWM cycle take. CI keeps that hex and the ELF as a build artefact.
 
 ## The simulator
 
@@ -68,6 +68,7 @@ src/main.rs       the firmware loop (a stub on the host)
 src/avr/hw.rs     pins, register access and the interrupt handlers (AVR only)
 src/avr/rt.rs     vector table and startup (AVR only)
 examples/link.rs  a program with one static of each kind and a stub `mod hw`, so xtask can check link.x (never flashed)
+examples/guards.rs  the real hw.rs asked for power-down with the light on, so the simulator runs its guard (never flashed)
 link.x            memory layout for the linker, checked against the ATDF in xtask/src/atdf.rs
 xtask/            hex, the simulator, breakages (xtask/src/breakages.rs, firmware broken on purpose to show
                   hex refuses it), simulate, and the UPDI programmer (ping, peek, backup, flash, restore)
@@ -89,7 +90,7 @@ Never write fuses. Changing `SYSCFG0` can disable UPDI, and getting it back take
 
 ## Unsafe
 
-`unsafe_code` is denied across the workspace. Only `src/avr/hw.rs`, `src/avr/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `examples/link.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
+`unsafe_code` is denied across the workspace. Only `src/avr/hw.rs`, `src/avr/rt.rs`, the `#[unsafe(no_mangle)]` on `main`, and the `no_mangle` items in `examples/link.rs` and `examples/guards.rs` opt out, and every `unsafe` block gets a `// SAFETY:` comment.
 
 ## Bumping the nightly
 
