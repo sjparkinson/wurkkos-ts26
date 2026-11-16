@@ -271,10 +271,13 @@ pub enum Verdict {
 /// It never steps down or turns off while the torch is off, since there's no
 /// load to sag under. It can recover then, but only while the switch keeps
 /// the readings coming, since nothing's read during a [`Protection::rest`].
+/// The torch's check of the cell at rest (`torch::CHECK_TICKS`) is one
+/// sample between rests, which restart the count, so it never steps one up.
 ///
 /// Turning off for a flat cell latches [`Protection::flat`]. The light stays
 /// off until a sample with it off, which a press of the switch takes before
-/// the click counts, reads [`CHARGED_AT`] or more. That's a cell that's been
+/// the click counts, and a check at rest takes too, reads [`CHARGED_AT`] or
+/// more. That's a cell that's been
 /// charged or swapped, since one that cut out at level 1 rests only a little
 /// above where it cut. Without the latch, charging in place would leave the
 /// torch dead until the cell came out, and without the threshold every click
