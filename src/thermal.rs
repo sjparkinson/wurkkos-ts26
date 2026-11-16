@@ -53,12 +53,13 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The temperature to hold the MCU at, 50 °C, in kelvin.
+/// The temperature to hold the MCU at, 45 °C, in kelvin.
 ///
-/// The stock firmware's figure for Wurkkos lights. Unmeasured here. 1Lumen
-/// saw 52 °C on the head on one sample, and nobody knows what the MCU reads
-/// when the head's at that.
-pub const LIMIT: u16 = celsius(50);
+/// At 50 °C, the stock firmware's figure for Wurkkos lights, one TS26 began
+/// its fade with a thermocouple on the outside of the head reading about
+/// 45 °C. This is 5 °C under that, for the cell's sake, so the head likely
+/// fades from about 40 °C. That offset is one reading on one light.
+pub const LIMIT: u16 = celsius(45);
 
 /// The lowest level thermal regulation steps down to.
 ///
@@ -564,8 +565,8 @@ mod tests {
     }
 
     #[test]
-    fn the_limit_is_50_degrees_and_the_floor_level_50() {
-        assert_eq!(LIMIT, 323);
+    fn the_limit_is_45_degrees_and_the_floor_level_50() {
+        assert_eq!(LIMIT, 318);
         assert_eq!(FLOOR, 50);
     }
 

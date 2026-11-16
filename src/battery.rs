@@ -644,40 +644,47 @@ mod tests {
         let mut verdicts = follow(&mut lvp, 280, CEILING, secs(10));
         verdicts.dedup();
         let off = verdicts.iter().position(|&v| v == Verdict::Flat).unwrap();
-        assert_eq!(
-            verdicts[..=off],
-            [
-                NONE,
-                Verdict::Ceiling(90),
-                Verdict::Ceiling(60),
-                Verdict::Ceiling(30),
-                Verdict::Ceiling(1),
-                Verdict::Flat
-            ]
-        );
+        // `FLAT_STEP` at a time from the top, then level 1, then off.
+        let mut expected = Vec::from([NONE]);
+        let mut level = CEILING;
+        while level > 1 {
+            level = level.saturating_sub(FLAT_STEP).max(1);
+            expected.push(Verdict::Ceiling(level));
+        }
+        expected.push(Verdict::Flat);
+        assert_eq!(verdicts[..=off], expected[..]);
     }
+
+    /// The first flat step down from the top of the ramp.
+    const FIRST: u8 = CEILING - FLAT_STEP;
 
     #[test]
     fn a_cell_that_recovers_under_the_lighter_load_stays_on() {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 280, CEILING, secs(1)), Verdict::Ceiling(90));
-        let held = Verdict::Ceiling(90);
-        assert!(all(&run(&mut lvp, 315, 90, secs(60)), held));
+        assert_eq!(
+            last(&mut lvp, 280, CEILING, secs(1)),
+            Verdict::Ceiling(FIRST)
+        );
+        let held = Verdict::Ceiling(FIRST);
+        assert!(all(&run(&mut lvp, 315, FIRST, secs(60)), held));
     }
 
     #[test]
     fn waits_for_the_light_to_reach_the_ceiling_before_judging_it() {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 250, CEILING, secs(1)), Verdict::Ceiling(90));
+        assert_eq!(
+            last(&mut lvp, 250, CEILING, secs(1)),
+            Verdict::Ceiling(FIRST)
+        );
         // Still fading down to it. The fade's over in half a second; this is
         // four, short of the slower hold.
-        let held = Verdict::Ceiling(90);
-        assert!(all(&run(&mut lvp, 250, 91, secs(4)), held));
+        let held = Verdict::Ceiling(FIRST);
+        assert!(all(&run(&mut lvp, 250, FIRST + 1, secs(4)), held));
         // There, a second of flat samples drops it again.
-        let verdicts = run(&mut lvp, 250, 90, secs(1));
+        let verdicts = run(&mut lvp, 250, FIRST, secs(1));
         let (before, after) = verdicts.split_at(usize::from(secs(1)) - 1);
         assert!(all(before, held));
-        assert_eq!(after, [Verdict::Ceiling(60)]);
+        assert_eq!(after, [Verdict::Ceiling(FIRST - FLAT_STEP)]);
     }
 
     #[test]
