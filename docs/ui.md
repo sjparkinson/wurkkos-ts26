@@ -36,7 +36,9 @@ For pockets and bags. The light never comes on.
 
 | Action | Does | Example | Status |
 |---|---|---|---|
+| 3C, from off | Lock, with the aux bright red for five seconds | `3C` → off | Done |
 | 3C | Unlock, back to off | `3C 3C 1C` → level 52 | Done |
+| Any other click, or a hold | Nothing, and the aux bright red for five seconds from the click or the start of the hold | `3C wait:10s 2C` → off | Done |
 | 1H | Nothing | `3C 1H:2s` → off | Done |
 | Anything else | Nothing | `3C 1C 2C 4C 2H:2s wait:1s` → off | Done |
 
@@ -74,10 +76,10 @@ A cell it can't read is a voltage under 1.00 V or over 4.40 V, which is also wha
 
 | What | Does | Status |
 |---|---|---|
-| Aux LEDs | Dim and steady, blue when off, red in lockout, out while the main LED's lit. Yellow for a flat cell and white for a fault, for three seconds after a press or after the light goes out, and dark otherwise. They never flash | Done |
+| Aux LEDs | Steady. Dim blue when off, for a day after power-on or the last press, then dark until the next. Bright red in lockout, for five seconds after a press. Out while the main LED's lit. Dim yellow for a flat cell and dim white for a fault, for three seconds after a press or after the light goes out. Dark otherwise. They never flash | Done |
 | Sleep when off | Powers down, and looks at the switch 64 times a second | Done |
 | A tick that stops | With the light on, off within about a tenth of a second, and it stays off until the watchdog resets the chip or the cell comes out | Done |
 
-The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red, which would be about 1.9 Ah a year if that's what this draws. Nobody's measured it on this firmware. The channels are separate emitters that don't blend well, so off and lockout, the two you'll see most, get a channel each. A flat cell is yellow, red and green together, and a fault white, all three. Neither needs to blend to stand apart from the others. A flat cell and a fault only light the aux for three seconds at a time, since a cell that's already flat, or one the torch can't read, shouldn't be drained by the aux. The watchdog reset after a stopped tick is a failed check, so that torch shows white when pressed.
+The aux colours say which of off and lockout you're in, so a click that does nothing doesn't look like a dead torch. 1Lumen measured 0.22 mA with the aux on low in red and 5.4 mA on high, and nothing reads the cell while the light's off, so nothing would stop the aux flattening it. Low blue, if it draws the same, is about 5 mAh a day, so it goes dark after a day. Bright red in a pocket would empty a full cell in about a month, so it only shows for five seconds. Dim red was hard to see on the light (4.6 in [breakout.md](breakout.md#results)), which is why lockout's is bright. Nobody's measured any of it on this firmware, and the day is timed by the 32 kHz oscillator, so it's give or take a few hours. The channels are separate emitters that don't blend well, so off and lockout, the two you'll see most, get a channel each. A flat cell is yellow, red and green together, and a fault white, all three. Neither needs to blend to stand apart from the others. A flat cell and a fault only light the aux for three seconds at a time, since a cell that's already flat, or one the torch can't read, shouldn't be drained by the aux. The watchdog reset after a stopped tick is a failed check, so that torch shows white when pressed.
 
 None of this has met a real light yet, so this isn't firmware to carry. See the [roadmap](roadmap.md).

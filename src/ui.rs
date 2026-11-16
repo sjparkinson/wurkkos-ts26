@@ -27,15 +27,17 @@ pub enum Mode {
 
 /// What the aux LEDs on PC1 to PC3 should be doing.
 ///
-/// Any colour is dim and steady, so they never report anything by flashing.
-/// The channels are separate emitters that don't blend well, so the two
-/// states a glance most needs, off and lockout, get one channel each.
+/// Every colour is steady, so they never report anything by flashing, and
+/// all but red are dim. The channels are separate emitters that don't blend
+/// well, so the two states a glance most needs, off and lockout, get one
+/// channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aux {
     Off,
     /// Off, and nothing wrong.
     Blue,
-    /// Locked out.
+    /// Locked out. Bright, since dim red is hard to see, so `torch::Torch`
+    /// only shows it for [`crate::torch::LOCKED_TICKS`] after a press.
     Red,
     /// The cell's flat. Red and green, the usual low-battery warning.
     Yellow,
