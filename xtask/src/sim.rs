@@ -83,7 +83,9 @@
 //!   duty left in either runs at the next turn-on.
 //!   With no interrupt enabled at all, `sleep` is the chip stopping for good,
 //!   since only a reset wakes it (§11.3.1). That's `hw::halt`, and it fails
-//!   every run but the one that stops the oscillator. `sleep` with SREG.I
+//!   every run but the one that stops the oscillator. It wants SREG.I clear
+//!   as well, since figure 13-1 has that gate the wake-up too and no
+//!   sentence says either alone is enough. `sleep` with SREG.I
 //!   clear and an interrupt still enabled is an error, though the only
 //!   evidence is a block diagram saying that interrupt couldn't wake it
 //!   (figure 13-1, and `avr.rs`).
@@ -1257,6 +1259,16 @@ impl Sim {
         self.chip.in_handler = handling.is_some() && !self.abandoned;
         self.chip.interrupts_on = self.cpu.flag(I);
         self.cpu.step(&mut self.chip)?;
+        // Only a reset wakes a chip with no interrupt enabled (§11.3.1), and
+        // figure 13-1 has SREG.I gate the wake-up as well. Neither says the
+        // other's enough, so stopping for good wants both, as `hw::halt` does.
+        if self.chip.down && self.cpu.flag(I) {
+            return Err(format!(
+                "{:#06x}: stops for good with SREG.I still set, which leaves the \
+                 interrupt enables alone keeping it down",
+                pc * 2
+            ));
+        }
         self.watch_handler(handling)?;
         if self.cpu.handling.is_some() && self.cpu.pc == self.halt {
             self.abandon();
@@ -3430,17 +3442,30 @@ mod tests {
         assert!(!chip.down);
     }
 
-    /// `[sei, sleep]` with SLPCTRL set for idle and nothing enabled.
-    #[test]
-    fn a_pass_that_stops_for_good_fails() {
-        let image = [0x9478u16, 0x9588]
+    /// `[first, sleep]` with SLPCTRL set for idle and nothing enabled, as far
+    /// as the end of the tick.
+    fn stop_for_good(first: u16) -> Result<u64, String> {
+        let image = [first, 0x9588]
             .into_iter()
             .flat_map(u16::to_le_bytes)
             .collect();
         let mut sim = Sim::new(image, SRAM.start, Ends::default()).unwrap();
         sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
-        let err = sim.tick(false).unwrap_err();
+        sim.tick(false)
+    }
+
+    /// `cli` then `sleep`, as `hw::halt` does it.
+    #[test]
+    fn a_pass_that_stops_for_good_fails() {
+        let err = stop_for_good(0x94F8).unwrap_err();
         assert!(err.contains("stopped for good"), "{err}");
+    }
+
+    /// `sei` then `sleep`, so only the enables being off keep it down.
+    #[test]
+    fn stopping_for_good_wants_sreg_i_clear_too() {
+        let err = stop_for_good(0x9478).unwrap_err();
+        assert!(err.contains("with SREG.I still set"), "{err}");
     }
 
     #[test]

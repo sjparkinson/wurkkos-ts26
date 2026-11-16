@@ -155,6 +155,16 @@ const BREAKAGES: &[Breakage] = &[
         stage: Stage::Simulator,
         expect: "with INTFLAGS.OVF still up from before",
     },
+    // `hw::halt` clears SREG.I as well as turning every interrupt off, since
+    // the datasheet doesn't say either alone keeps the chip down.
+    Breakage {
+        name: "halt-without-cli",
+        file: HW,
+        find: "    unsafe { asm!(\"cli\", options(nostack)) };\n    set_output(Output::OFF);\n",
+        replace: "    set_output(Output::OFF);\n",
+        stage: Stage::Simulator,
+        expect: "stops for good with SREG.I still set",
+    },
     Breakage {
         name: "pb2-pull-up",
         file: HW,
