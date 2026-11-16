@@ -9,15 +9,15 @@
 /// How many levels the ramp has. Level 0 is off.
 pub const LEVELS: u8 = 150;
 
-/// The highest level the firmware will run at, a duty of about 58 %.
+/// The highest level the firmware will run at, a duty of about 81 %.
 ///
 /// Turbo pulls about 11 A from the cell. Thermal regulation has faded one
-/// TS26 smoothly from level 120, so this is a small step up from there. Above
-/// it, the thermal tests' head model warms past the limit by more than they
-/// allow before regulation catches it, and that model has never been checked
+/// TS26 smoothly from level 120. Above 120 it steps down twice as fast
+/// (`thermal::FAST_ABOVE`), which is what holds the thermal tests' head model
+/// inside their limits up here, and that model has never been checked
 /// against a real head. Raise it towards [`LEVELS`] as the light shows it
 /// holding the head at each step.
-pub const CEILING: u8 = 125;
+pub const CEILING: u8 = 140;
 
 /// TCA0's period. Dual-slope PWM at 10 MHz with a TOP of 255 runs at
 /// 10 MHz / (2 × 255) ≈ 19.6 kHz, well above anything you'd hear or see.

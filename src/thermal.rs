@@ -100,6 +100,17 @@ const UP_PRESSURE: i16 = 16 * FRACTION;
 const MAX_STEP_DOWN: u8 = 8;
 /// Ticks per level as the ceiling fades down, and up. Unmeasured.
 const DOWN_EVERY: u8 = 2;
+/// Above this level, a step down takes [`FAST_GAIN`] times less pressure.
+///
+/// The ramp's a cubic, so a level near the top is more power than one lower
+/// down, and a step there has to be quicker to keep up with the heat. The
+/// stock firmware's TS26 build steps faster above 120 too (docs/hardware.md).
+/// Unmeasured here.
+const FAST_ABOVE: u8 = 120;
+/// How much faster it steps down above [`FAST_ABOVE`]. Doubling is the least
+/// that held the thermal tests' head model inside their limits at level 140,
+/// and more barely changed the peak. Unmeasured.
+const FAST_GAIN: i16 = 2;
 const UP_EVERY: u8 = 4;
 /// Readings outside -40 °C to 150 °C can't be real. The part is rated to
 /// 125 °C at most, so the top leaves some slack. In kelvin. Unmeasured.
@@ -331,7 +342,12 @@ impl Thermal {
             // far over the prediction is. A kelvin over steps once a second,
             // four over steps every reading, and a sixteenth over takes
             // sixteen seconds.
-            let pressure = self.pressure.max(0).saturating_add(over);
+            let push = if level > FAST_ABOVE {
+                over.saturating_mul(FAST_GAIN)
+            } else {
+                over
+            };
+            let pressure = self.pressure.max(0).saturating_add(push);
             let steps = (pressure / DOWN_PRESSURE).min(i16::from(MAX_STEP_DOWN));
             self.pressure = pressure
                 .saturating_sub(steps.saturating_mul(DOWN_PRESSURE))
@@ -907,6 +923,20 @@ mod tests {
         readings
     }
 
+    /// The highest level that steps down at the plain rate. The tests of the
+    /// pressure's arithmetic run here, so [`FAST_GAIN`] stays out of them.
+    const PLAIN: u8 = FAST_ABOVE;
+
+    /// Where the ceiling's heading after `stepped` steps down from a light
+    /// at `level`. The first step pulls the ceiling down to the level.
+    fn after(stepped: u8, level: u8) -> u8 {
+        if stepped == 0 {
+            CEILING
+        } else {
+            level - stepped
+        }
+    }
+
     #[test]
     fn the_rate_down_follows_how_far_over_the_limit_it_is() {
         // A sixteenth over takes sixteen seconds a level, a kelvin over
@@ -915,14 +945,33 @@ mod tests {
             let mut thermal = Thermal::default();
             for step in 1..=3 {
                 for reading in 1..=every {
-                    thermal.sample(limit_plus(over), CEILING);
+                    thermal.sample(limit_plus(over), PLAIN);
                     let stepped = if reading == every { step } else { step - 1 };
                     assert_eq!(
                         thermal.ceiling.target(),
-                        CEILING - stepped,
+                        after(stepped, PLAIN),
                         "{over} over, step {step}, reading {reading}"
                     );
                 }
+            }
+        }
+    }
+
+    /// Near the top a level's worth more power than one lower down, since
+    /// the ramp's a cubic, so the same error steps down twice as fast.
+    #[test]
+    fn above_level_120_the_rate_down_doubles() {
+        assert_eq!(FAST_ABOVE, 120);
+        for (level, every) in [(PLAIN, 4), (PLAIN + 1, 2), (CEILING, 2)] {
+            let mut thermal = Thermal::default();
+            for reading in 1..=every {
+                thermal.sample(limit_plus(FRACTION), level);
+                let stepped = u8::from(reading == every);
+                assert_eq!(
+                    thermal.ceiling.target(),
+                    after(stepped, level),
+                    "level {level}, reading {reading}"
+                );
             }
         }
     }
@@ -963,16 +1012,16 @@ mod tests {
         let mut thermal = Thermal::default();
         // Two steps down, and over half a step's pressure left.
         for _ in 0..5 {
-            thermal.sample(limit_plus(WINDOW + 1), CEILING);
+            thermal.sample(limit_plus(WINDOW + 1), PLAIN);
         }
-        assert_eq!(thermal.ceiling.target(), CEILING - 2);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 2);
         // A dip to the top of the window is cooling, so it holds, though
         // this reading's error would have bought the next step.
-        thermal.sample(limit_plus(WINDOW), CEILING);
-        assert_eq!(thermal.ceiling.target(), CEILING - 2);
+        thermal.sample(limit_plus(WINDOW), PLAIN);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 2);
         // Then it turns, and what was saved up before the dip still counts.
-        thermal.sample(limit_plus(WINDOW + 1), CEILING);
-        assert_eq!(thermal.ceiling.target(), CEILING - 3);
+        thermal.sample(limit_plus(WINDOW + 1), PLAIN);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 3);
     }
 
     #[test]
@@ -980,9 +1029,9 @@ mod tests {
         // Over the limit, with pressure to step down, then cooling fast
         // enough that the prediction is the limit exactly.
         let mut thermal = Thermal::default();
-        thermal.sample(limit_plus(50), CEILING);
+        thermal.sample(limit_plus(50), PLAIN);
         assert!(thermal.pressure > 0);
-        thermal.sample(limit_plus(-30), CEILING);
+        thermal.sample(limit_plus(-30), PLAIN);
         let smoothed = thermal.smoothed.as_ref().unwrap();
         assert_eq!(smoothed.now, LIMIT_SIXTEENTHS + 40);
         assert_eq!(thermal.pressure, 0);
@@ -1086,12 +1135,12 @@ mod tests {
     fn a_fast_rise_steps_down_long_before_the_smoothed_temperature_gets_there() {
         let mut thermal = Thermal::default();
         let start = fraction(LIMIT - 30);
-        thermal.sample(start, CEILING);
+        thermal.sample(start, PLAIN);
         // Six kelvin a reading, as fast as a reading's believed straight
         // off, up to the limit.
         for step in 1..=5 {
             assert_eq!(thermal.ceiling.target(), CEILING);
-            thermal.sample(start + step * fraction(6), CEILING);
+            thermal.sample(start + step * fraction(6), PLAIN);
         }
         // The trend's over nine kelvin by now, and all of it counts.
         let smoothed = thermal.smoothed.as_ref().unwrap();

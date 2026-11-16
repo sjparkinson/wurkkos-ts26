@@ -53,13 +53,13 @@ Nothing is past simulator today, since the statuses are about the full firmware.
 
 **Cause.** A lit light in still air, or a head that's covered.
 
-**Mitigation.** `thermal::Thermal` steps the ceiling down towards `thermal::FLOOR` (level 50) as the smoothed and predicted temperature passes `thermal::LIMIT` (45 °C at the sensor). `ramp::CEILING` holds the light at level 125 of 150, a step up from the level 120 that the torch faded smoothly from (7.6).
+**Mitigation.** `thermal::Thermal` steps the ceiling down towards `thermal::FLOOR` (level 50) as the smoothed and predicted temperature passes `thermal::LIMIT` (45 °C at the sensor). Above level 120 (`thermal::FAST_ABOVE`) the same error steps down twice as fast (`thermal::FAST_GAIN`), since the ramp's a cubic and a level up there is more power. `ramp::CEILING` holds the light at level 140 of 150, up from the level 120 that the torch faded smoothly from (7.6).
 
-**Evidence.** `a_hot_head_fades_down_to_the_floor` and `turning_on_resets_thermal_regulation` in src/limits.rs. In src/thermal.rs, `sustained_heat_takes_it_to_the_floor_and_no_further`, `the_top_settles_near_the_limit_without_hunting`, `turning_on_hot_steps_down_from_the_first_readings`, and `every_reading_held_ends_where_the_limit_says`, which holds every sum the ADC can give. `random_readings_never_lift_the_level_over_the_ui_or_the_cap` in src/limits.rs runs a million ticks of random readings. docs/ui.md's `heat:80C` rows, run by the simulator.
+**Evidence.** `a_hot_head_fades_down_to_the_floor` and `turning_on_resets_thermal_regulation` in src/limits.rs. In src/thermal.rs, `sustained_heat_takes_it_to_the_floor_and_no_further`, `the_top_settles_near_the_limit_without_hunting`, `above_level_120_the_rate_down_doubles`, `turning_on_hot_steps_down_from_the_first_readings`, and `every_reading_held_ends_where_the_limit_says`, which holds every sum the ADC can give. `random_readings_never_lift_the_level_over_the_ui_or_the_cap` in src/limits.rs runs a million ticks of random readings. docs/ui.md's `heat:80C` rows, run by the simulator.
 
 **Status.** Simulator.
 
-**What's left.** Most constants are unmeasured. On one TS26, with the limit at 50 °C, the fade began with the outside of the head at about 45 °C (7.6), so the sensor likely reads about 5 °C over the outside of the head. That's one reading, and 45 °C hasn't been run on the light yet. The thermal tests' head model is a guess too, and above level 125 it warms past the limit by more than the tests allow before regulation catches it, so each step up in `ramp::CEILING` waits on 7.6 at the level before. A reading that's plausible and frozen goes undetected (H12). Nobody knows what level 125 draws (5.6).
+**What's left.** Most constants are unmeasured. On one TS26, with the limit at 50 °C, the fade began with the outside of the head at about 45 °C (7.6), so the sensor likely reads about 5 °C over the outside of the head. That's one reading, and 45 °C hasn't been run on the light yet. The thermal tests' head model is a guess too. At level 140 it warms to exactly the 2 K over the limit the tests allow before regulation catches it, with the faster steps above 120 tuned against that same model, so there's no margin left in it and 7.6 at 140 on the light decides. A reading that's plausible and frozen goes undetected (H12). Nobody knows what level 140 draws (5.6).
 
 ### H5. Lit in a pocket or a bag
 
@@ -173,7 +173,7 @@ Nothing is past simulator today, since the statuses are about the full firmware.
 
 This is true of every hazard, so it's kept out of the sections above.
 
-- **Nearly every threshold is unmeasured.** The cell's cut-offs, the level 125 ceiling, the 3.60 V that clears a flat cell, the three seconds of aux, the 104 ms and the second of garbage that makes a fault are all from the stock firmware, the datasheet or the project's own judgement, and none has been checked on a TS26. The temperature limit has been seen working once on one, at its old 50 °C (7.6 in breakout.md).
+- **Nearly every threshold is unmeasured.** The cell's cut-offs, the level 140 ceiling, the 3.60 V that clears a flat cell, the three seconds of aux, the 104 ms and the second of garbage that makes a fault are all from the stock firmware, the datasheet or the project's own judgement, and none has been checked on a TS26. The temperature limit has been seen working once on one, at its old 50 °C (7.6 in breakout.md).
 - **The simulator's limits** are in [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator). The two that matter most here are that it has no chip resets, so a watchdog bite and the boot after it never run, and that it models nothing analogue, so the driver, the cell and the head are all scripted.
 - **Frozen but plausible readings** get past both `battery::plausible` and `thermal::plausible`. Nothing in the firmware can tell a stuck reading from a steady one, and two tests in src/limits.rs pin that down so a change to it shows.
 - **There's no run-time limit.** A lit light with a good cell and a cool head stays lit, whatever pressed the switch.

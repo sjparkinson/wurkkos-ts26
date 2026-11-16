@@ -47,7 +47,7 @@ Here's what the stock firmware does with PB0, all confirmed from its source.
 
 Reviewers saw candle-like flicker at the lowest levels ([EDC Tips](https://www.edctips.com/552908/review-new-wurkkos-ts26-nice-enthusiast-flashlight-but-lacking-enthusiast-features/), and 1/150 to 5/150 in the [BLF 519A review](https://budgetlightforum.com/t/wurkkos-ts26-519a-now-with-better-leds/234755)), and a Redditor said it's "only present on some units" (secondhand). The stock firmware raised this light's default smooth floor to 5/150 "by request". That level is 36 in delta-sigma units, since the floor is level 5, the fifth entry in the TS26's level table is 36, and levels count from 1. Confirmed from source. It's the figure `ui::FLOOR` is picked to clear. Likely the driver struggling with very small currents. Unmeasured.
 
-This firmware's ramp is its own curve, not the stock firmware's, from that 20 up to 32640, with the UI working between levels 13 and 125. A fresh torch comes on at level 52, a duty of about 10 of 255, well clear of the floor. Level 13 is about 37 in those units, which should light but is close enough to the bottom that reviewers' flicker could show. Level 125 is 18,821, about 58 % of full duty. None of it's been measured.
+This firmware's ramp is its own curve, not the stock firmware's, from that 20 up to 32640, with the UI working between levels 13 and 140. A fresh torch comes on at level 52, a duty of about 10 of 255, well clear of the floor. Level 13 is about 37 in those units, which should light but is close enough to the bottom that reviewers' flicker could show. Level 140 is 26,503, about 81 % of full duty. None of it's been measured.
 
 ### Turning on and off
 

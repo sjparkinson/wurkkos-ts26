@@ -939,8 +939,13 @@ mod tests {
         // The fault's in by now, and the light's on its way down.
         assert!(torch.level() > 0 && torch.level() < CEILING);
         assert_eq!(torch.aux(), Aux::Off, "out while the main LED's lit");
-        run(&mut torch, false, 2 * TICKS_PER_SECOND);
-        assert_eq!(torch.level(), 0);
+        // A level a tick, so no more ticks than levels.
+        let mut ticks = 0;
+        while torch.level() > 0 {
+            torch.tick(false);
+            ticks += 1;
+            assert!(ticks <= CEILING, "still lit after {ticks} ticks");
+        }
         assert_eq!(torch.aux(), Aux::White);
         run(&mut torch, false, SHOW_TICKS);
         assert_eq!(torch.aux(), Aux::Off);

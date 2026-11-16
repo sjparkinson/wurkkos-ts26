@@ -21,17 +21,17 @@ Every row has an example, which is a script in that notation, starting from a to
 | Action | Does | Example | Status |
 |---|---|---|---|
 | 1C | Off, as it's let go | `1C 1C` → off | Done |
-| 1H | Ramp up, stopping at the top | `1C 1H:3s` → level 125 | Done |
+| 1H | Ramp up, stopping at the top | `1C 1H:3s` → level 140 | Done |
 | 1H again | Ramp the other way from the last 1H, stopping at the end | `1C 1H:3s 1H:3s` → level 13 | Done |
 | 1H, after one that stopped partway | Still the other way, so letting go and holding again turns the ramp round | `1C 1H:1s 1H:500ms` → level 84 | Done |
-| 1H, after turning it off and on | Up, since nothing's remembered | `1C 1H:3s 1C 1C 1H:3s` → level 125 | Done |
+| 1H, after turning it off and on | Up, since nothing's remembered | `1C 1H:3s 1C 1C 1H:3s` → level 140 | Done |
 | More clicks, or a hold after clicks | The first click turns it off without waiting, and the rest count from off. So 2C is off and back on at level 52, 4C is off and locked, and 2H is off and then a hold that does nothing | `1C 1H:1s 2C` → level 52 | Done |
 | 4C | Off, then locked | `1C 4C 1C` → off | Done |
 | 2H | Off, then nothing | `1C 2H:2s` → off | Done |
 
-The ramp moves one level per 64 Hz tick, so bottom to top takes about 1.8 seconds. Each 1H goes the other way from the one before it, whether or not that one reached the end, and the first after a click on goes up, since the light comes on near the bottom.
+The ramp moves one level per 64 Hz tick, so bottom to top takes about 2 seconds. Each 1H goes the other way from the one before it, whether or not that one reached the end, and the first after a click on goes up, since the light comes on near the bottom.
 
-The top is `ramp::CEILING`, level 125 of 150, a duty of about 58 %. Thermal regulation faded the light smoothly from level 120 on the torch (7.6 in [breakout.md](breakout.md#results)), and the ceiling goes up a step at a time from there as each step's checked. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
+The top is `ramp::CEILING`, level 140 of 150, a duty of about 81 %. Thermal regulation faded the light smoothly from level 120 on the torch (7.6 in [breakout.md](breakout.md#results)), and above 120 it steps down twice as fast, since a level up there is more power than one lower down. The ceiling goes up a step at a time as each step's checked. The lowest level is 13. The stock firmware's smooth floor on this light is 5 of 150, which is 36 in delta-sigma units, and level 13 is the first on this curve to reach that. Reviewers saw flicker below it on theirs. Nobody's measured it on this firmware.
 
 ## Lockout
 
@@ -68,7 +68,7 @@ These scripts have four more words. `cell:2.95V` is the cell's voltage from ther
 | A cell it can't read, at rest | Nothing. The aux stays as it was, and it's no fault until a press reads it | `cell:0V wait:900s cell:3.80V 1C` → level 52 | Done |
 | Hot | Fades down, no further than level 50 | `heat:80C 1C 1H:3s wait:120s` → level 50 | Done |
 | Hot, at a level under 50 | Nothing | `heat:80C 1C 1H:500ms 1H:3s wait:120s` → level 13 | Done |
-| Hot, then cool | Back up to the level you asked for | `heat:80C 1C 1H:3s wait:120s heat:25C wait:120s` → level 125 | Done |
+| Hot, then cool | Back up to the level you asked for | `heat:80C 1C 1H:3s wait:120s heat:25C wait:120s` → level 140 | Done |
 | A failed check at power-on | A fault | `fault 1C` → off | Done |
 | Flash that doesn't match its checksum | The same as any failed check | `flash:corrupt 1C` → off | Done |
 

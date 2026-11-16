@@ -92,7 +92,7 @@ An earlier torch was lost on 2026-11-06 after the Friend was hand-held on its pa
 - **Measure before trusting a probe.** The JLHawaii808 probe is made for 1.27 mm pads, and an earlier torch's turned out to be about 1.75 mm. This TS26's fit it (1.4). If another board's don't, use loose leads.
 - **"Nothing echoed back" on the pads means stop.** Something's holding the line down. Take the probe off and measure ([flashing.md](flashing.md#if-it-doesnt-talk)).
 - **Never put the meter in series above 3 A.** Turbo draws more than the meter's 10 A range, and the level that gets to 3 A isn't known yet. Start low and ramp up slowly, and stop at 3 A whatever the level.
-- **Stay with it in short bursts above level 75.** The thermal constants have met this head once (7.6), and the cell's unprotected. Without a thermocouple, a hand on the head is the only thermometer, so stop when it's uncomfortable. `ramp::CEILING` holds the light at level 125 until stage 7 says it can go higher.
+- **Stay with it in short bursts above level 75.** The thermal constants have met this head once (7.6), and the cell's unprotected. Without a thermocouple, a hand on the head is the only thermometer, so stop when it's uncomfortable. `ramp::CEILING` holds the light at level 140 until stage 7 says it can go higher.
 - **Don't take the cell under 2.8 V.** The firmware should stop it sooner, but that's one of the things being tested. T0 has no protection at all, so don't leave a cell in it.
 - **Keep the two backups apart.** `backup` and `restore` take a directory after the port, and each chip gets its own, `backup/breakout` for the breakout and `backup/torch` for the torch. The path is used as given, so run every command here from the repo root. `backup` saves the chip's serial number beside the images, and `restore` refuses a backup that was read from another chip, so the breakout's seesaw can't go on the torch that way. Until stage 0 that check has only met the fake chip, and it can't tell two backups of the same chip apart, so still read the directory in the command before you run it.
 
@@ -216,7 +216,7 @@ Short bursts above level 75, and the meter comes out at 3 A.
 | 5.3 |  | Ramp slowly end to end | Smooth, no steps that jump, no blip, each direction. The curve is the project's own cubic, so an ugly spot is a finding, not a surprise | |
 | 5.4 |  | T1 at levels 25, 50, 75, 100. Tail current, and stop at 3 A. Those are duties of about 0.5%, 3.6%, 12% and 29% | Plot current against duty. That's the first picture of what turns PB0 into current, filtered reference or otherwise | "Measure what PWM duty does to output" |
 | 5.5 |  | Ear to the head at low and middle levels | Any whine, compared with 1.2 | |
-| 5.6 |  | Top of the ramp, a few seconds. Cell volts across the cell | Write down the sag. Level 125 is a duty of 58%, and nobody knows what current that is | |
+| 5.6 |  | Top of the ramp, a few seconds. Cell volts across the cell | Write down the sag. Level 140 is a duty of 81%, and nobody knows what current that is | |
 | 5.7 |  | Same run, in the dark, off and on a few times | No blip on either edge. The stock firmware's note that this driver can't pulse under 2 ms suggests a slow start. A visible lag is fine and a flash isn't | |
 
 ## Stage 6, faults and the watchdog
