@@ -106,6 +106,26 @@ const BREAKAGES: &[Breakage] = &[
         stage: Stage::Simulator,
         expect: "writes TCA0.CMP0BUF from the main loop with PB2 high",
     },
+    // Turning off hands PB0 back to PORT, since nothing says what a stopped
+    // timer leaves on it.
+    Breakage {
+        name: "pb0-left-to-tca0",
+        file: HW,
+        find: "            write(reg::TCA0_CTRLB, CTRLB_OFF);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "powers down with TCA0.CTRLB.CMP0EN set",
+    },
+    // Turning off zeroes the live compare too, so power-down can follow on
+    // the same pass without waiting for BOTTOM to bring in CMP0BUF's 0.
+    Breakage {
+        name: "no-direct-compare-write",
+        file: HW,
+        find: "            write16(reg::TCA0_CMP0, 0);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "powers down with CMP0 at",
+    },
     Breakage {
         name: "pb2-pull-up",
         file: HW,

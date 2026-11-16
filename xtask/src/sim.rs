@@ -69,6 +69,10 @@
 //!   that could wake it, which in power-down leaves out TCA0 (it stops) and
 //!   RISING and FALLING on all but pins 2 and 6 (table 16-3). Power-down also
 //!   wants no conversion running, the ADC off and its reference not forced on.
+//!   It wants PB0 handed back to PORT as well, since nothing says what a
+//!   waveform output holds with TCA0 stopped (§20.3.6), and CMP0 and CMP0BUF
+//!   at 0, since registers keep their contents through sleep (§11.2) and a
+//!   duty left in either runs at the next turn-on.
 //!   With no interrupt enabled at all, `sleep` is the chip stopping for good,
 //!   since only a reset wakes it (§11.3.1). That's `hw::halt`, and it fails
 //!   every run but the one that stops the oscillator. `sleep` with SREG.I
@@ -2152,6 +2156,25 @@ impl Chip {
                 self.tca.cmp0buf
             ));
         }
+        // The datasheet doesn't say what a waveform output holds with TCA0's
+        // clock stopped (§20.3.6 and §16.3.5 don't cover it), so PB0 goes
+        // back to PORT first.
+        if self.io[reg::TCA0_CTRLB] & TCA_CMP0EN != 0 {
+            return Err(
+                "powers down with TCA0.CTRLB.CMP0EN set, so PB0 is left to a stopped \
+                 timer, at a level the datasheet doesn't give"
+                    .into(),
+            );
+        }
+        // Registers keep their contents through sleep (§11.2), so a duty left
+        // in CMP0 is what PB0 gets for the first cycle of the next turn-on.
+        if self.tca.cmp0 != 0 {
+            return Err(format!(
+                "powers down with CMP0 at {}, which the next turn-on runs a cycle of \
+                 before BOTTOM brings its own duty in",
+                self.tca.cmp0
+            ));
+        }
         if self.converting() {
             return Err(
                 "powers down mid-conversion, which resumes on waking with an \
@@ -3239,6 +3262,7 @@ mod tests {
 
         chip.write(reg::VPORTB_OUT as u16, 0).unwrap();
         wide(&mut chip, reg::TCA0_CMP0BUF, 0).unwrap();
+        chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.sleep().unwrap();
     }
 
@@ -3257,6 +3281,7 @@ mod tests {
     #[test]
     fn power_down_stops_tca0_but_not_the_pit() {
         let mut chip = running();
+        chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.write(reg::RTC_PITINTCTRL as u16, RTC_PI).unwrap();
         chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
         chip.pit_busy = 0;
@@ -3331,6 +3356,7 @@ mod tests {
     #[test]
     fn tca0_alone_cant_wake_it_from_power_down() {
         let mut chip = running();
+        chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
         chip.pit_busy = 0;
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_POWER_DOWN | SLPCTRL_SEN)
@@ -3630,10 +3656,21 @@ mod tests {
     fn power_down_wants_no_duty_waiting_no_conversion_running_and_the_pit_synced() {
         let mut chip = running();
         chip.pit_busy = 0;
+        // `running` leaves PB0 to TCA0, as it is with the light on.
+        let err = chip.ready_for_power_down().unwrap_err();
+        assert!(err.contains("CMP0EN set"), "{err}");
+        chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.ready_for_power_down().unwrap();
         wide(&mut chip, reg::TCA0_CMP0BUF, 10).unwrap();
         let err = chip.ready_for_power_down().unwrap_err();
         assert!(err.contains("CMP0BUF at 10"), "{err}");
+        // BOTTOM takes it into the live compare, which counts as much.
+        cycles(&mut chip, 1).unwrap();
+        wide(&mut chip, reg::TCA0_CMP0BUF, 0).unwrap();
+        let err = chip.ready_for_power_down().unwrap_err();
+        assert!(err.contains("CMP0 at 10"), "{err}");
+        wide(&mut chip, reg::TCA0_CMP0, 0).unwrap();
+        chip.ready_for_power_down().unwrap();
 
         let mut chip = adc_ready(ADC_MUXPOS_AIN1);
         chip.pit_busy = 0;
