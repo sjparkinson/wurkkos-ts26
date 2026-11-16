@@ -149,6 +149,7 @@ fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
     let guards = root().join(GUARDS);
     let bytes = fs::read(&guards).map_err(at(&guards))?;
     let guards_elf = elf::Elf::parse(&bytes).map_err(at(&guards))?;
+    layout::check(&guards_elf).map_err(at(&guards))?;
     sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))?;
     Ok((elf, report))
 }

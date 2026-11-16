@@ -117,7 +117,10 @@ const BREAKAGES: &[Breakage] = &[
         expect: "powers down with TCA0.CTRLB.CMP0EN set",
     },
     // Turning off zeroes the live compare too, so power-down can follow on
-    // the same pass without waiting for BOTTOM to bring in CMP0BUF's 0.
+    // the same pass without waiting for BOTTOM to bring in CMP0BUF's 0. That
+    // makes this one depend on timing. It's refused because `hw::halt` powers
+    // down within a cycle of turning off, and a BOTTOM in between would hide
+    // it, as it would on a real chip.
     Breakage {
         name: "no-direct-compare-write",
         file: HW,
@@ -134,7 +137,7 @@ const BREAKAGES: &[Breakage] = &[
         find: "    unsafe { asm!(\"cli\", options(nostack)) };\n    f();\n",
         replace: "    f();\n",
         stage: Stage::Simulator,
-        expect: "so the handler can catch the level half changed",
+        expect: "so the handler can catch the delta-sigma half changed",
     },
     // The delta-sigma starts from nothing each time the light comes on.
     Breakage {
