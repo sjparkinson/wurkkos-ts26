@@ -126,6 +126,25 @@ const BREAKAGES: &[Breakage] = &[
         stage: Stage::Simulator,
         expect: "powers down with CMP0 at",
     },
+    // A change of level holds interrupts off, so the handler never sees one
+    // byte of the new level and one of the old.
+    Breakage {
+        name: "level-change-with-interrupts-on",
+        file: HW,
+        find: "    unsafe { asm!(\"cli\", options(nostack)) };\n    f();\n",
+        replace: "    f();\n",
+        stage: Stage::Simulator,
+        expect: "so the handler can catch the level half changed",
+    },
+    // The delta-sigma starts from nothing each time the light comes on.
+    Breakage {
+        name: "sum-kept-at-turn-off",
+        file: HW,
+        find: "            write(DSM_SUM, 0);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "with the delta-sigma's sum at",
+    },
     Breakage {
         name: "pb2-pull-up",
         file: HW,

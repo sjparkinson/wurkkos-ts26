@@ -34,6 +34,11 @@
 //!   TEMP byte. A handler that lands with the main loop halfway through one
 //!   can't touch any of them, since it'd overwrite that byte (§8.5.6, §20.5.13).
 //!   Only a handler may write CMP0BUF with the boost converter on.
+//! - The delta-sigma's state is in GPIORs that src/avr/hw.rs's handler reads,
+//!   which is the firmware's layout, not the chip's (`DSM_DUTY`). The main
+//!   loop only changes the level's two bytes with SREG.I clear or the
+//!   overflow off, so the handler never sees half a change, and the sum has
+//!   to be 0 whenever the overflow interrupt is turned on.
 //! - A handler gives back every register, SREG and SP as it found them, and
 //!   has to fit in a PWM cycle even if every instruction took four clocks.
 //! - PB2 is only ever an output with PORTB's other bits clear. It may not go
@@ -270,6 +275,14 @@ const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / DSM_FLOOR as u32 + 1;
 const DSM_WINDOW: usize = 1 << DSM_BITS;
 /// How far the live compares of a whole turn can sum from the level's `dsm`.
 const DSM_SLACK: u32 = 2;
+/// Where src/avr/hw.rs keeps the delta-sigma, which `tca0_ovf` reads: the
+/// level's duty and fraction, which have to change together, and the sum,
+/// which has to start from nothing each time the light comes on. These are
+/// the firmware's choice, not the chip's, so a firmware that moves them has
+/// to move these too.
+const DSM_DUTY: usize = reg::GPIO_GPIOR1;
+const DSM_FRACTION: usize = reg::GPIO_GPIOR2;
+const DSM_SUM: usize = reg::GPIO_GPIOR3;
 
 /// How many reads of RTC.PITSTATUS report busy after reset or a write to
 /// PITCTRLA. The real chip is busy for a couple of 32 kHz clocks while it
@@ -1239,6 +1252,7 @@ impl Sim {
         // `hw::halt` is main-loop code, wherever it was reached from, and
         // gets the main loop's rules.
         self.chip.in_handler = handling.is_some() && !self.abandoned;
+        self.chip.interrupts_on = self.cpu.flag(I);
         self.cpu.step(&mut self.chip)?;
         self.watch_handler(handling)?;
         if self.cpu.handling.is_some() && self.cpu.pc == self.halt {
@@ -1625,6 +1639,8 @@ struct Chip {
     forced: Option<u8>,
     /// Whether the instruction running is in a handler.
     in_handler: bool,
+    /// Whether SREG.I was set as the instruction running started.
+    interrupts_on: bool,
     /// The low byte of the TCA0 register the running handler caught halfway
     /// through an access, which is what it mustn't disturb.
     interrupted: Option<usize>,
@@ -1682,6 +1698,7 @@ impl Chip {
             enabled: 0,
             forced: None,
             in_handler: false,
+            interrupts_on: false,
             interrupted: None,
             power_downs: 0,
             register_writes: 0,
@@ -2432,6 +2449,8 @@ fn name(addr: usize) -> String {
         (reg::TCA0_CTRLB, "TCA0.CTRLB"),
         (reg::TCA0_INTCTRL, "TCA0.INTCTRL"),
         (reg::TCA0_INTFLAGS, "TCA0.INTFLAGS"),
+        (DSM_DUTY, "GPIOR1, the delta-sigma's duty,"),
+        (DSM_FRACTION, "GPIOR2, the delta-sigma's fraction,"),
         (reg::TCA0_CNT, "TCA0.CNT"),
         (reg::TCA0_PER, "TCA0.PER"),
         (reg::TCA0_CMP0, "TCA0.CMP0"),
@@ -2696,9 +2715,27 @@ impl Bus for Chip {
                 }
                 self.io[a] = value;
             }
+            reg::TCA0_INTCTRL if value & TCA_OVF != 0 && self.io[DSM_SUM] != 0 => {
+                return Err(format!(
+                    "turns TCA0's overflow interrupt on with the delta-sigma's sum at {}, \
+                     left over from the last time the light was on",
+                    self.io[DSM_SUM]
+                ));
+            }
             reg::TCA0_INTCTRL | reg::RTC_PITINTCTRL => {
                 self.io[a] = value;
                 self.update_enabled();
+            }
+            DSM_DUTY | DSM_FRACTION
+                if !self.in_handler
+                    && self.interrupts_on
+                    && self.enabled & 1 << VECTOR_TCA0_OVF != 0 =>
+            {
+                return Err(format!(
+                    "writes {} from the main loop with interrupts on and TCA0's overflow \
+                     enabled, so the handler can catch the level half changed",
+                    name(a)
+                ));
             }
             reg::TCA0_INTFLAGS => {
                 if value & TCA_OVF != 0 {
@@ -3264,6 +3301,38 @@ mod tests {
         wide(&mut chip, reg::TCA0_CMP0BUF, 0).unwrap();
         chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.sleep().unwrap();
+    }
+
+    /// The handler reads the level's two bytes, so the main loop only changes
+    /// them where it can't land in between.
+    #[test]
+    fn the_level_only_changes_where_the_handler_cant_see_half_of_it() {
+        let mut chip = running();
+        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        for a in [DSM_DUTY, DSM_FRACTION] {
+            chip.interrupts_on = true;
+            let err = chip.write(a as u16, 1).unwrap_err();
+            assert!(err.contains("level half changed"), "{err}");
+            chip.in_handler = true;
+            chip.write(a as u16, 1).unwrap();
+            chip.in_handler = false;
+            chip.interrupts_on = false;
+            chip.write(a as u16, 1).unwrap();
+        }
+        // With the overflow off there's no handler to see it.
+        chip.write(reg::TCA0_INTCTRL as u16, 0).unwrap();
+        chip.interrupts_on = true;
+        chip.write(DSM_DUTY as u16, 2).unwrap();
+    }
+
+    #[test]
+    fn the_delta_sigma_starts_from_nothing_each_time() {
+        let mut chip = running();
+        chip.write(DSM_SUM as u16, 5).unwrap();
+        let err = chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap_err();
+        assert!(err.contains("sum at 5"), "{err}");
+        chip.write(DSM_SUM as u16, 0).unwrap();
+        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
     }
 
     #[test]
