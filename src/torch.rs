@@ -8,7 +8,7 @@ use crate::ramp::{self, Output};
 use crate::selftest::Faults;
 use crate::sensors::Convert;
 use crate::temp::Calibration;
-use crate::ui::{Aux, Ui};
+use crate::ui::{Aux, Mode, Ui};
 
 /// How long the aux LEDs say why the light won't come on.
 ///
@@ -17,13 +17,32 @@ use crate::ui::{Aux, Ui};
 /// aux. Unmeasured.
 pub const SHOW_TICKS: u16 = 3 * TICKS_PER_SECOND;
 
+/// How long the aux shows bright red after a press that leaves it locked.
+///
+/// That's 3C locking it, or any other press while it's locked. Five seconds,
+/// then dark, since nothing reads the cell while it's locked, and steady
+/// bright red would flatten a full one in about a month. Unmeasured.
+pub const LOCKED_TICKS: u16 = 5 * TICKS_PER_SECOND;
+
+/// How long the aux stays dim blue, off, after power-on or the last press.
+///
+/// A day, then dark until the next press, so a torch left in a drawer
+/// doesn't spend its cell on the aux. The 32 kHz oscillator that times it
+/// can be 30 % out, so it's a day give or take a few hours. Unmeasured.
+pub const BLUE_TICKS: u32 = 24 * 60 * 60 * 64;
+
+// `u32::from` isn't const, so the 64 is spelled out above.
+const _: () = assert!(TICKS_PER_SECOND == 64);
+
 #[derive(Clone, Debug)]
 pub struct Torch {
     clicks: Clicks,
     ui: Ui,
     limits: Limits,
-    /// Ticks left of [`SHOW_TICKS`].
+    /// Ticks left of [`SHOW_TICKS`] or [`LOCKED_TICKS`].
     showing: u16,
+    /// Ticks left of [`BLUE_TICKS`].
+    blue: u32,
 }
 
 impl Torch {
@@ -36,6 +55,7 @@ impl Torch {
             ui: Ui::new(),
             limits: Limits::new(calibration, faults),
             showing: if faults.any() { SHOW_TICKS } else { 0 },
+            blue: BLUE_TICKS,
         }
     }
 
@@ -50,13 +70,25 @@ impl Torch {
     /// still reach it, so 1C turns it off. A press reads the cell before its
     /// click counts, so a cell that's been charged is [`Health::Good`] by the
     /// time the click arrives, and that click turns the light on as usual.
+    ///
+    /// A click or the start of a hold that leaves the torch locked shows
+    /// bright red for [`LOCKED_TICKS`], counted the same way. Any of them
+    /// starts [`BLUE_TICKS`] again.
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
         self.showing = self.showing.saturating_sub(1);
+        self.blue = self.blue.saturating_sub(1);
         let event = self.clicks.tick(pressed);
         if let Some(event) = event {
+            let press = matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. });
+            if press {
+                self.blue = BLUE_TICKS;
+            }
             if self.limits.health() == Health::Good || self.level() > 0 {
                 self.ui.handle(event);
-            } else if matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. }) {
+                if press && self.ui.mode() == Mode::Lockout {
+                    self.showing = LOCKED_TICKS;
+                }
+            } else if press {
                 self.showing = SHOW_TICKS;
             }
         }
@@ -103,12 +135,18 @@ impl Torch {
         ramp::output(self.level())
     }
 
-    /// The UI's colour while all's well. Otherwise yellow for a flat cell and
+    /// The UI's colour while all's well, but with lockout's red only for
+    /// [`LOCKED_TICKS`] after a press, and blue only for [`BLUE_TICKS`].
+    /// Otherwise yellow for a flat cell and
     /// white for a fault, for [`SHOW_TICKS`] after a press or after the light
     /// goes out, and dark the rest of the time.
     pub const fn aux(&self) -> Aux {
         match self.limits.health() {
-            Health::Good => self.ui.aux(),
+            Health::Good => match self.ui.aux() {
+                Aux::Red if self.showing == 0 => Aux::Off,
+                Aux::Blue if self.blue == 0 => Aux::Off,
+                colour => colour,
+            },
             _ if self.level() > 0 || self.showing == 0 => Aux::Off,
             Health::Flat => Aux::Yellow,
             Health::Fault => Aux::White,
@@ -239,6 +277,71 @@ mod tests {
         click(&mut torch);
         assert_eq!(torch.level(), 0);
         assert_eq!(torch.aux(), Aux::Red);
+    }
+
+    /// Ticks with the switch up until `event` arrives.
+    fn until(torch: &mut Rig, event: Event) {
+        for _ in 0..TICKS_PER_SECOND {
+            if torch.tick(false) == Some(event) {
+                return;
+            }
+        }
+        panic!("no {event:?}");
+    }
+
+    #[test]
+    fn lockout_shows_bright_red_for_five_seconds_after_each_press() {
+        let mut torch = Rig::default();
+        clicks(&mut torch, 3);
+        until(&mut torch, Event::Click(3));
+        assert_eq!(torch.aux(), Aux::Red, "as 3C locks it");
+        for tick in 1..LOCKED_TICKS {
+            torch.tick(false);
+            assert_eq!(torch.aux(), Aux::Red, "tick {tick}");
+        }
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off);
+        clicks(&mut torch, 1);
+        until(&mut torch, Event::Click(1));
+        assert_eq!(torch.aux(), Aux::Red, "a press that does nothing");
+        run(&mut torch, false, LOCKED_TICKS);
+        assert_eq!(torch.aux(), Aux::Off);
+        clicks(&mut torch, 3);
+        until(&mut torch, Event::Click(3));
+        assert_eq!(torch.aux(), Aux::Blue, "3C unlocks it");
+    }
+
+    #[test]
+    fn a_hold_in_lockout_cannot_keep_the_red_lit() {
+        let mut torch = Rig::default();
+        clicks(&mut torch, 3);
+        until(&mut torch, Event::Click(3));
+        run(&mut torch, false, LOCKED_TICKS);
+        assert_eq!(torch.aux(), Aux::Off);
+        run(&mut torch, true, HOLD_TICKS + 1);
+        assert_eq!(torch.aux(), Aux::Red, "from the start of the hold");
+        run(&mut torch, true, LOCKED_TICKS);
+        assert_eq!(torch.aux(), Aux::Off, "still held");
+    }
+
+    #[test]
+    fn blue_goes_dark_a_day_after_the_last_press() {
+        let mut torch = Rig::default();
+        for _ in 0..BLUE_TICKS - 2 {
+            torch.tick(false);
+        }
+        assert_eq!(torch.aux(), Aux::Blue, "a day after power-on, nearly");
+        run(&mut torch, false, 2);
+        assert_eq!(torch.aux(), Aux::Off, "a day after power-on");
+        clicks(&mut torch, 2);
+        until(&mut torch, Event::Click(2));
+        assert_eq!(torch.aux(), Aux::Blue, "a press that does nothing");
+        for _ in 1..BLUE_TICKS {
+            torch.tick(false);
+        }
+        assert_eq!(torch.aux(), Aux::Blue, "a day after it, nearly");
+        torch.tick(false);
+        assert_eq!(torch.aux(), Aux::Off, "a day after it");
     }
 
     #[test]
@@ -656,6 +759,10 @@ mod tests {
         up: bool,
         /// The tick the aux stops showing yellow or white.
         dark_at: u32,
+        /// The tick lockout's red goes dark.
+        red_until: u32,
+        /// The tick off's blue goes dark.
+        blue_until: u32,
     }
 
     impl Model {
@@ -726,6 +833,8 @@ mod tests {
             asked: 0,
             up: false,
             dark_at: if failed { SHOW_TICKS.into() } else { 0 },
+            red_until: 0,
+            blue_until: BLUE_TICKS,
         };
         let (mut pressed, mut switch_left) = (false, 0);
         let (mut cell, mut head) = (Source::Steady(3516), Source::Steady(2124));
@@ -771,9 +880,16 @@ mod tests {
             // The clicks and holds that should have reached the UI.
             let mut ignored = false;
             if let Some(event) = event {
+                let press = matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. });
+                if press {
+                    model.blue_until = t + BLUE_TICKS;
+                }
                 if health_before == Health::Good || level_before > 0 {
                     model.handle(event);
-                } else if matches!(event, Event::Click(_) | Event::Hold { ticks: 0, .. }) {
+                    if press && model.mode == Mode::Lockout {
+                        model.red_until = t + u32::from(LOCKED_TICKS);
+                    }
+                } else if press {
                     model.dark_at = t + u32::from(SHOW_TICKS);
                     ignored = true;
                 }
@@ -860,8 +976,8 @@ mod tests {
             let showing = t < model.dark_at;
             let expected = match (health, model.mode) {
                 _ if level > 0 => Aux::Off,
-                (Health::Good, Mode::Off) => Aux::Blue,
-                (Health::Good, Mode::Lockout) => Aux::Red,
+                (Health::Good, Mode::Off) if t < model.blue_until => Aux::Blue,
+                (Health::Good, Mode::Lockout) if t < model.red_until => Aux::Red,
                 (Health::Flat, _) if showing => Aux::Yellow,
                 (Health::Fault, _) if showing => Aux::White,
                 _ => Aux::Off,

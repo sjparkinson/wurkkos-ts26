@@ -889,6 +889,13 @@ fn in_step(
                 rig.torch.aux()
             )));
         }
+        if sim.chip.aux_bright() != board::aux_bright(rig.torch.aux()) {
+            return Err(at(format!(
+                "the bright aux pins are {:#06b}, but the library says {:?}",
+                sim.chip.aux_bright(),
+                rig.torch.aux()
+            )));
+        }
         was_resting = rig.torch.resting();
         // `main`'s feeder, ticked at the end of each pass as it is there. The
         // sleep that ended this pass was the firmware's answer to the state
@@ -1789,6 +1796,11 @@ impl Chip {
             bits | u8::from(on) << pin
         });
         (self.io[reg::VPORTC_OUT] & dir | pulled_up & !dir) & AUX
+    }
+
+    /// The aux pins of [`Chip::aux`] that are bright, outputs driven high.
+    fn aux_bright(&self) -> u8 {
+        self.io[reg::VPORTC_OUT] & self.io[reg::VPORTC_DIR] & AUX
     }
 
     /// Refuses a chip `hw::init` left on the wrong clock or PWM. Writes of
@@ -3665,6 +3677,17 @@ mod tests {
         chip.write(reg::VPORTC_DIR as u16, AUX & !(1 << board::AUX_RED))
             .unwrap();
         assert_eq!(chip.aux(), board::aux_pin(Aux::Red), "red");
+        assert_eq!(chip.aux_bright(), 0, "dimly");
+    }
+
+    #[test]
+    fn an_aux_pin_driven_high_is_lit_brightly() {
+        let mut chip = Chip::new(Vec::new());
+        chip.write(reg::VPORTC_DIR as u16, AUX).unwrap();
+        chip.write(reg::VPORTC_OUT as u16, 1 << board::AUX_RED)
+            .unwrap();
+        assert_eq!(chip.aux(), board::aux_pin(Aux::Red));
+        assert_eq!(chip.aux_bright(), board::aux_bright(Aux::Red));
     }
 
     // From here on, each test rings one of the alarms that neither the tests
@@ -4449,6 +4472,19 @@ mod tests {
         let err = in_step_fails(&mut sim, 8);
         assert!(
             err.contains("the aux pins are 0b0000, but the library says Blue"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn in_step_holds_the_aux_brightness_to_the_librarys() {
+        let mut sim = ticking();
+        let blue = board::aux_pin(Aux::Blue);
+        poke(&mut sim.chip, reg::VPORTC_DIR, AUX).unwrap();
+        poke(&mut sim.chip, reg::VPORTC_OUT, blue).unwrap();
+        let err = in_step_fails(&mut sim, 8);
+        assert!(
+            err.contains("the bright aux pins are 0b0010, but the library says Blue"),
             "{err}"
         );
     }

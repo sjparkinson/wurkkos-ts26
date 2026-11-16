@@ -54,6 +54,15 @@ pub const fn aux_pin(colour: Aux) -> u8 {
     }
 }
 
+/// The pins of [`aux_pin`] that `colour` lights brightly, as a mask. The rest
+/// of them glow dimly.
+pub const fn aux_bright(colour: Aux) -> u8 {
+    match colour {
+        Aux::Red => 1 << AUX_RED,
+        Aux::Off | Aux::Blue | Aux::Yellow | Aux::White => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +79,14 @@ mod tests {
             for &b in &colours[i + 1..] {
                 assert_ne!(aux_pin(a), aux_pin(b), "{a:?} and {b:?}");
             }
+        }
+    }
+
+    #[test]
+    fn only_lockout_red_is_bright_and_bright_pins_are_lit_ones() {
+        assert_eq!(aux_bright(Aux::Red), aux_pin(Aux::Red));
+        for colour in [Aux::Off, Aux::Blue, Aux::Yellow, Aux::White] {
+            assert_eq!(aux_bright(colour), 0, "{colour:?}");
         }
     }
 

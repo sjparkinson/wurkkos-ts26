@@ -222,7 +222,7 @@ pub fn init() {
     }
 
     // PORTB's OUT is zero because `hold_enable_low` cleared it. PORTC's is as
-    // reset left it, zero, and nothing in here ever writes it. So these all
+    // reset left it, zero, and only `set_aux` writes it, later. So these all
     // come up low, with the boost converter off and the aux LEDs dark.
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
     write(reg::VPORTC_DIR, PORTC_OUTPUTS);
@@ -600,22 +600,27 @@ pub fn fuses() -> Fuses {
     }
 }
 
-/// Lights the aux channels for `colour`, dimly, or none. Safe to call every
-/// tick.
+/// Lights the aux channels for `colour`, dimly or brightly as
+/// `board::aux_bright` says, or none. Safe to call every tick.
 ///
 /// PC1 to PC3 have only on and off, so dim comes from the pin's pull-up. Each
-/// lit channel is an input with its pull-up on, and the trickle through the
-/// pull-up is the low setting. The others are
-/// outputs at the 0 in OUT, which holds them dark. That this is what the stock
-/// firmware's low aux setting does on this board is likely, and nobody's
-/// measured it here.
+/// dim channel is an input with its pull-up on, and the trickle through the
+/// pull-up is the low setting. A bright one is an output driven high by a 1
+/// in OUT, and the dark ones are outputs at a 0. That these are what the
+/// stock firmware's low and high aux settings do on this board is likely, and
+/// nobody's measured either here.
+///
+/// OUT goes first, so a channel going dark is never left driven high as an
+/// output on its way there.
 pub fn set_aux(colour: Aux) {
     let lit = board::aux_pin(colour);
-    write(reg::VPORTC_DIR, PORTC_OUTPUTS & !lit);
+    let dim = lit & !board::aux_bright(colour);
+    write(reg::VPORTC_OUT, board::aux_bright(colour));
+    write(reg::VPORTC_DIR, PORTC_OUTPUTS & !dim);
     // Each mask is computed in `board::AUX`, so release builds, which check
     // shifts for overflow, have nothing to check at run time.
     for &(pin, mask) in &board::AUX {
-        let ctrl = if lit & mask != 0 {
+        let ctrl = if dim & mask != 0 {
             regs::PORT_PULLUPEN
         } else {
             0
