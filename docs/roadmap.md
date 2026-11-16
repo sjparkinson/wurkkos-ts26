@@ -45,7 +45,7 @@ What covers each hazard, and how well, is in [safety.md](safety.md). These are t
 - [x] A ramp, using PWM plus delta-sigma on TCA0 for a smooth low end, the way the stock firmware does it on this board. Firmware only, on this firmware's own curve
 - [x] The RGB aux LEDs on PC1 to PC3. Firmware only
 - ~~Remember the level in RAM~~ Struck. Every click on starts at level 52, and there's no turbo (docs/ui.md)
-- [x] A simpler UI. 1C on and off, 1H and 2H ramp, 3C lockout that never lights, and yellow or white on the aux for a flat cell or a fault. Firmware only
+- [x] A simpler UI. 1C on and off, 1H ramps each time the other way from the last, 3C lockout that never lights, and yellow or white on the aux for a flat cell or a fault. Firmware only
 - [x] A simulator. `cargo xtask hex` runs the firmware on a fake chip, and `cargo xtask simulate` runs the UI in a terminal. It finds mistakes and proves nothing
 - ~~Battery check~~ Struck. No magic flashes, so no 3C voltage blink (docs/ui.md)
 

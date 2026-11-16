@@ -652,6 +652,8 @@ mod tests {
         mode: Mode,
         /// The level asked for while on.
         asked: u8,
+        /// Whether the last 1H since the click on ramped up.
+        up: bool,
         /// The tick the aux stops showing yellow or white.
         dark_at: u32,
     }
@@ -662,16 +664,18 @@ mod tests {
                 (Mode::Off, Event::Click(1)) => {
                     self.mode = Mode::On;
                     self.asked = ON_LEVEL;
+                    self.up = false;
                 }
                 (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
                 (Mode::Lockout, Event::Click(3)) | (Mode::On, Event::Click(1)) => {
                     self.mode = Mode::Off;
                 }
-                (Mode::On, Event::Hold { clicks: 0, .. }) => {
-                    self.asked = (self.asked + 1).min(CEILING);
-                }
-                (Mode::On, Event::Hold { clicks: 1, .. }) => {
-                    self.asked = (self.asked - 1).max(ui::FLOOR);
+                (Mode::On, Event::Hold { clicks: 0, ticks }) => {
+                    self.up ^= ticks == 0;
+                    self.asked = match self.up {
+                        true => (self.asked + 1).min(CEILING),
+                        false => (self.asked - 1).max(ui::FLOOR),
+                    };
                 }
                 _ => {}
             }
@@ -720,6 +724,7 @@ mod tests {
         let mut model = Model {
             mode: Mode::Off,
             asked: 0,
+            up: false,
             dark_at: if failed { SHOW_TICKS.into() } else { 0 },
         };
         let (mut pressed, mut switch_left) = (false, 0);

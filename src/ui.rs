@@ -48,6 +48,9 @@ pub struct Ui {
     mode: Mode,
     /// The level it's at while on. Every click on starts it at [`ON_LEVEL`].
     level: u8,
+    /// Whether the last 1H ramped up. Each 1H goes the other way, and every
+    /// click on clears it, so the first 1H goes up.
+    up: bool,
 }
 
 impl Default for Ui {
@@ -61,6 +64,7 @@ impl Ui {
         Self {
             mode: Mode::Off,
             level: ON_LEVEL,
+            up: false,
         }
     }
 
@@ -90,15 +94,20 @@ impl Ui {
             (Mode::Off, Event::Click(1)) => {
                 self.mode = Mode::On;
                 self.level = ON_LEVEL;
+                self.up = false;
             }
             (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
 
             (Mode::On, Event::Click(1)) => self.off(),
-            (Mode::On, Event::Hold { clicks: 0, .. }) => {
-                self.level = self.level.saturating_add(1).min(CEILING);
-            }
-            (Mode::On, Event::Hold { clicks: 1, .. }) => {
-                self.level = self.level.saturating_sub(1).max(FLOOR);
+            (Mode::On, Event::Hold { clicks: 0, ticks }) => {
+                if ticks == 0 {
+                    self.up = !self.up;
+                }
+                self.level = if self.up {
+                    self.level.saturating_add(1).min(CEILING)
+                } else {
+                    self.level.saturating_sub(1).max(FLOOR)
+                };
             }
 
             (Mode::Lockout, Event::Click(3)) => self.mode = Mode::Off,
@@ -187,8 +196,41 @@ mod tests {
         ui.handle(Event::Click(1));
         hold_for(&mut ui, 0, 500);
         assert_eq!(ui.output_level(), CEILING);
-        hold_for(&mut ui, 1, 500);
+        hold_for(&mut ui, 0, 500);
         assert_eq!(ui.output_level(), FLOOR);
+    }
+
+    #[test]
+    fn each_1h_ramps_the_other_way_from_the_last() {
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        hold_for(&mut ui, 0, 10);
+        assert_eq!(ui.output_level(), ON_LEVEL + 10);
+        hold_for(&mut ui, 0, 4);
+        assert_eq!(ui.output_level(), ON_LEVEL + 6);
+        hold_for(&mut ui, 0, 2);
+        assert_eq!(ui.output_level(), ON_LEVEL + 8);
+    }
+
+    #[test]
+    fn the_first_1h_after_a_click_on_goes_up() {
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        hold_for(&mut ui, 0, 10);
+        ui.handle(Event::Click(1));
+        ui.handle(Event::Click(1));
+        hold_for(&mut ui, 0, 3);
+        assert_eq!(ui.output_level(), ON_LEVEL + 3);
+    }
+
+    #[test]
+    fn a_2h_does_nothing_while_on_and_does_not_count_as_a_1h() {
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        hold_for(&mut ui, 1, 100);
+        assert_eq!(ui.output_level(), ON_LEVEL);
+        hold_for(&mut ui, 0, 3);
+        assert_eq!(ui.output_level(), ON_LEVEL + 3);
     }
 
     #[test]
