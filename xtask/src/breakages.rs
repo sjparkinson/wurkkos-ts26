@@ -145,6 +145,16 @@ const BREAKAGES: &[Breakage] = &[
         stage: Stage::Simulator,
         expect: "with the delta-sigma's sum at",
     },
+    // Every BOTTOM raises the overflow flag, light on or off, so turning on
+    // clears it before the interrupt goes on.
+    Breakage {
+        name: "stale-overflow-flag",
+        file: HW,
+        find: "            write(reg::TCA0_INTFLAGS, regs::TCA_OVF);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "with INTFLAGS.OVF still up from before",
+    },
     Breakage {
         name: "pb2-pull-up",
         file: HW,

@@ -39,6 +39,9 @@
 //!   loop only changes the level's two bytes with SREG.I clear or the
 //!   overflow off, so the handler never sees half a change, and the sum has
 //!   to be 0 whenever the overflow interrupt is turned on.
+//! - BOTTOM raises INTFLAGS.OVF with the interrupt off too, and the request
+//!   is the flag and the enable together (§20.3.5, §20.5.11), so turning the
+//!   overflow interrupt on wants the flag cleared since it was last off.
 //! - A handler gives back every register, SREG and SP as it found them, and
 //!   has to fit in a PWM cycle even if every instruction took four clocks.
 //! - PB2 is only ever an output with PORTB's other bits clear. It may not go
@@ -1577,6 +1580,8 @@ struct Tca {
     next_bottom: u64,
     /// INTFLAGS.OVF.
     ovf: bool,
+    /// Whether INTFLAGS.OVF has been cleared since INTCTRL.OVF was last off.
+    ovf_cleared: bool,
     /// BOTTOMs in a row with PB2 high and the live compare at 0.
     zero_run: u32,
     /// The live compare at the last `DSM_WINDOW` BOTTOMs, oldest at `at`.
@@ -1681,6 +1686,7 @@ impl Chip {
                 temp: None,
                 next_bottom: 0,
                 ovf: false,
+                ovf_cleared: false,
                 zero_run: 0,
                 recent: [0; DSM_WINDOW],
                 at: 0,
@@ -2722,7 +2728,27 @@ impl Bus for Chip {
                     self.io[DSM_SUM]
                 ));
             }
+            // The request is the flag and the enable together (§20.3.5), and
+            // BOTTOM sets the flag whether the interrupt's on or not, so one
+            // left up from while the light was off fires at once. One that
+            // went up after the clear is a real BOTTOM, and fine.
+            reg::TCA0_INTCTRL
+                if value & TCA_OVF != 0
+                    && self.io[a] & TCA_OVF == 0
+                    && self.tca.ovf
+                    && !self.tca.ovf_cleared =>
+            {
+                return Err(
+                    "turns TCA0's overflow interrupt on with INTFLAGS.OVF still up from \
+                     before, so the handler runs at once rather than at the next BOTTOM \
+                     (section 20.3.5)"
+                        .into(),
+                );
+            }
             reg::TCA0_INTCTRL | reg::RTC_PITINTCTRL => {
+                if a == reg::TCA0_INTCTRL && value & TCA_OVF == 0 {
+                    self.tca.ovf_cleared = false;
+                }
                 self.io[a] = value;
                 self.update_enabled();
             }
@@ -2740,6 +2766,7 @@ impl Bus for Chip {
             reg::TCA0_INTFLAGS => {
                 if value & TCA_OVF != 0 {
                     self.tca.ovf = false;
+                    self.tca.ovf_cleared = true;
                 }
             }
             reg::RTC_PITCTRLA => {
@@ -3063,6 +3090,13 @@ mod tests {
         chip
     }
 
+    /// Turns TCA0's overflow interrupt on as `set_output` does, clearing the
+    /// flag every BOTTOM's been raising first.
+    fn overflow_on(chip: &mut Chip) {
+        chip.write(reg::TCA0_INTFLAGS as u16, TCA_OVF).unwrap();
+        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+    }
+
     fn wide(chip: &mut Chip, low: usize, value: u16) -> Result<(), String> {
         let [lo, hi] = value.to_le_bytes();
         chip.write(low as u16, lo)?;
@@ -3110,7 +3144,7 @@ mod tests {
     #[test]
     fn a_dsm_gap_is_fine_but_a_longer_zero_duty_is_not() {
         let mut chip = running();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         chip.write(reg::VPORTB_OUT as u16, ENABLE).unwrap();
         cycles(&mut chip, u64::from(ZERO_DUTY_CYCLES)).unwrap();
         let err = cycles(&mut chip, 1).unwrap_err();
@@ -3120,7 +3154,7 @@ mod tests {
     #[test]
     fn dropping_the_enable_ends_a_zero_duty_run() {
         let mut chip = running();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         chip.write(reg::VPORTB_OUT as u16, ENABLE).unwrap();
         cycles(&mut chip, u64::from(ZERO_DUTY_CYCLES)).unwrap();
         chip.write(reg::VPORTB_OUT as u16, 0).unwrap();
@@ -3308,7 +3342,7 @@ mod tests {
     #[test]
     fn the_level_only_changes_where_the_handler_cant_see_half_of_it() {
         let mut chip = running();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         for a in [DSM_DUTY, DSM_FRACTION] {
             chip.interrupts_on = true;
             let err = chip.write(a as u16, 1).unwrap_err();
@@ -3326,19 +3360,38 @@ mod tests {
     }
 
     #[test]
+    fn the_overflow_goes_on_with_its_flag_cleared_first() {
+        // `running` is past a BOTTOM, so the flag's up.
+        let mut chip = running();
+        let err = chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap_err();
+        assert!(err.contains("still up from before"), "{err}");
+        overflow_on(&mut chip);
+        // Off again, and another BOTTOM puts the flag back up.
+        chip.write(reg::TCA0_INTCTRL as u16, 0).unwrap();
+        cycles(&mut chip, 1).unwrap();
+        let err = chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap_err();
+        assert!(err.contains("still up from before"), "{err}");
+        // A BOTTOM between the clear and the enable is a real one.
+        chip.write(reg::TCA0_INTFLAGS as u16, TCA_OVF).unwrap();
+        cycles(&mut chip, 1).unwrap();
+        assert!(chip.tca.ovf);
+        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+    }
+
+    #[test]
     fn the_delta_sigma_starts_from_nothing_each_time() {
         let mut chip = running();
         chip.write(DSM_SUM as u16, 5).unwrap();
         let err = chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap_err();
         assert!(err.contains("sum at 5"), "{err}");
         chip.write(DSM_SUM as u16, 0).unwrap();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
     }
 
     #[test]
     fn idle_with_the_light_on_is_fine_and_wakes_on_the_overflow() {
         let mut chip = running();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         chip.tca.ovf = false;
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_IDLE | SLPCTRL_SEN)
             .unwrap();
@@ -3372,7 +3425,7 @@ mod tests {
         assert!(chip.down);
 
         // With one enabled, it's an ordinary sleep.
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         assert_eq!(chip.sleep(), Ok(true));
         assert!(!chip.down);
     }
@@ -3426,7 +3479,7 @@ mod tests {
     fn tca0_alone_cant_wake_it_from_power_down() {
         let mut chip = running();
         chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
-        chip.write(reg::TCA0_INTCTRL as u16, TCA_OVF).unwrap();
+        overflow_on(&mut chip);
         chip.pit_busy = 0;
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_POWER_DOWN | SLPCTRL_SEN)
             .unwrap();
