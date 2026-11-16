@@ -123,7 +123,7 @@ Register addresses and bit values in `src/regs.rs` are generated from Microchip'
 
 Four emitters, either Nichia 519A (5000 K, high CRI) or LatticePower TN3535 (1Lumen measured 6,422 K and Ra 69.7 at turbo). IPX8, magnetic tail, USB-C under a rubber flap, reverse polarity protection (reviewers' statements).
 
-Eight RGB aux emitters sit on a separate board behind the optic (EDC Tips), on PC1 to PC3 as three on/off channels ("aux RGB passive" in the hardware definition). Likely. With aux on, 1Lumen measured 0.22 mA (low, red), 5.4 mA (high, red) and 7.4 mA (high, purple). Nobody's published the drain with the aux off.
+Eight RGB aux emitters sit on a separate board behind the optic (EDC Tips), on PC1 to PC3 as three on/off channels ("aux RGB passive" in the hardware definition). On one TS26, PC1 lit blue and PC3 red, each dimly through the pin's pull-up (row 4.6 of [breakout.md](breakout.md#results)). Confirmed on that one board. Green on PC2 is still likely, and unseen. With aux on, 1Lumen measured 0.22 mA (low, red), 5.4 mA (high, red) and 7.4 mA (high, purple). Nobody's published the drain with the aux off.
 
 The button LED is separate. It's green while charging, solid green when full and blue for a few seconds after unplugging (EDC Tips). The hardware definition gives it no MCU pin, so the charger probably drives it, and "no button LED A" in the header probably means the same. Likely.
 
