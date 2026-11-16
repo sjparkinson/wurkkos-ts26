@@ -1077,7 +1077,10 @@ pub(crate) mod tests {
     /// numbers in the datasheet's UPDI chapter and pymcuprog's
     /// `constants.py`. None of them are in the ATDF, and the fake chip
     /// decodes most with these same names, so a slip in one would pass every
-    /// other test.
+    /// other test. Each has been read against DS40002204A: SYNCH in §33.3.1.3,
+    /// ACK in figure 33-4, the opcodes in figure 33-8, the addresses in §33.4,
+    /// the bits in §33.5.3 to §33.5.9, the reset signature in §33.5.6, and the
+    /// key and its order, least significant byte first, in table 33-5.
     #[test]
     fn updi_registers_and_instructions_are_the_datasheets() {
         assert_eq!(SYNC, 0x55, "SYNCH");
@@ -1324,7 +1327,10 @@ pub(crate) mod tests {
     }
 
     /// What the tests above rest on: the fake loses whatever's sent while
-    /// it's busy, so a programmer that doesn't wait can't pass them.
+    /// it's busy, so a programmer that doesn't wait can't pass them. The
+    /// datasheet only says to check the busy flags before a command
+    /// (DS40002204A §9.3.2.4), not what a real chip does with one that
+    /// comes early, so losing it is the strict reading rather than a fact.
     #[test]
     fn the_fake_chip_loses_what_is_sent_while_it_is_busy() {
         let mut tiny = Tiny::new();
@@ -1500,9 +1506,12 @@ pub(crate) mod tests {
             pub busy_polls: usize,
             /// NVM commands and page buffer bytes that arrived while the
             /// controller was busy. pymcuprog waits for the busy flags to
-            /// clear before each command, and what a real chip does with
-            /// one sent early is unconfirmed. This one drops them, so the
-            /// memory ends up wrong, and counts them here.
+            /// clear before each command, and so does the datasheet's
+            /// procedure (DS40002204A §9.3.2.4). It never says what a real
+            /// chip does with one sent early. The only writes it says are
+            /// rejected are those in the time after a power-on reset
+            /// (§9.3.2.5). This one drops them, so the memory ends up wrong,
+            /// and counts them here.
             pub lost_while_busy: usize,
             /// Which commit of the page buffer fails with WRERROR, counting
             /// page writes and page erase-writes together from 0. The page
@@ -1803,9 +1812,10 @@ pub(crate) mod tests {
                     self.lost_while_busy += 1;
                     return;
                 }
-                // WRERROR is about the last operation, so the next one
-                // starts without it. Which commands clear it on a real chip
-                // is unconfirmed.
+                // WRERROR "is valid for the last operation" (DS40002204A
+                // §9.5.3), so the next one starts without it. The datasheet
+                // says nothing more about what clears it, so which commands
+                // do on a real chip is unconfirmed.
                 self.write_error = false;
                 match command {
                     NVM_PAGE_BUFFER_CLEAR => {
