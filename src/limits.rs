@@ -627,8 +627,7 @@ mod tests {
         assert_eq!(limits.health(), Health::Fault);
     }
 
-    /// A known gap (docs/safety.md H3, H12), pinned so that closing it has to
-    /// change this test.
+    /// A known gap, pinned so that closing it has to change this test.
     #[test]
     fn a_plausible_voltage_that_never_changes_keeps_the_light_on() {
         let mut run = Run::new();
@@ -643,8 +642,7 @@ mod tests {
         assert_eq!(run.offs, 0);
     }
 
-    /// A known gap (docs/safety.md H4), pinned so that closing it has to
-    /// change this test.
+    /// A known gap, pinned so that closing it has to change this test.
     #[test]
     fn a_plausible_temperature_that_never_changes_never_steps_down() {
         let mut run = Run::new();

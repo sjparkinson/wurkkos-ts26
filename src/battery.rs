@@ -62,8 +62,7 @@ const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(u16_from(CYCLE_TICKS)));
 /// Unmeasured.
 pub const STEP_DOWN_BELOW: u16 = 300;
 
-/// The stock firmware's default. Wurkkos quotes 2.8 V, but with an
-/// unprotected cell the higher figure is the one to have. Unmeasured.
+/// The stock firmware's default. Unmeasured.
 pub const OFF_BELOW: u16 = 290;
 
 /// Unmeasured.
