@@ -1,7 +1,8 @@
 //! Test doubles shared by the library's own tests and xtask's simulators.
 //!
 //! So there's one fake ADC, one torch wired to it, one way of turning a
-//! voltage or a temperature into a raw reading, and one reader of docs/ui.md.
+//! voltage or a temperature into a raw reading, and one list of what the
+//! torch does ([`EXAMPLES`]).
 //!
 //! The firmware never sees it.
 //!
@@ -22,27 +23,15 @@
 //! a torch whose power-on checks failed, so it has to come before anything
 //! that takes time. So does `flash:corrupt`, a byte of flash that doesn't
 //! match its CRC.
-//!
-//! # docs/ui.md
-//!
-//! Every table with an Action column needs an Example column, and every row
-//! in it an example unless its Status is Planned. Each is a script, then how
-//! the light should be on its last tick, starting from a torch that's just had
-//! its battery put in.
-//!
-//! ```text
-//! | Action | Does | Example         | Status |
-//! |--------|------|-----------------|--------|
-//! | 1C     | On   | `1C` → level 50 | Done   |
-//! ```
-//!
-//! [`examples`] reads them. `cargo test` plays each on [`Rig`], and
-//! `cargo xtask hex` plays each on the firmware too.
+
+mod examples;
+
+pub use examples::{EXAMPLES, Example, Expect, example};
 
 use core::fmt;
 use core::iter;
 use core::ops::Deref;
-use core::str::{FromStr, Lines};
+use core::str::FromStr;
 
 use crate::TICKS_PER_SECOND;
 use crate::battery;
@@ -541,214 +530,6 @@ impl Deref for Rig {
     }
 }
 
-/// How the light should be at the end of an example.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Expect {
-    Off,
-    /// At any level.
-    On,
-    Level(u8),
-}
-
-impl Expect {
-    pub const fn holds(self, level: u8) -> bool {
-        match self {
-            Self::Off => level == 0,
-            Self::On => level > 0,
-            Self::Level(want) => level == want,
-        }
-    }
-}
-
-impl FromStr for Expect {
-    type Err = ();
-
-    /// `off`, `on` or `level 50`.
-    fn from_str(text: &str) -> Result<Self, ()> {
-        match text {
-            "off" => Ok(Self::Off),
-            "on" => Ok(Self::On),
-            _ => {
-                let level = text.strip_prefix("level ").ok_or(())?;
-                level.parse().map(Self::Level).map_err(drop)
-            }
-        }
-    }
-}
-
-/// Which row of docs/ui.md, by its section and its Action (or When) cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Row<'a> {
-    pub section: &'a str,
-    pub action: &'a str,
-}
-
-impl fmt::Display for Row<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.section, self.action)
-    }
-}
-
-/// A row's example, a script and how the light should be on its last tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Example<'a> {
-    /// The line it's on, counting from 1.
-    pub line: usize,
-    pub row: Row<'a>,
-    /// The script, which [`examples`] has already read once.
-    pub script: &'a str,
-    pub expect: Expect,
-}
-
-impl<'a> Example<'a> {
-    pub fn actions(&self) -> impl Iterator<Item = Action> + use<'a> {
-        parse(self.script.split_whitespace())
-            .map(|action| action.expect("examples read it when it found the row"))
-    }
-}
-
-/// A line of docs/ui.md that isn't what [`examples`] expects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpecError<'a> {
-    /// The line, counting from 1.
-    pub line: usize,
-    pub problem: Problem<'a>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Problem<'a> {
-    /// A table with an Action column and no Example column.
-    NoExampleColumn,
-    /// A row that isn't Planned with no example.
-    NoExample(Row<'a>),
-    /// An example that isn't `` `script` → off ``, `on` or `level N`.
-    Shape(Row<'a>, &'a str),
-    /// A script with a word it can't read.
-    Script(Row<'a>, ScriptError<'a>),
-    /// A row with a different number of cells from its header, most likely
-    /// two rows run together, whose second example would go unread.
-    Cells { found: usize, header: usize },
-}
-
-impl fmt::Display for SpecError<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.problem {
-            Problem::NoExampleColumn => f.write_str("this table of actions has no Example column"),
-            Problem::NoExample(row) => write!(f, "{row} has no example"),
-            Problem::Shape(row, example) => write!(
-                f,
-                "{row}: expected `script` → off, on or level N, not {example:?}"
-            ),
-            Problem::Script(row, error) => write!(f, "{row}: {error}"),
-            Problem::Cells { found, header } => {
-                write!(f, "this row has {found} cells and its header has {header}")
-            }
-        }
-    }
-}
-
-/// Every example in a UI spec written like docs/ui.md, in order, or where
-/// it isn't.
-pub fn examples(markdown: &str) -> Examples<'_> {
-    Examples {
-        lines: markdown.lines().enumerate(),
-        section: "",
-        header: None,
-    }
-}
-
-/// The iterator [`examples`] returns.
-#[derive(Clone, Debug)]
-pub struct Examples<'a> {
-    lines: iter::Enumerate<Lines<'a>>,
-    section: &'a str,
-    /// The header of the table being read, if any.
-    header: Option<&'a str>,
-}
-
-impl<'a> Iterator for Examples<'a> {
-    type Item = Result<Example<'a>, SpecError<'a>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        for (number, text) in self.lines.by_ref() {
-            let line = number + 1;
-            let fail = |problem| Some(Err(SpecError { line, problem }));
-            let Some(cells) = text.trim().strip_prefix('|') else {
-                self.header = None;
-                if let Some(heading) = text.strip_prefix("## ") {
-                    self.section = heading.trim();
-                }
-                continue;
-            };
-            let Some(header) = self.header else {
-                if has(cells, "Action") && !has(cells, "Example") {
-                    return fail(Problem::NoExampleColumn);
-                }
-                self.header = Some(cells);
-                continue;
-            };
-            if split(cells).all(|c| c.starts_with('-') || c.starts_with(':')) {
-                continue;
-            }
-            let (found, header_cells) = (split(cells).count(), split(header).count());
-            if found != header_cells {
-                return fail(Problem::Cells {
-                    found,
-                    header: header_cells,
-                });
-            }
-            let cell = |name| {
-                let column = split(header).position(|c| c == name)?;
-                split(cells).nth(column)
-            };
-            let Some(example) = cell("Example") else {
-                continue;
-            };
-            let row = Row {
-                section: self.section,
-                action: cell("Action").or_else(|| cell("When")).unwrap_or("?"),
-            };
-            if example.is_empty() || example == "-" {
-                if cell("Status") == Some("Planned") {
-                    continue;
-                }
-                return fail(Problem::NoExample(row));
-            }
-            let Some((script, expect)) = read(example) else {
-                return fail(Problem::Shape(row, example));
-            };
-            if let Some(error) = parse(script.split_whitespace()).find_map(Result::err) {
-                return fail(Problem::Script(row, error));
-            }
-            return Some(Ok(Example {
-                line,
-                row,
-                script,
-                expect,
-            }));
-        }
-        None
-    }
-}
-
-/// A table row's cells, minus the `|` it starts with.
-fn split(cells: &str) -> impl Iterator<Item = &str> {
-    cells.trim_end_matches('|').split('|').map(str::trim)
-}
-
-fn has(cells: &str, name: &str) -> bool {
-    split(cells).any(|c| c == name)
-}
-
-/// `` `1C 2H` → off `` as the script and what to expect.
-fn read(example: &str) -> Option<(&str, Expect)> {
-    let (script, expect) = example.split_once('→')?;
-    let script = script.trim().strip_prefix('`')?.strip_suffix('`')?;
-    // At least one word.
-    script.split_whitespace().next()?;
-    Some((script, expect.trim().parse().ok()?))
-}
-
 /// A small, fixed-seed random number generator (xorshift32), so tests can
 /// throw varied readings at the firmware's logic and still fail the same way
 /// every time. It's no good for anything else.
@@ -777,7 +558,6 @@ mod tests {
 
     use super::*;
     use std::collections::BTreeSet;
-    use std::string::ToString;
 
     #[test]
     fn the_rng_doesnt_get_stuck_at_zero() {
@@ -989,7 +769,7 @@ mod tests {
         assert_eq!(word("cell:4V"), Ok(Action::Cell(400)));
     }
 
-    /// docs/ui.md's rows for a cell the firmware can't read lean on this.
+    /// The examples for a cell the firmware can't read lean on this.
     /// There's no word for a broken reading, only a cell that can't be real.
     #[test]
     fn a_cell_outside_the_plausible_range_reads_as_one_the_firmware_cant_believe() {
@@ -1064,95 +844,5 @@ mod tests {
         let rig = Rig::play(parse(["fault", "1C"]).map(Result::unwrap));
         assert_eq!(rig.level(), 0);
         assert_eq!(rig.torch.aux(), crate::ui::Aux::White);
-    }
-
-    const SPEC: &str = "\
-## Off
-
-| Action | Does | Example | Status |
-|---|---|---|---|
-| 1C | On | `1C` → level 50 | Done |
-| 2C | Nothing | `2C 1H:2s` → off | Done |
-| 3C | Battery | - | Planned |
-
-## Background
-
-| What | Does | Status |
-|---|---|---|
-| Sleep | Sleeps | Planned |
-";
-
-    fn problem(spec: &str) -> Option<SpecError<'_>> {
-        examples(spec).find_map(Result::err)
-    }
-
-    #[test]
-    fn reads_examples_from_tables_with_an_example_column() {
-        let mut examples = examples(SPEC).map(Result::unwrap);
-        let first = examples.next().unwrap();
-        assert_eq!((first.line, first.row.to_string()), (5, "Off: 1C".into()));
-        assert!(first.actions().eq([Action::Clicks(1)]));
-        assert_eq!(first.expect, Expect::Level(50));
-        let second = examples.next().unwrap();
-        assert_eq!(second.row.to_string(), "Off: 2C");
-        assert_eq!(second.script, "2C 1H:2s");
-        assert_eq!(second.expect, Expect::Off);
-        assert_eq!(examples.next(), None);
-    }
-
-    #[test]
-    fn refuses_a_done_row_without_an_example() {
-        let spec = SPEC.replace("| 2C | Nothing | `2C 1H:2s` → off |", "| 2C | Nothing | |");
-        let error = problem(&spec).unwrap();
-        assert_eq!(error.line, 6);
-        assert_eq!(error.to_string(), "Off: 2C has no example");
-    }
-
-    #[test]
-    fn refuses_two_rows_run_together() {
-        let spec = SPEC.replace(
-            "| 2C | Nothing | `2C 1H:2s` → off |",
-            "| 2C | Nothing | `2C 1H:2s` → off | 3C | Nothing | `3C` → off |",
-        );
-        let error = problem(&spec).unwrap();
-        assert_eq!(error.line, 6);
-        assert_eq!(
-            error.problem,
-            Problem::Cells {
-                found: 7,
-                header: 4
-            }
-        );
-    }
-
-    #[test]
-    fn refuses_a_table_of_actions_without_examples() {
-        let spec = "| Action | Does | Status |\n|---|---|---|\n| 1C | On | Done |\n";
-        let error = problem(spec).unwrap();
-        assert_eq!((error.line, error.problem), (1, Problem::NoExampleColumn));
-    }
-
-    #[test]
-    fn refuses_examples_it_cant_read() {
-        for example in [
-            "1C → on",
-            "`1C` → bright",
-            "`1C` on",
-            "`` → on",
-            "`1C` → level fifty",
-        ] {
-            assert_eq!(read(example), None, "{example:?} read");
-        }
-        let spec = SPEC.replace("`1C` → level 50", "`1X` → on");
-        let error = problem(&spec).unwrap();
-        assert!(matches!(error.problem, Problem::Script(..)), "{error}");
-        assert!(error.to_string().starts_with("Off: 1C: `1X`: "), "{error}");
-    }
-
-    #[test]
-    fn checks_the_light() {
-        assert!(Expect::Off.holds(0) && !Expect::Off.holds(1));
-        assert!(Expect::On.holds(150) && !Expect::On.holds(0));
-        assert!(Expect::Level(50).holds(50) && !Expect::Level(50).holds(51));
     }
 }

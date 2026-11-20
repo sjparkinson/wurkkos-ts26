@@ -1,4 +1,5 @@
-//! What each click and hold does. docs/ui.md is the spec; keep them in step.
+//! What each click and hold does. `testing::EXAMPLES` is the spec; keep
+//! them in step.
 
 use crate::button::Event;
 use crate::ramp::CEILING;

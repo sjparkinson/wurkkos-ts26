@@ -18,7 +18,6 @@ mod lints;
 mod serial;
 mod sim;
 mod simulate;
-mod spec;
 mod stamp;
 mod switching;
 mod terminal;
@@ -41,7 +40,7 @@ commands:
   hex                     build the firmware, run it on the simulator, write
                           target/wurkkos-ts26-0721.hex and print flash, RAM,
                           stack, loop and handler use
-  hex --no-examples       the same, leaving docs/ui.md's examples out of the
+  hex --no-examples       the same, leaving the UI examples out of the
                           simulator run, for a breakout test build (T1, T5)
   breakages [name...]     check hex refuses copies of the firmware, each broken on
                           purpose in one way, and leave the checkout alone

@@ -8,8 +8,8 @@
 //! cargo xtask simulate 1C 2H:1.5s wait:1s 3C
 //! ```
 //!
-//! `ts26::testing` reads the script, the same reader the library's tests of
-//! docs/ui.md use, and says what each word means. On the simulated chip,
+//! `ts26::testing` reads the script, the same reader `testing::EXAMPLES`
+//! uses, and says what each word means. On the simulated chip,
 //! `fault` is a fuse that fails the read-back.
 //!
 //! With no script it runs live in the terminal, in real time, with the keys

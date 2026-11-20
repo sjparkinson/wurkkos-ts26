@@ -240,11 +240,9 @@ mod tests {
     use crate::button::{HOLD_TICKS, RELEASE_TICKS};
     use crate::ramp::CEILING;
     use crate::sensors::Channel;
-    use crate::testing::{Rig, Rng, examples, temperature_reading, voltage_reading};
+    use crate::testing::{EXAMPLES, Rig, Rng, example, temperature_reading, voltage_reading};
     use crate::thermal;
     use crate::ui::{self, Mode, ON_LEVEL};
-
-    const UI_MD: &str = include_str!("../docs/ui.md");
 
     fn dim() -> Output {
         ramp::output(ON_LEVEL)
@@ -279,21 +277,16 @@ mod tests {
     /// Every row's example, played the way `cargo xtask simulate` and the
     /// firmware's run in `cargo xtask hex` play it.
     #[test]
-    fn every_example_in_docs_ui_md_holds() {
-        let mut found = false;
-        for example in examples(UI_MD) {
-            let example = example.unwrap_or_else(|e| panic!("docs/ui.md:{}: {e}", e.line));
+    fn every_example_holds() {
+        for example in EXAMPLES {
             let level = Rig::play(example.actions()).level();
             assert!(
                 example.expect.holds(level),
-                "docs/ui.md:{}: {}: expected {:?}, but it ends at level {level}",
-                example.line,
-                example.row,
+                "{}: expected {:?}, but it ends at level {level}",
+                example.name,
                 example.expect
             );
-            found = true;
         }
-        assert!(found, "docs/ui.md has no examples");
     }
 
     #[test]
@@ -678,10 +671,10 @@ mod tests {
         }
     }
 
-    /// The rows of docs/ui.md about the cell at rest only say how the light
-    /// ends up. This holds them to the aux they describe as well.
+    /// The examples about the cell at rest only say how the light ends up.
+    /// This holds them to the aux their comments describe as well.
     #[test]
-    fn the_rest_rows_in_docs_ui_md_end_on_the_aux_they_describe() {
+    fn the_rest_examples_end_on_the_aux_they_describe() {
         let rows = [
             ("Flat cell, charged, left alone", Aux::Blue),
             ("Low cell, at rest", Aux::Off),
@@ -690,25 +683,13 @@ mod tests {
             ("A cell it can't read, at rest", Aux::Off),
         ];
         for (row, aux) in rows {
-            let example = examples(UI_MD)
-                .map(|example| example.unwrap())
-                .find(|example| example.row.action == row)
-                .unwrap_or_else(|| panic!("no row {row:?}"));
-            let rig = Rig::play(example.actions());
+            let rig = Rig::play(example(row).actions());
             assert_eq!(rig.aux(), aux, "{row}");
             assert_eq!(rig.torch.limits.health(), Health::Good, "{row}");
         }
         // "Low cell, at rest" ends lit, so its dark blue is before the 1C,
         // and after it's clicked off again.
-        let mut low = Rig::play(
-            examples(UI_MD)
-                .find_map(|e| {
-                    let e = e.unwrap();
-                    (e.row.action == "Low cell, at rest").then(|| e.actions())
-                })
-                .unwrap()
-                .take(2),
-        );
+        let mut low = Rig::play(example("Low cell, at rest").actions().take(2));
         assert_eq!(low.aux(), Aux::Off, "dark before the 1C");
         low.adc.voltage = voltage_reading(320);
         click(&mut low);
@@ -717,15 +698,7 @@ mod tests {
         assert_eq!(low.aux(), Aux::Off, "and once it's off again");
         // "A cell it can't read, at rest" ends lit too, so the blue it
         // keeps through the garbage is before the 1C.
-        let garbage = Rig::play(
-            examples(UI_MD)
-                .find_map(|e| {
-                    let e = e.unwrap();
-                    (e.row.action == "A cell it can't read, at rest").then(|| e.actions())
-                })
-                .unwrap()
-                .take(2),
-        );
+        let garbage = Rig::play(example("A cell it can't read, at rest").actions().take(2));
         assert_eq!(garbage.aux(), Aux::Blue, "blue through the garbage");
         assert_eq!(garbage.torch.limits.health(), Health::Good, "no fault yet");
     }
@@ -965,7 +938,7 @@ mod tests {
         assert_eq!(torch.level(), 0);
     }
 
-    /// docs/ui.md says three seconds, so this counts them in ticks of the
+    /// `testing::EXAMPLES` says three seconds, so this counts them in ticks of the
     /// 64 Hz clock rather than in [`SHOW_TICKS`].
     #[test]
     fn the_aux_says_why_for_three_seconds_to_the_tick() {
@@ -1241,7 +1214,7 @@ mod tests {
         }
     }
 
-    /// What docs/ui.md says the clicks and holds that reach the UI have done
+    /// What `testing::EXAMPLES` says the clicks and holds that reach the UI have done
     /// so far, kept apart from `Ui` so the two can be compared.
     #[derive(Debug)]
     struct Model {
@@ -1341,7 +1314,7 @@ mod tests {
 
     /// One torch from power-on, for `ticks` ticks of random switching, cells,
     /// temperatures and ADC results, or until half a minute into a fault,
-    /// checking every tick against docs/ui.md. Returns how many ticks it ran.
+    /// checking every tick against `testing::EXAMPLES`. Returns how many ticks it ran.
     fn live(
         rng: &mut Rng,
         pace: Pace,
@@ -1689,7 +1662,7 @@ mod tests {
     }
 
     /// Two million ticks, about nine hours of torch, and every state in
-    /// docs/ui.md reached along the way.
+    /// `testing::EXAMPLES` reached along the way.
     #[test]
     fn random_switching_and_readings_never_break_a_promise() {
         let mut seen = Seen::default();

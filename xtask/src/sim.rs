@@ -129,7 +129,7 @@
 //! 5. An ADC that never finishes a conversion, from a click to ten seconds
 //!    later, when the light has to be off (`adc_never_answers`). Then twenty
 //!    thousand ticks with the switch held down from the first (`switch_stuck`).
-//! 6. Every example in docs/ui.md (see `spec.rs`), each on a fresh chip.
+//! 6. Every example in `testing::EXAMPLES`, each on a fresh chip.
 //! 7. Twenty thousand ticks of random clicks and holds.
 //! 8. Both of those again with an overflow landing on every instruction the
 //!    main loop reaches (`Sim::land`), each as far as the first run kept
@@ -150,14 +150,13 @@ use ts26::TICKS_PER_SECOND;
 use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
-use ts26::testing::{self, Action, Example, Rig, Sample, Scene};
+use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
 use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, Feeder, TICK_DEADLINE_CYCLES};
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
 use crate::layout::{self, jmp_target, word};
-use crate::spec;
 use crate::stamp;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
@@ -386,7 +385,7 @@ fn symbol(elf: &Elf, name: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("no `{name}` symbol"))
 }
 
-/// Runs every check on the firmware. With `examples` false, docs/ui.md's
+/// Runs every check on the firmware. With `examples` false, the UI
 /// examples are left out, for a test build that's meant to disagree with
 /// them, and the rest still runs.
 pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
@@ -421,11 +420,7 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     .map_err(|e| format!("start-up order: {e}"))?;
     unhandled_interrupt(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
-    let examples = if examples {
-        spec::examples(spec::UI_MD)?
-    } else {
-        Vec::new()
-    };
+    let examples = if examples { EXAMPLES } else { &[] };
     // The clock and stuck-input faults, every example, then the random
     // switching, each example and the switching with and without overflows
     // landing mid-pass. Each is its own chip, so they run side by side,
@@ -501,7 +496,7 @@ fn both_ways(
     Ok(report)
 }
 
-/// One run on a fresh chip, of an example from docs/ui.md or the random
+/// One run on a fresh chip, of a UI example or the random
 /// switching with `None`. `Landing::Until` puts an overflow on every
 /// instruction it reaches (`Sim::land`), which is the race between the
 /// delta-sigma handler and the main loop.
@@ -516,7 +511,7 @@ fn run(
     let mut report = Report::default();
     let result = match example {
         Some(example) => {
-            ui_example(sim, example, &mut report).map_err(|e| format!("{}: {e}", example.row))
+            ui_example(sim, example, &mut report).map_err(|e| format!("{}: {e}", example.name))
         }
         None => against_the_library(sim, &mut report).map_err(|e| format!("random switching: {e}")),
     };
@@ -531,7 +526,7 @@ fn run(
 /// minutes of a torch being clicked and held.
 const RANDOM_TICKS: usize = 20_000;
 
-/// Runs one of docs/ui.md's examples on the firmware and the library in step,
+/// Runs one of the UI examples on the firmware and the library in step,
 /// then checks where the library ended up against the example.
 fn ui_example(mut sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
     // Cut short, it never gets to the end. The level is the library's alone,
@@ -598,7 +593,7 @@ fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 /// A click from off, then ten seconds with the switch alone, then another
 /// click, and the ADC
 /// never finishing a conversion (`Scene::adc_dead`), so `hw::adc_result` only
-/// ever sees RESRDY clear. docs/ui.md's `cell:0V` rows are the same path seen
+/// ever sees RESRDY clear. The `cell:0V` examples are the same path seen
 /// as a garbage reading, where this is silence. The light has to come on,
 /// then fade out within a few seconds as a fault and stay out, the second
 /// click included, the firmware
@@ -4544,15 +4539,12 @@ mod tests {
             format!("with overflows mid-pass: random switching: tick 2: {failed}")
         );
 
-        let example = spec::examples(spec::UI_MD)
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let err = run(&power_on, Some(&example), Landing::Watch)
-            .err()
-            .unwrap();
-        assert!(err.starts_with(&format!("{}: tick ", example.row)), "{err}");
+        let example = &EXAMPLES[0];
+        let err = run(&power_on, Some(example), Landing::Watch).err().unwrap();
+        assert!(
+            err.starts_with(&format!("{}: tick ", example.name)),
+            "{err}"
+        );
     }
 
     /// The forced vector has to be one the firmware leaves unhandled, or the

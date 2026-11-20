@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_press_becomes_a_hold_after_375_ms() {
-        // docs/ui.md promises about 375 ms, which is 24 ticks at 64 Hz.
+        // testing::EXAMPLES promises about 375 ms, which is 24 ticks at 64 Hz.
         assert_eq!(TICKS_PER_SECOND, 64);
         assert_eq!(HOLD_TICKS, 24);
         assert_eq!(
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn clicks_count_after_the_switch_is_left_alone_for_about_220_ms() {
-        // docs/ui.md promises about 220 ms, which is 14 ticks at 64 Hz.
+        // testing::EXAMPLES promises about 220 ms, which is 14 ticks at 64 Hz.
         assert_eq!(RELEASE_TICKS, 14);
         assert_eq!(
             u32::from(RELEASE_TICKS) * 1000 / u32::from(TICKS_PER_SECOND),
@@ -348,7 +348,7 @@ mod tests {
     /// after it.
     type Expected = (Option<Event>, bool);
 
-    /// The decoder as docs/ui.md and the doc comments describe it, worked
+    /// The decoder as `testing::EXAMPLES` and the doc comments describe it, worked
     /// out from whole runs of the switch being down or up rather than a
     /// sample at a time. The runs must alternate.
     ///
