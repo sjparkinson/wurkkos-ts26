@@ -46,9 +46,9 @@ The TS26 code only ever writes `TCA0.SINGLE.CMP0BUF`, never DAC0. Confirmed from
 
 The stock firmware runs TCA0 dual-slope off 10 MHz with TOP 255, about 19.6 kHz, with seven bits of delta-sigma on top stepped once a PWM cycle, so levels are 15-bit (0 to 32640). Its floor is 20 of 32640 ("It won't light up below DSM 10/32640"), and its default smooth floor is level 5, which is 36 in those units, "by request". Confirmed from source. Reviewers saw flicker at the lowest levels, likely the driver at very small currents. Unmeasured.
 
-This firmware's ramp is its own curve over the same range, with the UI between levels 17 and 150. Level 17 is 60 in those units. Levels 5 (24), 11 (30) and 13 (37) all flickered slightly when steady, reached by ramping down or by 1H from off. Likely the driver at very small currents, as on the stock firmware, and unmeasured. Whether level 17 flickers is unmeasured.
+This firmware's ramp is its own curve over the same range, with the UI between levels 17 and 150. Level 17 is 60 in those units. Levels 5 (24), 11 (30) and 13 (37) all flickered slightly when steady, reached by ramping down or by 1H from off. Likely the driver at very small currents, as on the stock firmware, and unmeasured. Level 17 looked steady by eye, unfilmed.
 
-Every turn-on, at the floor and at a brighter level, filmed at 30 fps in the dark, showed a flash in the first frame, then a drop to about 15 to 30 % of the final brightness, then a smooth rise over several hundred milliseconds. The firmware commands one clean step. Likely the converter's loop overshooting at start-up, then the filter between PB0 and the driver charging from zero, and unmeasured. A TCA0 restart at turn-on didn't change it.
+Every turn-on, at the floor and at a brighter level, filmed at 30 fps in the dark, showed a flash in the first frame, then a drop to about 15 to 30 % of the final brightness, then a smooth rise over several hundred milliseconds. The firmware commands one clean step. Likely the converter's loop overshooting at start-up, then the filter between PB0 and the driver charging from zero, and unmeasured. A TCA0 restart at turn-on didn't change it. Running PB0's PWM with PB2 low during the press, so the filter is charged before the enable rises, made it look gone by eye, unfilmed, which fits the filter explanation without proving it.
 
 1Lumen measured 11.30 A at the tail at turbo start, about 40 W from the cell, and turbo falling to about 600 lm after ten minutes. The stock TS26 build has no timed step-down, so that's likely thermal.
 
@@ -103,6 +103,7 @@ The T0 to T5 test builds are kept on branches `build-t0` (`9d3b7dc`), `build-t2`
 - 2026-11-16 to 2026-11-20. T4 left on the torch for several days with no reset or bite reported.
 - 2026-11-17. Main (`1124a7b`) off overnight with dim blue, then 1C lit at once.
 - 2026-11-20. `2e32708` flashed, the first build with the 1 Hz rest. A peek caught it resting with the PIT at 1 Hz, the 8 s watchdog and PB2 low. Presses from rest worked with no reset or fault seen. Off at the tail 0.13 mA, aux state not noted, against T4's 0.12 to 0.14 mA, so any saving is within the meter's reading.
+- 2026-11-20. Floors of level 5, 11 and 13 flickered slightly, and every turn-on bounced. `9cf29a5`, with floor 17 and the filter charged during the press, looked steady with no bounce, by eye.
 - On the breakout, T0's PWM read 19.79 to 19.80 kHz against 19.61 kHz, so its clock ran about 0.9 % fast, and a deliberate hang (T3) made the watchdog bite. Neither has been seen on this torch.
 
 Not measured on this torch yet are PB2 to ground, the pad pitch, the PWM frequency, the battery reading against a meter, current against duty, anything thermal, the low-voltage steps and the top of the ramp.
