@@ -395,7 +395,7 @@ const DEADLINE_CYCLES: u64 = TICK_DEADLINE_CYCLES as u64 * PWM_CYCLE;
 // good.
 const _: () = assert!(4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES);
 
-/// The model's watchdog counts PIT periods, so a slower PIT doesn't move it.
+/// The model's watchdog counts frames, so a slower PIT doesn't move it.
 fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.tick_cycles = SLOWEST_TICK_CYCLES;
     lit(&mut sim, 2 * TICKS_PER_SECOND, report)
