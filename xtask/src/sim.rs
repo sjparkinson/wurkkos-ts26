@@ -120,11 +120,11 @@ const BOOT_BUDGET: u64 = 100_000;
 const TICK_CYCLES: u64 = CLK_PER as u64 / TICKS_PER_SECOND as u64;
 const _: () = assert!(TICK_CYCLES * TICKS_PER_SECOND as u64 == CLK_PER as u64);
 /// No AVRxt instruction takes more than 4 cycles.
-const TICK_BUDGET: u64 = TICK_CYCLES / 4;
+pub const TICK_BUDGET: u64 = TICK_CYCLES / 4;
 const PWM_CYCLE: u64 = 2 * PWM_TOP as u64;
 /// Six in and four for `reti` on a 16 KB part (§13.3.2.3, table 13-1).
 const INTERRUPT_CYCLES: u64 = 10;
-const HANDLER_BUDGET: u64 = (PWM_CYCLE - INTERRUPT_CYCLES) / 4;
+pub const HANDLER_BUDGET: u64 = (PWM_CYCLE - INTERRUPT_CYCLES) / 4;
 /// At the lowest level the delta-sigma only carries into the duty once every
 /// 2^DSM_BITS / DSM_FLOOR cycles, so a duty of 0 for a cycle is normal there.
 const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / DSM_FLOOR as u32 + 1;
@@ -144,12 +144,9 @@ pub struct Report {
     pub stack: u16,
     /// From the runs without overflows landed on purpose.
     pub loop_instructions: u64,
-    pub loop_budget: u64,
     pub off_instructions: u64,
     pub handler_instructions: u64,
-    pub handler_budget: u64,
-    pub landed: u32,
-    pub mid_access: u32,
+    landed: u32,
     last_new: u32,
 }
 
@@ -160,14 +157,12 @@ impl Report {
         self.off_instructions = self.off_instructions.max(run.off_instructions);
         self.handler_instructions = self.handler_instructions.max(run.handler_instructions);
         self.landed += run.landed;
-        self.mid_access += run.mid_access;
     }
 
     fn take(&mut self, sim: &Sim) {
         self.stack = self.stack.max(sim.stack());
         self.handler_instructions = self.handler_instructions.max(sim.longest_handler);
         self.landed += sim.overflows_landed;
-        self.mid_access += sim.mid_access;
         self.last_new = self.last_new.max(sim.last_new);
     }
 }
@@ -269,11 +264,7 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
             .collect()
     });
 
-    let mut report = Report {
-        loop_budget: TICK_BUDGET,
-        handler_budget: HANDLER_BUDGET,
-        ..Report::default()
-    };
+    let mut report = Report::default();
     for run in reports {
         report.merge(&run?);
     }
@@ -894,7 +885,6 @@ struct Sim {
     tick_no: u32,
     last_new: u32,
     overflows_landed: u32,
-    mid_access: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -932,7 +922,6 @@ impl Sim {
             tick_no: 0,
             last_new: 0,
             overflows_landed: 0,
-            mid_access: 0,
         })
     }
 
@@ -1029,7 +1018,6 @@ impl Sim {
                     self.forced = Some(vector);
                 }
                 self.chip.interrupted = self.chip.tca.temp.map(|(low, _)| low);
-                self.mid_access += u32::from(self.chip.interrupted.is_some());
                 self.handler_steps = 0;
                 self.landed = Some(Landed {
                     r: self.cpu.r,

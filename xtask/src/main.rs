@@ -177,7 +177,7 @@ fn hex(examples: bool) -> Result<(), String> {
         row(
             "loop",
             sim.loop_instructions,
-            Some(sim.loop_budget),
+            Some(sim::TICK_BUDGET),
             "instructions per 64 Hz tick"
         )
     );
@@ -186,7 +186,7 @@ fn hex(examples: bool) -> Result<(), String> {
         row(
             "off",
             sim.off_instructions,
-            Some(sim.loop_budget),
+            Some(sim::TICK_BUDGET),
             "instructions per 64 Hz tick"
         )
     );
@@ -195,7 +195,7 @@ fn hex(examples: bool) -> Result<(), String> {
         row(
             "dsm",
             sim.handler_instructions,
-            Some(sim.handler_budget),
+            Some(sim::HANDLER_BUDGET),
             "instructions per PWM cycle"
         )
     );
