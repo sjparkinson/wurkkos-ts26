@@ -58,6 +58,17 @@ pub const EXAMPLES: &[Example] = &[
     ex("Off: 1H, then 1C", "1H 1C", Off),
     ex("Off: 1C, after 1H", "1H 1C 1C", Level(52)),
     ex("Off: Anything else", "2C 2H:2s wait:1s", Off),
+    // At rest it ticks once a second, and a press wakes it to 64 Hz.
+    ex("Rest: 1C", "wait:2s 1C", Level(52)),
+    ex("Rest: 1C, on a rest tick", "wait:1984ms 1C", Level(52)),
+    ex("Rest: 1H", "wait:2s 1H", Level(5)),
+    ex("Rest: 3C", "wait:2s 3C 1C", Off),
+    ex("Rest: 3C, locked", "3C wait:10s 3C 1C", Level(52)),
+    ex(
+        "Rest: 1C, after a check of the cell",
+        "wait:400s 1C",
+        Level(52),
+    ),
     // On. A level a tick. Each 1H reverses the last, and the first goes up.
     ex("On: 1C", "1C 1C", Off),
     ex("On: 1H", "1C 1H:3s", Level(150)),

@@ -37,7 +37,7 @@ use ts26::regs;
 extern "C" fn main() -> ! {
     use ts26::selftest::{self, Faults};
     use ts26::torch::{Changes, Torch};
-    use ts26::watchdog::Feeder;
+    use ts26::watchdog::{Pace, Step};
 
     // First, since PB2 floats from reset until it's an output.
     hw::hold_enable_low();
@@ -54,32 +54,45 @@ extern "C" fn main() -> ! {
     let mut torch = Torch::new(hw::temperature_calibration(), faults);
     let mut output_changes = Changes::new();
     let mut aux_changes = Changes::new();
-    let mut feeder = Feeder::new();
+    let mut pace = Pace::new();
 
     loop {
-        // Most likely a stopped 32 kHz oscillator with the light on, which
-        // stops the watchdog too.
-        if !hw::wait_for_tick(torch.resting()) {
+        let woken = if pace.slow() {
+            !hw::rest()
+        } else if hw::wait_for_tick(torch.resting() && pace.powers_down()) {
+            false
+        } else {
+            // Most likely a stopped 32 kHz oscillator with the light on, which
+            // stops the watchdog too.
             hw::halt();
-        }
+        };
 
-        torch.tick(hw::switch_pressed(), hw::adc_result());
+        let step = if woken {
+            pace.woken()
+        } else {
+            torch.tick(hw::switch_pressed(), hw::adc_result(), pace.ticks());
 
-        if let Some(convert) = torch.convert() {
-            hw::adc_start(convert);
-        }
+            if let Some(convert) = torch.convert() {
+                hw::adc_start(convert);
+            }
 
-        if let Some(output) = output_changes.update(torch.output()) {
-            hw::set_output(output);
-        }
+            if let Some(output) = output_changes.update(torch.output()) {
+                hw::set_output(output);
+            }
 
-        if let Some(aux) = aux_changes.update(torch.aux()) {
-            hw::set_aux(aux);
-        }
+            if let Some(aux) = aux_changes.update(torch.aux()) {
+                hw::set_aux(aux);
+            }
 
-        // The only feed.
-        if feeder.tick() {
-            hw::feed_watchdog();
+            pace.tick(torch.slow())
+        };
+
+        match step {
+            Some(Step::Feed) => hw::feed_watchdog(),
+            Some(Step::Slow) => hw::slow_down(),
+            Some(Step::Fast) => hw::speed_up(),
+            Some(Step::Window) => hw::window_watchdog(),
+            None => {}
         }
     }
 }

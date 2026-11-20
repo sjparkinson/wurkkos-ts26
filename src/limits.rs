@@ -93,9 +93,9 @@ impl Limits {
 
     /// Starts no conversion, since one running into power-down comes back on
     /// waking with an invalid result (DS40002204A §30.3.5).
-    pub const fn rest(&mut self) {
+    pub const fn rest(&mut self, ticks: u16) {
         self.schedule.rest();
-        self.protection.rest();
+        self.protection.rest(ticks);
         self.convert = None;
         self.asked = 0;
         self.level = 0;
@@ -716,7 +716,7 @@ mod tests {
         let mut run = Run::new();
         run.ticks(1);
         assert!(run.limits.convert().is_some());
-        run.limits.rest();
+        run.limits.rest(1);
         assert_eq!(run.limits.convert(), None);
         assert_eq!(run.limits.level(), 0);
     }
@@ -730,7 +730,7 @@ mod tests {
         assert_eq!(run.limits.ceilings().1, FLOOR);
         run.ui = 0;
         run.ticks(1);
-        run.limits.rest();
+        run.limits.rest(1);
         run.adc.temperature = celsius(25);
         run.ui = CEILING;
         assert_eq!(run.ticks(1), CEILING);
@@ -746,7 +746,7 @@ mod tests {
         assert!(ceiling < CEILING);
         run.ui = 0;
         run.ticks(1);
-        run.limits.rest();
+        run.limits.rest(1);
         run.adc.voltage = voltage_reading(380);
         assert_eq!(run.limits.ceilings().0, ceiling);
         run.ui = CEILING;
@@ -758,14 +758,14 @@ mod tests {
     #[test]
     fn a_rest_keeps_a_fault_and_a_flat_cell() {
         let mut run = Run::with(FAILED);
-        run.limits.rest();
+        run.limits.rest(1);
         assert_eq!(run.limits.health(), Health::Fault);
         let mut run = Run::new();
         run.adc.voltage = voltage_reading(280);
         run.ui = 50;
         run.secs(6);
         for _ in 0..battery::FORGET_TICKS {
-            run.limits.rest();
+            run.limits.rest(1);
         }
         assert_eq!(run.limits.health(), Health::Flat);
     }
@@ -810,15 +810,15 @@ mod tests {
         assert!(ceiling < CEILING);
         run.ui = 0;
         run.ticks(1);
-        run.limits.rest();
+        run.limits.rest(1);
         for cv in [380, 330, 400] {
             for _ in 1..CHECK_TICKS {
-                run.limits.rest();
+                run.limits.rest(1);
             }
             assert_eq!(run.limits.protection.centivolts(), None, "{cv}");
             run.adc.voltage = voltage_reading(cv);
             run.ticks(3);
-            run.limits.rest();
+            run.limits.rest(1);
             assert_eq!(run.limits.protection.centivolts(), Some(cv));
             assert_eq!(run.limits.ceilings().0, ceiling, "{cv}");
             assert_eq!(run.limits.health(), Health::Good, "{cv}");

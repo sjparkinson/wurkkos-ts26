@@ -31,12 +31,29 @@ const CTRLB_ON: u8 = regs::TCA_CMP0EN | regs::TCA_WGMODE_DSBOTTOM;
 // WO2's pad is PB2, so CMP2EN would hand the boost enable to TCA0.
 const _: () = assert!(ENABLE == 2 && (CTRLB_OFF | CTRLB_ON) & regs::TCA_CMP2EN == 0);
 
-// WDT.CTRLA's fields count 8 << (n - 1) WDT clocks.
+// WDT.CTRLA's fields count 8 << (n - 1) WDT clocks, and RTC.PITCTRLA's PERIOD
+// 2 << n RTC clocks.
 const _: () = {
-    use ts26::watchdog::{CLOSED_CLOCKS, OPEN_CLOCKS};
-    assert!(8 << ((regs::WDT_WINDOW_32CLK >> 4) - 1) == CLOSED_CLOCKS);
+    use ts26::watchdog::{CLOSED_CLOCKS, OPEN_CLOCKS, REST_CLOCKS, REST_TICKS};
+    let (window, period) = (
+        regs::WDT_WINDOW.trailing_zeros(),
+        regs::RTC_PERIOD.trailing_zeros(),
+    );
+    assert!(8 << ((regs::WDT_WINDOW_32CLK >> window) - 1) == CLOSED_CLOCKS);
     assert!(8 << (regs::WDT_PERIOD_32CLK - 1) == OPEN_CLOCKS);
+    assert!(8 << (regs::WDT_PERIOD_8KCLK - 1) == REST_CLOCKS);
+    assert!(1 << ((regs::RTC_PERIOD_CYC32768 - regs::RTC_PERIOD_CYC512) >> period) == REST_TICKS);
 };
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const, where From can't be called"
+)]
+const SWITCH_CTRL: usize = reg::PORTA_PIN0CTRL + SWITCH as usize;
+const SENSE_OFF: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE;
+/// A partially asynchronous pin only wakes power-down on both edges or a
+/// level (table 16-3), and PA5 isn't one of the fully asynchronous two.
+const SENSE_ON: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_BOTHEDGES;
 
 fn write(addr: usize, value: u8) {
     // SAFETY: every caller passes a `reg` constant, a memory-mapped I/O register.
@@ -112,7 +129,7 @@ pub fn init() {
         let ctrl = match pin {
             UPDI => continue,
             BATTERY => regs::PORT_ISC_INPUT_DISABLE,
-            SWITCH => regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE,
+            SWITCH => SENSE_OFF,
             _ => regs::PORT_PULLUPEN,
         };
         write(reg::PORTA_PIN0CTRL + usize::from(pin), ctrl);
@@ -160,10 +177,15 @@ pub fn init() {
     // a write stretches the PIT's period and clearing RTCEN stops it (errata
     // 2.6.1 and 2.6.2).
     write(reg::RTC_PITINTCTRL, regs::RTC_PI);
+    set_pit(regs::RTC_PERIOD_CYC512);
+}
+
+/// PITEN stays set, since clearing it stops the RTC (errata 2.6.2). Power-down
+/// can follow, and the datasheet doesn't say the sync finishes there.
+#[inline(never)]
+fn set_pit(period: u8) {
     while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}
-    write(reg::RTC_PITCTRLA, regs::RTC_PERIOD_CYC512 | regs::RTC_PITEN);
-    // The first sleep can be power-down, and the datasheet doesn't say this
-    // sync finishes there.
+    write(reg::RTC_PITCTRLA, period | regs::RTC_PITEN);
     while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}
 }
 
@@ -191,9 +213,8 @@ fn prepare_sleep(rest: bool) {
     write(reg::SLPCTRL_CTRLA, mode | regs::SLPCTRL_SEN);
 }
 
-/// The PIT runs in power-down (section 23.8, errata table 3-3). PA5 has no
-/// interrupt, since the loop only looks once a tick, and a partially
-/// asynchronous pin can wake power-down without raising one (table 16-3).
+/// The PIT runs in power-down (section 23.8, errata table 3-3). At 64 Hz PA5's
+/// sense is off, and the loop looks at it once a tick.
 ///
 /// `sei` and `sleep` stay back to back, since the instruction after `sei` runs
 /// before a pending interrupt, so a late tick still wakes the `sleep`.
@@ -228,6 +249,56 @@ pub fn wait_for_tick(rest: bool) -> bool {
     ticked
 }
 
+/// At 1 Hz, `true` for a tick and `false` for anything else, which is the
+/// switch, whether or not its interrupt ran (table 16-3's note 1). It doesn't
+/// sleep with the switch already down, or its sense already off from an
+/// interrupt during the last pass.
+///
+/// The `nop` gives a tick that's pending with the switch's interrupt its turn
+/// before the `cli`, whether or not a `reti` holds off the next interrupt for
+/// an instruction, which the datasheet doesn't say.
+pub fn rest() -> bool {
+    prepare_sleep(true);
+    // SAFETY: `cli` only clears SREG.I. No `nomem`, so the reads stay below it.
+    unsafe { asm!("cli", options(nostack)) };
+    if read(reg::GPIO_GPIOR0) & TICK == 0 && !switch_pressed() && read(SWITCH_CTRL) == SENSE_ON {
+        // SAFETY: sleeps until an interrupt, whose handler saves what it uses.
+        unsafe { asm!("sei", "sleep", "nop", "cli", options(nostack)) };
+    }
+    let ticked = read(reg::GPIO_GPIOR0) & TICK != 0 && read(SWITCH_CTRL) == SENSE_ON;
+    write(reg::GPIO_GPIOR0, 0);
+    // SAFETY: `sei` only sets SREG.I.
+    unsafe { asm!("sei", options(nostack)) };
+    ticked
+}
+
+/// To 1 Hz, on the tick after a feed (`watchdog::Pace`). The window goes
+/// first, so it only has to last until the write lands.
+pub fn slow_down() {
+    set_watchdog(regs::WDT_PERIOD_8KCLK);
+    set_pit(regs::RTC_PERIOD_CYC32768);
+    write(SWITCH_CTRL, SENSE_ON);
+}
+
+/// To 64 Hz. The watchdog stays at rest's, for [`window_watchdog`] two ticks
+/// on. A 1 Hz tick that came during the sync is dropped, so the two ticks
+/// before the window are a fast tick apart and its `wdr` isn't ignored
+/// (section 19.3.6).
+pub fn speed_up() {
+    write(SWITCH_CTRL, SENSE_OFF);
+    set_pit(regs::RTC_PERIOD_CYC512);
+    write(reg::GPIO_GPIOR0, 0);
+}
+
+/// PORTA_PORT, vector 3, from PA5 at rest. The sense goes off, which [`rest`]
+/// reads as the switch, and the flag's request lasts until it's cleared
+/// (section 16.3.3).
+#[unsafe(no_mangle)]
+pub extern "avr-interrupt" fn porta_port() {
+    write(SWITCH_CTRL, SENSE_OFF);
+    write(reg::PORTA_INTFLAGS, 1 << SWITCH);
+}
+
 /// Also the panic handler, and reached from an unhandled interrupt with no
 /// `reti`, so LVL0EX stays set (section 13.5.2). This core doesn't clear
 /// SREG.I on the way into a handler (section 8.7.3), hence the `cli`.
@@ -242,6 +313,7 @@ pub fn halt() -> ! {
     unsafe { asm!("cli", options(nostack)) };
     set_output(Output::OFF);
     write(reg::RTC_PITINTCTRL, 0);
+    write(SWITCH_CTRL, SENSE_OFF);
     prepare_sleep(true);
     loop {
         // SAFETY: `sleep` touches no memory and no flags.
@@ -297,15 +369,25 @@ pub fn temperature_calibration() -> Calibration {
     }
 }
 
-/// Waits for the sync, so the first feed can't land in it. With a dead 32 kHz
-/// oscillator these never end, with the light off. Never set WDT.STATUS.LOCK,
-/// and never touch the WDTCFG fuse.
 pub fn start_watchdog() {
+    set_watchdog(regs::WDT_WINDOW_32CLK | regs::WDT_PERIOD_32CLK);
+}
+
+/// Its `wdr` waits for the write to land, so it's the first in window mode,
+/// which no closed window comes before (section 19.3.3.2).
+pub fn window_watchdog() {
+    start_watchdog();
+    feed_watchdog();
+}
+
+/// A write during a sync isn't allowed (section 19.3.6), and the old setting
+/// holds until it lands, so this waits before and after. With a dead 32 kHz
+/// oscillator these never end, with the light off. Never set WDT.STATUS.LOCK,
+/// never write a PERIOD of 0, and never touch the WDTCFG fuse.
+#[inline(never)]
+fn set_watchdog(ctrla: u8) {
     while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}
-    protected_write(
-        reg::WDT_CTRLA,
-        regs::WDT_WINDOW_32CLK | regs::WDT_PERIOD_32CLK,
-    );
+    protected_write(reg::WDT_CTRLA, ctrla);
     while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}
 }
 

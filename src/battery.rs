@@ -201,10 +201,10 @@ impl Protection {
         self.ceiling.tick()
     }
 
-    pub const fn rest(&mut self) {
+    pub const fn rest(&mut self, ticks: u16) {
         (self.low_samples, self.flat_samples, self.high_samples) = (0, 0, 0);
         self.implausible = 0;
-        self.rested = self.rested.saturating_add(1);
+        self.rested = self.rested.saturating_add(ticks);
         if self.rested >= FORGET_TICKS {
             self.filtered = 0;
         }
@@ -620,7 +620,7 @@ mod tests {
         let mut lvp = Protection::new();
         assert_eq!(last(&mut lvp, 295, 60, secs(5)), Verdict::Ceiling(45));
         for _ in 0..FORGET_TICKS {
-            lvp.rest();
+            lvp.rest(1);
         }
         assert_eq!(lvp.centivolts(), None);
         assert_eq!(lvp.sample(380, 0), Verdict::Ceiling(45));
@@ -639,9 +639,21 @@ mod tests {
         let mut lvp = Protection::new();
         run(&mut lvp, 280, 50, secs(1) - 1);
         for _ in 0..FORGET_TICKS - 1 {
-            lvp.rest();
+            lvp.rest(1);
         }
         assert_eq!(lvp.centivolts(), Some(280));
+    }
+
+    #[test]
+    fn rest_ticks_of_a_second_forget_in_five_minutes_too() {
+        let mut lvp = Protection::new();
+        run(&mut lvp, 280, 50, secs(1) - 1);
+        for _ in 1..FORGET_TICKS / TICKS_PER_SECOND {
+            lvp.rest(TICKS_PER_SECOND);
+        }
+        assert_eq!(lvp.centivolts(), Some(280));
+        lvp.rest(TICKS_PER_SECOND);
+        assert_eq!(lvp.centivolts(), None);
     }
 
     #[test]
@@ -649,7 +661,7 @@ mod tests {
         let mut lvp = Protection::new();
         for _ in 0..3 {
             for _ in 0..FORGET_TICKS - 1 {
-                lvp.rest();
+                lvp.rest(1);
             }
             lvp.sample(380, 0);
         }
@@ -660,7 +672,7 @@ mod tests {
     fn a_rest_starts_the_hold_afresh() {
         let mut lvp = Protection::new();
         run(&mut lvp, 285, 1, secs(1) - 1);
-        lvp.rest();
+        lvp.rest(1);
         assert_eq!(last(&mut lvp, 285, 1, secs(1) - 1), NONE);
         assert_eq!(lvp.sample(285, 1), Verdict::Flat);
     }
@@ -760,7 +772,7 @@ mod tests {
     fn a_rest_starts_the_count_to_blind_again() {
         let mut lvp = Protection::new();
         run(&mut lvp, 0, 0, u16::from(GLITCHES));
-        lvp.rest();
+        lvp.rest(1);
         assert!(all(&run(&mut lvp, 0, 0, u16::from(GLITCHES)), NONE));
         assert_eq!(lvp.sample(0, 0), Verdict::Blind);
     }
@@ -801,7 +813,7 @@ mod tests {
     fn a_rest_keeps_it_flat() {
         let mut lvp = flat();
         for _ in 0..FORGET_TICKS {
-            lvp.rest();
+            lvp.rest(1);
         }
         assert!(lvp.flat());
     }

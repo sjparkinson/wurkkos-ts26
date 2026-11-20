@@ -20,17 +20,17 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** The loop stops with PB2 high and the PWM running.
 
-**Cover.** A window watchdog (`hw::start_watchdog`, `watchdog::Feeder`) resets the chip, and the next boot is a fault that won't light (`selftest::hung`). If the 32 kHz oscillator stops, `hw::wait_for_tick` times out off the PWM after about 104 ms and `main` calls `hw::halt`.
+**Cover.** A window watchdog (`hw::start_watchdog`, `watchdog::Pace`) resets the chip, and the next boot is a fault that won't light (`selftest::hung`). At rest the tick slows to 1 Hz and the watchdog to 8 s with no window, and the window is back two ticks after a press, before a click or a hold can light anything. If the 32 kHz oscillator stops, `hw::wait_for_tick` times out off the PWM after about 104 ms and `main` calls `hw::halt`.
 
-**Unproven.** Simulator. A bite has only been seen on the breakout. On the torch, an hour lit and several nights at rest saw none, on main and on T4. A spurious bite leaves the torch dark until a cell swap, which is the trade for never running on after a hang. A dead 32 kHz oscillator with the light off leaves the chip asleep with PB2 low, likely safe and unseen.
+**Unproven.** Simulator. A bite has only been seen on the breakout. On the torch, an hour lit and several nights at rest saw none, on main and on T4, and the 1 Hz rest hasn't run there at all. Whether a WDT.CTRLA write restarts the count, how long it takes to land, and where the PIT's first tick after a change of period falls aren't in the datasheet, so each change of pace is ordered to be safe either way, by reasoning that only the simulator has checked. A spurious bite leaves the torch dark until a cell swap, which is the trade for never running on after a hang. A dead 32 kHz oscillator with the light off leaves the chip asleep with PB2 low, likely safe and unseen.
 
 ### H3. Over-discharge of an unprotected 21700
 
 **Hazard.** The cell has no protection of its own, and the MP3432 pulls more current as it falls.
 
-**Cover.** `battery::Protection` steps the ceiling down under 3.00 V, fades it off under 2.90 V, and latches `Protection::flat` until a reading with the light off is 3.60 V or more. Two lit readings in a row under 2.80 V (`battery::CUT_BELOW`), about half a second, turn it straight off and latch `flat` at any level, since the fade follows a slow filter and can leave a collapsing cell lit for several seconds. A light that turns on after its last reading with the light off was under 3.00 V (`battery::LIGHT_FROM`) is `flat` instead, and a press from rest takes that reading before its click can light anything, so it costs no extra ticks. The aux shows yellow briefly after a press, not for good. At rest the torch reads the cell every five minutes (`torch::CHECK_TICKS`), and off's dim blue goes dark under `torch::AUX_DARK_BELOW`. Lockout's bright red is timed (`torch::LOCKED_TICKS`).
+**Cover.** `battery::Protection` steps the ceiling down under 3.00 V, fades it off under 2.90 V, and latches `Protection::flat` until a reading with the light off is 3.60 V or more. Two lit readings in a row under 2.80 V (`battery::CUT_BELOW`), about half a second, turn it straight off and latch `flat` at any level, since the fade follows a slow filter and can leave a collapsing cell lit for several seconds. A light that turns on after its last reading with the light off was under 3.00 V (`battery::LIGHT_FROM`) is `flat` instead, and a press from rest takes that reading before its click can light anything, so it costs no extra ticks. The aux shows yellow briefly after a press, not for good. At rest the torch reads the cell every five minutes (`torch::CHECK_TICKS`), counted a second at a time at 1 Hz and so up to two seconds late, and off's dim blue goes dark under `torch::AUX_DARK_BELOW`. Lockout's bright red is timed (`torch::LOCKED_TICKS`).
 
-**Unproven.** Simulator, with the readings scripted. Every threshold is unmeasured, and `battery::SLOPE` (1094) hasn't been checked against a meter. The MP3432 runs on down to 0.8 V once started, so only the firmware stops it. 2.80 V and 3.00 V are likely, not measured, and whether 2.80 V at the cell keeps the chip's VDD at the 2.7 V its 10 MHz wants (DS40002204A table 36-3), with the BOD off, depends on a regulator nobody has identified. The scripted cell doesn't sag under load, so how far a real one falls from its unloaded reading is unknown. 3.60 V as a charged cell is a guess. Measured, dim blue costs about 0.02 mA and the torch draws 0.12 mA off on T4, which still drains a cell left for years.
+**Unproven.** Simulator, with the readings scripted. Every threshold is unmeasured, and `battery::SLOPE` (1094) hasn't been checked against a meter. The MP3432 runs on down to 0.8 V once started, so only the firmware stops it. 2.80 V and 3.00 V are likely, not measured, and whether 2.80 V at the cell keeps the chip's VDD at the 2.7 V its 10 MHz wants (DS40002204A table 36-3), with the BOD off, depends on a regulator nobody has identified. The scripted cell doesn't sag under load, so how far a real one falls from its unloaded reading is unknown. 3.60 V as a charged cell is a guess. Measured, dim blue costs about 0.02 mA and the torch draws 0.12 mA off on T4, which still drains a cell left for years. What the 1 Hz rest draws is unmeasured.
 
 ### H4. Overheating
 
@@ -76,9 +76,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** An interrupt enabled by mistake, or with its flag already up, and no handler.
 
-**Cover.** Every unused vector goes to `__unhandled_interrupt` in `src/avr/rt.rs` and on into `hw::halt`, which `cargo xtask hex` checks.
+**Cover.** Every unused vector goes to `__unhandled_interrupt` in `src/avr/rt.rs` and on into `hw::halt`, which `cargo xtask hex` checks. PA5's interrupt is only on at 1 Hz rest, and its handler turns PA5's sense off and clears the flag. `hw::rest` takes any wake that isn't a tick as a press, so a wake from power-down with no interrupt (DS40002204A table 16-3's note 1) still goes to 64 Hz.
 
-**Unproven.** Simulator. Whether a pending interrupt that can't be taken wakes `halt`'s sleep is unknown.
+**Unproven.** Simulator. Whether a pending interrupt that can't be taken wakes `halt`'s sleep is unknown. So is whether turning a pin's sense off ends a request whose flag is still up, which the handler doesn't rely on.
 
 ### H10. A panic path in the firmware
 
@@ -125,6 +125,7 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 - Nobody knows what holds PB2 low through reset and in programming mode (H1, H8).
 - Every threshold is unmeasured, and no current against duty, temperature or top of the ramp has been measured (H3, H4).
 - No low-voltage step, cut-off, fault or watchdog bite has been seen on this torch (H2, H3, H6, H12).
+- The 1 Hz rest and its changes of pace have only run on the simulator, and what it draws is unmeasured (H2, H3).
 - What feeds the chip's VDD, and so whether the 2.80 V cut keeps it in spec, is unknown (H3).
 - `restore` has never run on this torch (H8).
 - Nothing limits how long a lit light stays lit (H5, H11).

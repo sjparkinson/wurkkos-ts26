@@ -23,6 +23,19 @@
 //! - `sleep` with SREG.I clear and an interrupt still enabled is an error,
 //!   and `hw::halt` wants SREG.I clear too. The only evidence is figure 13-1
 //!   having SREG.I gate the wake-up.
+//! - The PIT follows a bit of a prescaler that counts from power-on, as
+//!   §23.5.2.2's example has it, so a new PERIOD ticks on that count's own
+//!   boundaries. Time moves in 512-cycle frames, and nothing shorter is
+//!   modelled.
+//! - A WDT.CTRLA write lands when the firmware's seen SYNCBUSY clear, or at
+//!   the next frame, and leaves the count running, since nothing says it
+//!   restarts it. Window mode written over normal waits for a `wdr` to start
+//!   its closed window (§19.3.3.2), and until then times out after the open
+//!   window alone.
+//! - A PORT interrupt's request lasts until its flag's cleared, even with the
+//!   sense turned off (§16.3.3). PA5's edges in power-down either raise the
+//!   flag or, with `flagless_wakes`, wake the CPU with none (table 16-3's note
+//!   1), since the switch holds still for a frame.
 //!
 //! Time counts instructions, not cycles, so the budgets take every
 //! instruction as the slowest, four clocks.
@@ -53,7 +66,7 @@ use ts26::regs::{
     self, ADC_ENABLE, ADC_MUXPOS_AIN1, ADC_MUXPOS_GND, ADC_MUXPOS_TEMPSENSE, ADC_PRESC, ADC_REFSEL,
     ADC_REFSEL_INTREF, ADC_RESRDY, ADC_SAMPCAP, ADC_SAMPLEN, ADC_SAMPNUM, ADC_SAMPNUM_ACC4,
     ADC_STCONV, CRCSCAN_BUSY, CRCSCAN_ENABLE, CRCSCAN_OK, PORT_INVEN, PORT_ISC, PORT_PULLUPEN,
-    RSTCTRL_PORF, RTC_CTRLBUSY, RTC_PI, RTC_PITEN, SLPCTRL_SEN, TCA_CMP0EN, TCA_OVF,
+    RSTCTRL_PORF, RTC_CTRLBUSY, RTC_PERIOD, RTC_PI, RTC_PITEN, SLPCTRL_SEN, TCA_CMP0EN, TCA_OVF,
     VREF_ADC0REFEN, VREF_ADC0REFSEL, WDT_LOCK, WDT_PERIOD, WDT_SYNCBUSY, WDT_WINDOW, addr as reg,
 };
 
@@ -138,6 +151,15 @@ const DSM_SUM: usize = reg::GPIO_GPIOR3;
 
 /// Unmeasured; any non-zero count makes the firmware wait.
 const PIT_SYNC_READS: u8 = 2;
+/// A frame is 512 RTC clocks, so the PIT's shortest modelled period.
+const PIT_FRAME: u8 = regs::RTC_PERIOD_CYC512;
+/// Two to three WDT clocks (§19.3.6), and a `wdr` meanwhile is ignored.
+const WDR_SYNC_CYCLES: u64 = 3 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64;
+
+/// PERIOD counts 2 << n RTC clocks.
+const fn pit_frames(pitctrla: u8) -> u32 {
+    1 << (((pitctrla & RTC_PERIOD) - PIT_FRAME) >> 3)
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct Report {
@@ -145,9 +167,13 @@ pub struct Report {
     /// From the runs without overflows landed on purpose.
     pub loop_instructions: u64,
     pub off_instructions: u64,
+    /// A pass at 1 Hz.
+    pub rest_instructions: u64,
     pub handler_instructions: u64,
     landed: u32,
     last_new: u32,
+    /// Presses at 1 Hz rest.
+    woken: u32,
 }
 
 impl Report {
@@ -155,8 +181,10 @@ impl Report {
         self.stack = self.stack.max(run.stack);
         self.loop_instructions = self.loop_instructions.max(run.loop_instructions);
         self.off_instructions = self.off_instructions.max(run.off_instructions);
+        self.rest_instructions = self.rest_instructions.max(run.rest_instructions);
         self.handler_instructions = self.handler_instructions.max(run.handler_instructions);
         self.landed += run.landed;
+        self.woken += run.woken;
     }
 
     fn take(&mut self, sim: &Sim) {
@@ -223,13 +251,19 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     boot_order(linked.boot(signed.clone())?).map_err(|e| format!("start-up order: {e}"))?;
     unhandled_interrupt(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
+    unhandled_interrupt_at_rest(power_on()?)
+        .map_err(|e| format!("with an interrupt that has no handler at rest: {e}"))?;
     let examples = if examples { EXAMPLES } else { &[] };
-    let faults: [(FaultCheck, &str); 5] = [
+    let faults: [(FaultCheck, &str); 6] = [
         (slow_ticks, "with the slowest ticks"),
         (oscillator_stops, "with the 32 kHz oscillator stopped"),
         (adc_never_answers, "with a dead ADC"),
         (adc_stuck, "with the ADC stuck on the cell's reading"),
         (switch_stuck, "with the switch stuck down"),
+        (
+            flagless_wakes,
+            "with presses that wake it without an interrupt",
+        ),
     ];
     let power_on = &power_on;
     let reports: Vec<Result<Report, String>> = thread::scope(|scope| {
@@ -260,6 +294,9 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     }
     if report.off_instructions == 0 {
         return Err("never powered down".into());
+    }
+    if report.rest_instructions == 0 || report.woken == 0 {
+        return Err("never ticked at 1 Hz, or never woke from it on a press".into());
     }
     if report.landed == 0 {
         return Err("no overflow ever landed mid-pass, so this checked nothing".into());
@@ -402,6 +439,24 @@ fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Table 16-3's note 1: a press that's gone before the chip has woken from
+/// power-down wakes it with no interrupt.
+fn flagless_wakes(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    sim.chip.flagless_wakes = true;
+    let samples = script("wait:2s 1C wait:2s 1C wait:3s 3C wait:7s 3C wait:2s 1H")?;
+    let end = in_step(&mut sim, samples, report)?;
+    if end != Some(ts26::ui::FLOOR) {
+        return Err(format!("ends at level {end:?}, not the floor"));
+    }
+    if report.woken < 4 {
+        return Err(format!(
+            "woke from 1 Hz rest {} times, not the 4 the script has",
+            report.woken
+        ));
+    }
+    Ok(())
+}
+
 fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     let samples = iter::repeat_n(
         Sample {
@@ -503,6 +558,19 @@ fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
             "no wdr within {FEED_TICKS} ticks of the light coming on"
         ));
     }
+    stops_for_good(sim)
+}
+
+/// With PA5's sense on, and asleep in power-down.
+fn unhandled_interrupt_at_rest(mut sim: Sim) -> Result<(), String> {
+    in_step(&mut sim, script("wait:2s")?, &mut Report::default())?;
+    if sim.chip.io[reg::RTC_PITCTRLA] & RTC_PERIOD == PIT_FRAME {
+        return Err("still at 64 Hz after 2 s at rest, so this checks nothing".into());
+    }
+    stops_for_good(sim)
+}
+
+fn stops_for_good(mut sim: Sim) -> Result<(), String> {
     sim.chip.force_interrupt(VECTOR_UNHANDLED);
     let mut steps = 0;
     while !sim.chip.down {
@@ -596,7 +664,6 @@ fn in_step_with(
         return Err("hw::start_watchdog never turned the watchdog on".into());
     }
     let mut rig = Rig::new(power_on.faults());
-    let mut was_resting = false;
     let mut finished = true;
     for (tick, sample) in samples.enumerate() {
         let at = |e: String| format!("tick {tick}: {e}");
@@ -611,16 +678,21 @@ fn in_step_with(
         };
         sim.chip.world = World::from(sample.scene);
         let power_downs = sim.chip.power_downs;
+        let (was_resting, was_slow) = (rig.powers_down(), rig.pace.slow());
         let took = sim.tick(sample.pressed).map_err(at)?;
+        let powered_down = sim.chip.power_downs > power_downs;
+        rig.tick_in(sample.pressed, &sample.scene);
+        let woken = was_slow && !rig.ticked && !rig.pace.slow();
         // A real tick never sees that many handlers on top of the pass.
-        if !landing {
+        if !landing && rig.ticked {
             report.loop_instructions = report.loop_instructions.max(took);
         }
-        let powered_down = sim.chip.power_downs > power_downs;
-        if powered_down && was_resting {
+        if rig.ticked && was_slow {
+            report.rest_instructions = report.rest_instructions.max(took);
+        } else if rig.ticked && powered_down && was_resting {
             report.off_instructions = report.off_instructions.max(took);
         }
-        rig.tick_in(sample.pressed, &sample.scene);
+        report.woken += u32::from(woken);
         sim.chip.shows(rig.torch.output()).map_err(at)?;
         if sim.chip.aux() != board::aux_pin(rig.torch.aux()) {
             return Err(at(format!(
@@ -637,12 +709,13 @@ fn in_step_with(
             )));
         }
         each(&rig);
-        was_resting = rig.torch.resting();
+        paced(&sim.chip, &rig, took, woken).map_err(at)?;
         // The sleep that ended this pass answers the state the pass left.
-        if powered_down != was_resting {
+        let resting = rig.powers_down();
+        if (rig.ticked || woken) && powered_down != resting {
             return Err(at(format!(
                 "the library says {}, but the firmware {}",
-                if was_resting { "power down" } else { "idle" },
+                if resting { "power down" } else { "idle" },
                 if powered_down {
                     "powered down"
                 } else {
@@ -653,6 +726,45 @@ fn in_step_with(
     }
     report.take(sim);
     Ok(finished.then(|| rig.level()))
+}
+
+/// The firmware's PIT, watchdog and passes against the library's pace, after
+/// a frame.
+fn paced(chip: &Chip, rig: &Rig, took: u64, woken: bool) -> Result<(), String> {
+    if woken && took == 0 {
+        return Err("the switch changed at rest, but the firmware slept through it".into());
+    }
+    if !woken && !rig.ticked && took > 0 {
+        return Err("the firmware ran in a 64 Hz tick the library rests through".into());
+    }
+    let slow = chip.io[reg::RTC_PITCTRLA] & RTC_PERIOD != PIT_FRAME;
+    if woken && slow {
+        return Err("the firmware woke on a press at rest, but left the PIT at 1 Hz".into());
+    }
+    if slow != rig.pace.slow() {
+        return Err(format!(
+            "the library ticks at {}, but the PIT at {}",
+            rate(rig.pace.slow()),
+            rate(slow)
+        ));
+    }
+    let windowed = chip.io[reg::WDT_CTRLA] & WDT_WINDOW != 0;
+    if windowed != rig.pace.windowed() {
+        return Err(format!(
+            "the library has the watchdog's window {}, but WDT.CTRLA has it {}",
+            on(rig.pace.windowed()),
+            on(windowed)
+        ));
+    }
+    Ok(())
+}
+
+const fn rate(slow: bool) -> &'static str {
+    if slow { "1 Hz" } else { "64 Hz" }
+}
+
+const fn on(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 /// The .rodata table, the .data static's starting values, then a byte it
@@ -1023,6 +1135,16 @@ impl Sim {
                     sp: self.cpu.sp,
                 });
             }
+            // Only these two can't have raised their flag again meanwhile.
+            (Some(vector @ (VECTOR_PORTA | VECTOR_RTC_PIT)), None)
+                if self.chip.requests() & 1 << vector != 0 =>
+            {
+                return Err(format!(
+                    "the handler for {} returns with its flag still up, so it's taken \
+                     again straight away",
+                    vector_name(vector)
+                ));
+            }
             (Some(vector), None) => {
                 self.chip.interrupted.clear();
                 if vector == VECTOR_TCA0_OVF {
@@ -1098,12 +1220,14 @@ impl Sim {
         ))
     }
 
+    /// To the next frame, the PIT's 64 Hz, whatever it's set to.
     fn tick(&mut self, pressed: bool) -> Result<u64, String> {
-        self.chip.set_switch(pressed)?;
-        let (start, ticks) = (self.executed, self.chip.ticks);
+        let deep = self.cpu.asleep && self.chip.powering_down();
+        self.chip.set_switch(pressed, deep)?;
+        let (start, frames) = (self.executed, self.chip.frames);
         self.chip.tick_polled = false;
         let mut pass_end = None;
-        while self.chip.ticks == ticks {
+        while self.chip.frames == frames {
             self.step()?;
             if self.chip.down {
                 return Err(
@@ -1127,12 +1251,15 @@ impl Sim {
     }
 }
 
-/// Timed in PIT periods, since the two share an oscillator.
+/// Timed in frames, since it shares an oscillator with the PIT.
 #[derive(Default)]
 struct Wdt {
     ticks: u32,
     windowed: bool,
     busy: u8,
+    /// A WDT.CTRLA write that hasn't landed.
+    pending: Option<u8>,
+    last_wdr: Option<u64>,
 }
 
 const fn wdt_clocks(setting: u8) -> u32 {
@@ -1311,14 +1438,18 @@ struct Chip {
     pit_busy: u8,
     pit_flag: bool,
     porta_flags: u8,
+    porta_request: bool,
+    flagless_wakes: bool,
+    flagless: bool,
+    /// The start of the next frame.
     next_pit: u64,
     tick_cycles: u64,
-    /// The PIT and the WDT both count it (§23.12.7's reset value, §19.3.2).
-    /// The firmware writes neither after start-up, so a sync left waiting on
-    /// the oscillator isn't modelled.
+    /// The PIT and the WDT both count it (§23.12.7's reset value, §19.3.2). A
+    /// sync left waiting on it isn't modelled.
     osc32k_stopped: bool,
     /// Only a reset wakes the chip (§11.3.1), and this one has no resets.
     down: bool,
+    frames: u32,
     ticks: u32,
     tick_polled: bool,
     tca: Tca,
@@ -1353,10 +1484,14 @@ impl Chip {
             pit_busy: PIT_SYNC_READS,
             pit_flag: false,
             porta_flags: 0,
+            porta_request: false,
+            flagless_wakes: false,
+            flagless: false,
             next_pit: TICK_CYCLES,
             tick_cycles: TICK_CYCLES,
             osc32k_stopped: false,
             down: false,
+            frames: 0,
             ticks: 0,
             tick_polled: false,
             tca: Tca {
@@ -1486,10 +1621,13 @@ impl Chip {
             if self.osc32k_stopped {
                 continue;
             }
-            if self.io[reg::RTC_PITCTRLA] & RTC_PITEN != 0 {
+            self.frames += 1;
+            let pit = self.io[reg::RTC_PITCTRLA];
+            if pit & RTC_PITEN != 0 && self.frames.is_multiple_of(pit_frames(pit)) {
                 self.pit_flag = true;
                 self.ticks += 1;
             }
+            self.land_wdt()?;
             self.wdt_period()?;
         }
         self.plan_next_event();
@@ -1518,18 +1656,38 @@ impl Chip {
         u64::from(last_safe.saturating_sub(self.wdt.ticks)).min(DOWN_PERIODS)
     }
 
+    /// A count already past the new timeout bites as it lands.
+    fn land_wdt(&mut self) -> Result<(), String> {
+        let Some(value) = self.wdt.pending.take() else {
+            return Ok(());
+        };
+        let was = self.io[reg::WDT_CTRLA];
+        if was & WDT_PERIOD == 0 {
+            self.wdt.ticks = 0;
+        }
+        self.wdt.windowed &= was & WDT_WINDOW != 0;
+        self.io[reg::WDT_CTRLA] = value;
+        self.wdt_timed_out()
+            .map_err(|e| format!("WDT.CTRLA lands with {e}"))
+    }
+
     /// Runs in every sleep mode (§19.3.4).
     fn wdt_period(&mut self) -> Result<(), String> {
         if self.wdt_open() == 0 {
             return Ok(());
         }
         self.wdt.ticks += 1;
+        self.wdt_timed_out()
+            .map_err(|e| format!("the watchdog went {e}"))
+    }
+
+    fn wdt_timed_out(&self) -> Result<(), String> {
         let clocks = self.wdt.ticks * WDT_CLOCKS_PER_TICK;
         let timeout = self.wdt_closed() + self.wdt_open();
         if clocks >= timeout {
             return Err(format!(
-                "the watchdog went {} ticks ({clocks} WDT clocks) without wdr, against a \
-                 {timeout}-clock timeout, so the chip would have reset",
+                "{} ticks ({clocks} WDT clocks) without wdr, against a {timeout}-clock \
+                 timeout, so the chip would have reset",
                 self.wdt.ticks
             ));
         }
@@ -1743,9 +1901,10 @@ impl Chip {
         self.io[reg::PORTA_PIN0CTRL + SWITCH_PIN]
     }
 
-    /// §16.5.10. A press that's over before the chip wakes from power-down
-    /// can wake it with no flag (table 16-3's note 1), which isn't modelled.
-    fn set_switch(&mut self, pressed: bool) -> Result<(), String> {
+    /// §16.5.10. `deep` is a CPU asleep in power-down, where PA5, only
+    /// partially asynchronous, senses nothing but both edges or a level
+    /// (table 16-3).
+    fn set_switch(&mut self, pressed: bool, deep: bool) -> Result<(), String> {
         if pressed == self.pressed {
             return Ok(());
         }
@@ -1753,6 +1912,7 @@ impl Chip {
         let sense = match self.switch_ctrl() & PORT_ISC {
             ISC_INTDISABLE | ISC_INPUT_DISABLE => false,
             ISC_BOTHEDGES => true,
+            ISC_RISING | ISC_FALLING if deep => false,
             ISC_RISING => !pressed,
             ISC_FALLING => pressed,
             isc => {
@@ -1761,8 +1921,11 @@ impl Chip {
                 ));
             }
         };
-        if sense {
+        if sense && deep && self.flagless_wakes {
+            self.flagless = true;
+        } else if sense {
             self.porta_flags |= SWITCH;
+            self.porta_request = true;
         }
         Ok(())
     }
@@ -1779,6 +1942,14 @@ impl Chip {
             | port(reg::PORTC_PIN0CTRL, VECTOR_PORTC)
             | u32::from(pit) << VECTOR_RTC_PIT
             | u32::from(ovf) << VECTOR_TCA0_OVF
+    }
+
+    fn requests(&self) -> u32 {
+        let pending =
+            u32::from(self.pit_flag) << VECTOR_RTC_PIT | u32::from(self.tca.ovf) << VECTOR_TCA0_OVF;
+        let porta = u32::from(self.porta_request) << VECTOR_PORTA;
+        let forced = self.forced.map_or(0, |vector| 1 << vector);
+        pending & self.enabled | porta | forced
     }
 
     fn update_enabled(&mut self) {
@@ -2099,12 +2270,20 @@ impl Bus for Chip {
     }
 
     fn wdr(&mut self) -> Result<(), String> {
+        if self.wdt.busy > 0 || self.wdt.pending.is_some() {
+            return Err("wdr before the WDT.CTRLA write has synced".into());
+        }
         if self.wdt_open() == 0 {
             return Ok(());
         }
-        if self.wdt.busy > 0 {
-            return Err("wdr before the WDT.CTRLA write has synced".into());
+        if self
+            .wdt
+            .last_wdr
+            .is_some_and(|at| self.now < at + WDR_SYNC_CYCLES)
+        {
+            return Ok(());
         }
+        self.wdt.last_wdr = Some(self.now);
         let clocks = self.wdt.ticks * WDT_CLOCKS_PER_TICK;
         let closed = self.wdt_closed();
         if closed > 0 && clocks <= closed {
@@ -2121,12 +2300,12 @@ impl Bus for Chip {
 
     /// Lowest vector first, the default static priority (§13.3.2.4).
     fn interrupt(&self) -> Option<u8> {
-        let pending = u32::from(self.porta_flags != 0) << VECTOR_PORTA
-            | u32::from(self.pit_flag) << VECTOR_RTC_PIT
-            | u32::from(self.tca.ovf) << VECTOR_TCA0_OVF;
-        let forced = self.forced.map_or(0, |vector| 1 << vector);
-        let requests = pending & self.enabled | forced;
+        let requests = self.requests();
         (requests != 0).then(|| requests.trailing_zeros() as u8)
+    }
+
+    fn woken(&mut self) -> bool {
+        std::mem::take(&mut self.flagless)
     }
 
     /// Four instructions after the key, left pending (§8.7.1, §8.5.7.2). That
@@ -2234,6 +2413,9 @@ impl Bus for Chip {
             reg::WDT_STATUS => {
                 let busy = self.wdt.busy > 0;
                 self.wdt.busy = self.wdt.busy.saturating_sub(1);
+                if !busy {
+                    self.land_wdt()?;
+                }
                 Ok(if busy { WDT_SYNCBUSY } else { 0 })
             }
             reg::CRCSCAN_STATUS => Ok(self.crc_status()),
@@ -2382,6 +2564,18 @@ impl Bus for Chip {
                         name(a)
                     ));
                 }
+                if self.io[a] & RTC_PITEN != 0 && value & RTC_PITEN == 0 {
+                    return Err("clears RTC.PITCTRLA.PITEN, which stops the RTC too \
+                                (errata 2.6.2), and the firmware never stops its tick"
+                        .into());
+                }
+                let period = value & RTC_PERIOD;
+                if !(PIT_FRAME..=regs::RTC_PERIOD_CYC32768).contains(&period) {
+                    return Err(format!(
+                        "writes {value:#04x} to RTC.PITCTRLA, a PIT period the simulator \
+                         doesn't model: it moves in frames of 512 RTC clocks"
+                    ));
+                }
                 self.io[a] = value;
                 self.pit_busy = PIT_SYNC_READS;
             }
@@ -2390,7 +2584,10 @@ impl Bus for Chip {
                     self.pit_flag = false;
                 }
             }
-            reg::VPORTA_INTFLAGS | reg::PORTA_INTFLAGS => self.porta_flags &= !value,
+            reg::VPORTA_INTFLAGS | reg::PORTA_INTFLAGS => {
+                self.porta_flags &= !value;
+                self.porta_request &= self.porta_flags != 0;
+            }
             _ if (reg::PORTA_PIN0CTRL..reg::PORTA_PIN0CTRL + 8).contains(&a)
                 || (reg::PORTB_PIN0CTRL..reg::PORTB_PIN0CTRL + 8).contains(&a)
                 || (reg::PORTC_PIN0CTRL..reg::PORTC_PIN0CTRL + 8).contains(&a) =>
@@ -2411,10 +2608,10 @@ impl Bus for Chip {
                                 which the datasheet doesn't allow (section 19.3.6)"
                         .into());
                 }
-                if self.wdt_open() > 0 {
+                if value & WDT_PERIOD == 0 {
                     return Err(format!(
-                        "writes {value:#04x} to WDT.CTRLA with the watchdog already on, \
-                         which the simulator doesn't model, and off isn't allowed"
+                        "writes {value:#04x} to WDT.CTRLA, a PERIOD of 0, which turns the \
+                         watchdog off"
                     ));
                 }
                 if value & WDT_PERIOD > WDT_PERIOD_MAX || (value & WDT_WINDOW) >> 4 > WDT_PERIOD_MAX
@@ -2423,11 +2620,8 @@ impl Bus for Chip {
                         "writes {value:#04x} to WDT.CTRLA: a reserved WDT period or window"
                     ));
                 }
-                self.io[a] = value;
-                self.wdt = Wdt {
-                    busy: WDT_SYNC_READS,
-                    ..Wdt::default()
-                };
+                self.wdt.pending = Some(value);
+                self.wdt.busy = WDT_SYNC_READS;
             }
             reg::WDT_STATUS => {
                 return Err(if value & WDT_LOCK != 0 {
@@ -2579,10 +2773,95 @@ mod tests {
     /// 32 WDT clocks closed and 32 open, two ticks each.
     fn watched() -> Chip {
         let mut chip = Chip::new(Vec::new());
-        chip.write(reg::CPU_CCP as u16, CCP_IOREG).unwrap();
-        chip.write(reg::WDT_CTRLA as u16, 0x33).unwrap();
-        chip.wdt.busy = 0;
+        set_watchdog(&mut chip, 0x33);
         chip
+    }
+
+    /// As `hw::set_watchdog` does it, waiting for the write to land.
+    fn set_watchdog(chip: &mut Chip, value: u8) {
+        unlocked(chip, reg::WDT_CTRLA, value).unwrap();
+        while peek(chip, reg::WDT_STATUS).unwrap() != 0 {}
+    }
+
+    const REST: u8 = regs::WDT_PERIOD_8KCLK;
+
+    #[test]
+    fn a_write_to_ctrla_only_lands_once_synced_and_leaves_the_count_running() {
+        let mut chip = watched();
+        chip.wdr().unwrap();
+        ticks(&mut chip, 3).unwrap();
+        unlocked(&mut chip, reg::WDT_CTRLA, REST).unwrap();
+        assert_eq!(chip.wdt_open(), 32, "still the old setting");
+        while peek(&mut chip, reg::WDT_STATUS).unwrap() != 0 {}
+        assert_eq!((chip.wdt_open(), chip.wdt_closed()), (8192, 0));
+        assert_eq!(chip.wdt.ticks, 3);
+        ticks(&mut chip, 500).unwrap();
+        assert!(ticks(&mut chip, 10).unwrap_err().contains("without wdr"));
+    }
+
+    #[test]
+    fn an_unsynced_write_lands_at_the_next_frame() {
+        let mut chip = watched();
+        unlocked(&mut chip, reg::WDT_CTRLA, REST).unwrap();
+        ticks(&mut chip, 1).unwrap();
+        assert_eq!(chip.wdt_open(), 8192);
+    }
+
+    #[test]
+    fn the_window_written_back_waits_for_a_wdr_and_times_out_on_the_open_one_until_then() {
+        let mut chip = Chip::new(Vec::new());
+        set_watchdog(&mut chip, REST);
+        ticks(&mut chip, 10).unwrap();
+        chip.wdr().unwrap();
+        set_watchdog(&mut chip, 0x33);
+        assert_eq!(
+            chip.wdt_closed(),
+            0,
+            "no closed window before the first wdr"
+        );
+        ticks(&mut chip, 1).unwrap();
+        assert!(ticks(&mut chip, 1).unwrap_err().contains("without wdr"));
+
+        let mut chip = Chip::new(Vec::new());
+        set_watchdog(&mut chip, REST);
+        ticks(&mut chip, 10).unwrap();
+        chip.wdr().unwrap();
+        set_watchdog(&mut chip, 0x33);
+        chip.wdr().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(chip.wdt_closed(), 0, "ignored, too soon after the last");
+        chip.now += WDR_SYNC_CYCLES;
+        chip.wdr().unwrap();
+        assert_eq!(chip.wdt_closed(), 32);
+        ticks(&mut chip, 1).unwrap();
+        assert!(chip.wdr().unwrap_err().contains("closed window"));
+    }
+
+    #[test]
+    fn a_write_that_lands_on_a_count_past_its_timeout_bites_there() {
+        let mut chip = Chip::new(Vec::new());
+        set_watchdog(&mut chip, REST);
+        ticks(&mut chip, 10).unwrap();
+        unlocked(&mut chip, reg::WDT_CTRLA, 0x33).unwrap();
+        let err = loop {
+            match peek(&mut chip, reg::WDT_STATUS) {
+                Ok(0) => panic!("landed"),
+                Ok(_) => {}
+                Err(e) => break e,
+            }
+        };
+        assert!(err.starts_with("WDT.CTRLA lands with 10 ticks"), "{err}");
+    }
+
+    #[test]
+    fn a_wdr_while_the_last_syncs_is_ignored() {
+        let mut chip = watched();
+        chip.wdr().unwrap();
+        ticks(&mut chip, 3).unwrap();
+        chip.wdr().unwrap();
+        ticks(&mut chip, 2).unwrap();
+        chip.now -= 2 * TICK_CYCLES - 1;
+        chip.wdr().unwrap();
+        assert_eq!(chip.wdt.ticks, 2, "the count carries on");
     }
 
     fn ticks(chip: &mut Chip, n: u64) -> Result<(), String> {
@@ -2610,8 +2889,8 @@ mod tests {
     fn the_watchdog_wont_be_turned_off_or_fed_before_it_syncs() {
         let mut chip = watched();
         chip.write(reg::CPU_CCP as u16, CCP_IOREG).unwrap();
-        let err = chip.write(reg::WDT_CTRLA as u16, 0).unwrap_err();
-        assert!(err.contains("already on"), "{err}");
+        let err = chip.write(reg::WDT_CTRLA as u16, 0x30).unwrap_err();
+        assert!(err.contains("a PERIOD of 0"), "{err}");
         let mut chip = Chip::new(Vec::new());
         chip.write(reg::CPU_CCP as u16, CCP_IOREG).unwrap();
         chip.write(reg::WDT_CTRLA as u16, 0x33).unwrap();
@@ -2884,7 +3163,7 @@ mod tests {
     fn power_down_wants_pb2_low() {
         let mut chip = running();
         chip.write(reg::RTC_PITINTCTRL as u16, RTC_PI).unwrap();
-        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.io[reg::RTC_PITCTRLA] = PIT_FRAME | RTC_PITEN;
         chip.pit_busy = 0;
         wide(&mut chip, reg::TCA0_CMP0BUF, 10).unwrap();
         chip.write(reg::VPORTB_OUT as u16, ENABLE).unwrap();
@@ -2967,7 +3246,7 @@ mod tests {
         let mut chip = running();
         chip.write(reg::TCA0_CTRLB as u16, TCA_DSBOTTOM).unwrap();
         chip.write(reg::RTC_PITINTCTRL as u16, RTC_PI).unwrap();
-        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.io[reg::RTC_PITCTRLA] = PIT_FRAME | RTC_PITEN;
         chip.pit_busy = 0;
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_POWER_DOWN | SLPCTRL_SEN)
             .unwrap();
@@ -3012,7 +3291,7 @@ mod tests {
     #[test]
     fn a_stopped_oscillator_stops_the_pit_and_the_watchdog() {
         let mut chip = watched();
-        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.io[reg::RTC_PITCTRLA] = PIT_FRAME | RTC_PITEN;
         chip.osc32k_stopped = true;
         ticks(&mut chip, 100).unwrap();
         assert!(!chip.pit_flag);
@@ -3027,7 +3306,7 @@ mod tests {
     #[test]
     fn a_slow_oscillator_stretches_the_pits_period() {
         let mut chip = Chip::new(Vec::new());
-        chip.io[reg::RTC_PITCTRLA] = RTC_PITEN;
+        chip.io[reg::RTC_PITCTRLA] = PIT_FRAME | RTC_PITEN;
         chip.tick_cycles = SLOWEST_TICK_CYCLES;
         ticks(&mut chip, 1).unwrap();
         assert_eq!(chip.ticks, 1);
@@ -3055,14 +3334,48 @@ mod tests {
         let mut chip = Chip::new(Vec::new());
         chip.write((reg::PORTA_PIN0CTRL + SWITCH_PIN) as u16, ISC_FALLING)
             .unwrap();
-        chip.set_switch(true).unwrap();
+        chip.set_switch(true, false).unwrap();
         assert_eq!(chip.porta_flags, SWITCH);
         chip.write(reg::PORTA_INTFLAGS as u16, SWITCH).unwrap();
-        chip.set_switch(false).unwrap();
+        chip.set_switch(false, false).unwrap();
         assert_eq!(
             chip.porta_flags, 0,
             "a rising edge, which ISC didn't ask for"
         );
+    }
+
+    const PA5_CTRL: usize = reg::PORTA_PIN0CTRL + SWITCH_PIN;
+
+    #[test]
+    fn in_power_down_pa5_only_senses_both_edges() {
+        for (isc, flags) in [(ISC_FALLING, 0), (ISC_BOTHEDGES, SWITCH)] {
+            let mut chip = Chip::new(Vec::new());
+            poke(&mut chip, PA5_CTRL, PORT_PULLUPEN | isc).unwrap();
+            chip.set_switch(true, true).unwrap();
+            assert_eq!(chip.porta_flags, flags, "{isc:#x}");
+        }
+    }
+
+    #[test]
+    fn pa5s_request_lasts_until_its_flag_clears_with_the_sense_off_too() {
+        let mut chip = Chip::new(Vec::new());
+        poke(&mut chip, PA5_CTRL, PORT_PULLUPEN | ISC_BOTHEDGES).unwrap();
+        chip.set_switch(true, true).unwrap();
+        poke(&mut chip, PA5_CTRL, PORT_PULLUPEN | ISC_INTDISABLE).unwrap();
+        assert_eq!(chip.interrupt(), Some(VECTOR_PORTA));
+        poke(&mut chip, reg::PORTA_INTFLAGS, SWITCH).unwrap();
+        assert_eq!(chip.interrupt(), None);
+    }
+
+    #[test]
+    fn a_flagless_wake_wakes_once_with_nothing_to_take() {
+        let mut chip = Chip::new(Vec::new());
+        chip.flagless_wakes = true;
+        poke(&mut chip, PA5_CTRL, PORT_PULLUPEN | ISC_BOTHEDGES).unwrap();
+        chip.set_switch(true, true).unwrap();
+        assert_eq!((chip.porta_flags, chip.interrupt()), (0, None));
+        assert!(chip.woken());
+        assert!(!chip.woken());
     }
 
     #[test]
@@ -3076,7 +3389,7 @@ mod tests {
         chip.write(ctrl, PORT_PULLUPEN | ISC_INTDISABLE).unwrap();
         assert_eq!(read(&mut chip), Ok(0xFF));
 
-        chip.set_switch(true).unwrap();
+        chip.set_switch(true, false).unwrap();
         assert_eq!(read(&mut chip), Ok(!SWITCH));
         assert_eq!(chip.porta_flags, 0, "no sense, so no flag");
         assert_eq!(chip.interrupt(), None);
@@ -3401,7 +3714,7 @@ mod tests {
         let mut chip = Chip::new(Vec::new());
         // ISC only goes up to LEVEL, and 6 and 7 are reserved.
         poke(&mut chip, reg::PORTA_PIN0CTRL + SWITCH_PIN, 0x06).unwrap();
-        let err = chip.set_switch(true).unwrap_err();
+        let err = chip.set_switch(true, false).unwrap_err();
         assert!(err.contains("PA5's ISC is 0x6"), "{err}");
     }
 
@@ -3452,11 +3765,42 @@ mod tests {
     #[test]
     fn the_pits_setup_waits_for_ctrlbusy() {
         let mut chip = Chip::new(Vec::new());
-        let err = refused(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN);
+        let fast = PIT_FRAME | RTC_PITEN;
+        let err = refused(&mut chip, reg::RTC_PITCTRLA, fast);
         assert!(err.contains("CTRLBUSY is set"), "{err}");
         while peek(&mut chip, reg::RTC_PITSTATUS).unwrap() != 0 {}
-        poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
-        assert!(poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).is_err());
+        poke(&mut chip, reg::RTC_PITCTRLA, fast).unwrap();
+        assert!(poke(&mut chip, reg::RTC_PITCTRLA, fast).is_err());
+    }
+
+    fn pit(chip: &mut Chip, value: u8) -> Result<(), String> {
+        while peek(chip, reg::RTC_PITSTATUS).unwrap() != 0 {}
+        poke(chip, reg::RTC_PITCTRLA, value)
+    }
+
+    #[test]
+    fn the_pit_ticks_on_its_prescalers_own_boundaries_after_a_change() {
+        let mut chip = Chip::new(Vec::new());
+        pit(&mut chip, PIT_FRAME | RTC_PITEN).unwrap();
+        ticks(&mut chip, 5).unwrap();
+        assert_eq!(chip.ticks, 5);
+        pit(&mut chip, regs::RTC_PERIOD_CYC32768 | RTC_PITEN).unwrap();
+        ticks(&mut chip, 58).unwrap();
+        assert_eq!(chip.ticks, 5, "63 frames in");
+        ticks(&mut chip, 1).unwrap();
+        assert_eq!(chip.ticks, 6, "the 64th");
+        ticks(&mut chip, 64).unwrap();
+        assert_eq!(chip.ticks, 7);
+    }
+
+    #[test]
+    fn the_pit_is_never_stopped_or_set_to_a_period_shorter_than_a_frame() {
+        let mut chip = Chip::new(Vec::new());
+        pit(&mut chip, PIT_FRAME | RTC_PITEN).unwrap();
+        let err = pit(&mut chip, PIT_FRAME).unwrap_err();
+        assert!(err.contains("errata 2.6.2"), "{err}");
+        let err = pit(&mut chip, regs::RTC_PERIOD_CYC256 | RTC_PITEN).unwrap_err();
+        assert!(err.contains("doesn't model"), "{err}");
     }
 
     #[test]
@@ -3485,7 +3829,7 @@ mod tests {
         let mut chip = Chip::new(Vec::new());
         assert_eq!(chip.wdt_periods_left(), DOWN_PERIODS, "off");
         // 64 clocks, four ticks, the fourth being the bite.
-        unlocked(&mut chip, reg::WDT_CTRLA, regs::WDT_PERIOD_64CLK).unwrap();
+        set_watchdog(&mut chip, regs::WDT_PERIOD_64CLK);
         assert_eq!(chip.wdt_periods_left(), 3);
         ticks(&mut chip, 3).unwrap();
         assert_eq!(chip.wdt_periods_left(), 0);
@@ -3567,7 +3911,7 @@ mod tests {
         poke(&mut chip, reg::RTC_PITCTRLA + 1, 0).unwrap_err();
         chip.pit_busy = 0;
         let pit = step(&mut chip);
-        poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
+        poke(&mut chip, reg::RTC_PITCTRLA, PIT_FRAME | RTC_PITEN).unwrap();
         let watchdog = step(&mut chip);
         unlocked(&mut chip, reg::WDT_CTRLA, 0x33).unwrap();
 
@@ -3795,9 +4139,9 @@ mod tests {
         poke(chip, reg::TCA0_CTRLA, TCA_RUNNING).unwrap();
         poke(chip, reg::RTC_PITINTCTRL, RTC_PI).unwrap();
         chip.pit_busy = 0;
-        poke(chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
+        poke(chip, reg::RTC_PITCTRLA, PIT_FRAME | RTC_PITEN).unwrap();
         poke(chip, reg::SLPCTRL_CTRLA, SLEEP_IDLE | SLPCTRL_SEN).unwrap();
-        unlocked(chip, reg::WDT_CTRLA, WDT_PERIOD_MAX).unwrap();
+        set_watchdog(chip, regs::WDT_WINDOW_32CLK | WDT_PERIOD_MAX);
         poke(chip, reg::VPORTC_DIR, AUX & !board::aux_pin(Aux::Blue)).unwrap();
         poke(chip, BLUE_CTRL, PORT_PULLUPEN).unwrap();
         sim
