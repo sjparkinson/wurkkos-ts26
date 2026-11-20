@@ -1,21 +1,18 @@
-//! The vector table and what runs between reset and `main`.
-
 #![allow(unsafe_code)]
 
 use core::arch::global_asm;
 
 use crate::regs;
 
-// The table below lists the handled vectors in this order.
 const _: () = assert!(
     0 < regs::VECTOR_PORTA_PORT
         && regs::VECTOR_PORTA_PORT < regs::VECTOR_RTC_PIT
         && regs::VECTOR_RTC_PIT < regs::VECTOR_TCA0_OVF
-        && regs::VECTOR_TCA0_OVF < regs::VECTORS
+        && regs::VECTOR_TCA0_OVF < regs::VECTORS,
+    "the table lists the handled vectors in this order"
 );
 
 global_asm!(
-    // 31 slots, each a two-word `jmp`.
     ".section .vectors, \"ax\", @progbits",
     ".global __vectors",
     "__vectors:",
@@ -36,10 +33,6 @@ global_asm!(
     "  jmp __unhandled_interrupt",
     "  .endr",
     "",
-    // No `reti`, which would return with the interrupt's flag still up and
-    // take it again after every instruction (DS40002204A section 13.2), with
-    // PB2 possibly high. r1 is zeroed since an interrupt can land straight
-    // after a `mul`.
     ".section .text.__unhandled_interrupt, \"ax\", @progbits",
     "__unhandled_interrupt:",
     "  eor r1, r1",
@@ -48,7 +41,6 @@ global_asm!(
     ".section .text.__reset, \"ax\", @progbits",
     ".global __reset",
     "__reset:",
-    // Compiled code assumes r1 is zero. Reset leaves SP at the top of SRAM.
     "  clr r1",
     "  out {sreg}, r1",
     "  ldi r26, lo8(__data_start)",
@@ -57,7 +49,6 @@ global_asm!(
     "  ldi r31, hi8(__data_load)",
     "  ldi r24, lo8(__data_end)",
     "  ldi r25, hi8(__data_end)",
-    // The test comes first, so an empty .data copies nothing.
     "  rjmp 2f",
     "1:",
     "  ld r0, Z+",
@@ -78,7 +69,6 @@ global_asm!(
     "  cpc r27, r25",
     "  brne 3b",
     "  call main",
-    // `main` never returns. This keeps a return out of what's next in flash.
     "5:",
     "  rjmp 5b",
     before_porta = const regs::VECTOR_PORTA_PORT - 1,

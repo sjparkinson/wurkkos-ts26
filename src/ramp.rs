@@ -1,18 +1,11 @@
-//! The curve is unmeasured in lumens.
-
 pub const LEVELS: u8 = 150;
 
-/// The top of the ramp, where turbo pulls about 11 A. Nothing but thermal
-/// regulation holds the light under it, and nothing above level 120 has run on
-/// this torch.
 pub const CEILING: u8 = LEVELS;
 
-/// Dual-slope at 10 MHz, so about 19.6 kHz.
 pub const PWM_TOP: u16 = 255;
 
 pub const DSM_BITS: u8 = 7;
 
-/// One sample wouldn't light steadily below this. Unconfirmed on this torch.
 pub const DSM_FLOOR: u16 = 20;
 
 pub const DSM_TOP: u16 = PWM_TOP << DSM_BITS;
@@ -21,9 +14,7 @@ const _: () = assert!(CEILING > 0 && CEILING <= LEVELS);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Output {
-    /// PB2.
     pub enable: bool,
-    /// With `enable` clear, the PWM still runs if this isn't 0.
     pub dsm: u16,
 }
 
@@ -50,12 +41,10 @@ pub fn output(level: u8) -> Output {
     }
 }
 
-/// Steps in a level, for a fade that moves finer than the table.
 pub const FRACTION: u16 = 16;
 
 const _: () = assert!(FRACTION.is_power_of_two());
 
-/// `position` in [`FRACTION`]ths of a level, lit only from level 1.
 pub fn faded(position: u16) -> Output {
     let position = position.min(u16::from(CEILING) * FRACTION);
     let Some(index) = (position / FRACTION).checked_sub(1) else {
@@ -65,8 +54,6 @@ pub fn faded(position: u16) -> Output {
         return Output::OFF;
     };
     let above = TABLE.get(usize::from(index.saturating_add(1)));
-    // Wrapping, since a checked u16 multiply links `__mulsi3`. The gap between
-    // two levels is under 700, so it can't wrap.
     let gap = above.map_or(0, |&above| {
         above
             .saturating_sub(below)
@@ -79,7 +66,6 @@ pub fn faded(position: u16) -> Output {
     }
 }
 
-/// `const fn`, since the u64 maths would need `__mulsi3` and up at runtime.
 #[expect(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,

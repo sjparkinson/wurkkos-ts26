@@ -1,6 +1,3 @@
-//! Enough XML to read Microchip's ATDF, and the generator that turns the copy
-//! in `vendor/` into the constants in `src/regs.rs`.
-//!
 //! `build.rs` loads this file by path, so nothing outside the tests may name
 //! `crate::` or `ts26::`.
 

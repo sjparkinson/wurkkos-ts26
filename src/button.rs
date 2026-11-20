@@ -1,5 +1,3 @@
-//! How long this switch bounces is unmeasured.
-
 use crate::TICKS_PER_SECOND;
 
 pub const HOLD_TICKS: u16 = TICKS_PER_SECOND * 3 / 8;
@@ -8,11 +6,8 @@ pub const RELEASE_TICKS: u16 = TICKS_PER_SECOND * 7 / 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// After [`RELEASE_TICKS`] up, or as the `most`th click is let go.
     Click(u8),
-    /// `ticks` counts from the press becoming a hold.
     Hold { clicks: u8, ticks: u16 },
-    /// The end of a hold.
     Release { clicks: u8 },
 }
 
@@ -80,8 +75,6 @@ impl Clicks {
         matches!(self.gesture, Gesture::Down { .. } | Gesture::Up { .. })
     }
 
-    /// What the gesture so far becomes if nothing more happens: a hold while
-    /// down, a click once up.
     pub const fn pending(&self) -> Option<Event> {
         match self.gesture {
             Gesture::Down { clicks, .. } => Some(Event::Hold { clicks, ticks: 0 }),
@@ -488,10 +481,8 @@ mod tests {
         assert!(clicks.idle());
     }
 
-    /// The event and whether it's idle after each tick.
     type Expected = (Option<Event>, bool);
 
-    /// The runs must alternate.
     fn model(runs: &[(bool, u16)], most: Option<u8>) -> Vec<Expected> {
         let mut expected = Vec::new();
         let mut waiting = 0u8;

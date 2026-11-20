@@ -1,8 +1,7 @@
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// 60 delta-sigma units. Levels 5, 11 and 13 (24 to 37) all flickered
-/// slightly on this torch.
+/// Levels 5, 11 and 13 all flickered slightly on this torch.
 pub const FLOOR: u8 = 17;
 
 pub const ON_LEVEL: u8 = 52;
@@ -20,8 +19,6 @@ pub enum Mode {
 pub enum Aux {
     Off,
     Blue,
-    /// Bright, since dim red is hard to see, so it's only shown for
-    /// [`crate::torch::LOCKED_TICKS`].
     Red,
     Yellow,
     White,
@@ -31,7 +28,6 @@ pub enum Aux {
 pub struct Ui {
     mode: Mode,
     level: u8,
-    /// Whether the last 1H ramped up.
     up: bool,
 }
 
@@ -61,8 +57,6 @@ impl Ui {
         }
     }
 
-    /// Locked, it waits the full time, so a fourth press in a pocket is a 4C
-    /// rather than a 3C that unlocks it.
     pub const fn most_clicks(&self) -> Option<u8> {
         match self.mode {
             Mode::On => Some(1),
@@ -79,7 +73,6 @@ impl Ui {
         }
     }
 
-    /// The level `event` would light from off, as [`Ui::handle`] does it.
     pub const fn lights(&self, event: Event) -> u8 {
         match (self.mode, event) {
             (Mode::Off, Event::Click(1)) => ON_LEVEL,

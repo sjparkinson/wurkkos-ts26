@@ -1,6 +1,3 @@
-//! Enough ELF32 to pull the flash image, RAM use and the symbols
-//! `layout.rs` checks out of the firmware.
-
 use std::ops::Range;
 
 use ts26::regs::mem;

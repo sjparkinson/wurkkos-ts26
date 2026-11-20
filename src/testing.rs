@@ -1,9 +1,8 @@
 //! Scripts are Anduril's notation.
 //!
-//! `2H` is click then hold, for a second unless timed (`1H:500ms`). Every
-//! click or hold gets a pause to count, except a hold that ends the script,
-//! which is never let go. `cell:`, `heat:`, `fault` and `flash:corrupt` take
-//! no time, and the last two only go before anything that does.
+//! `2H` is a click then a hold, for a second unless timed (`1H:500ms`), and a
+//! hold that ends the script is never let go. `fault` and `flash:corrupt` only
+//! go before anything that takes time.
 
 mod examples;
 
@@ -40,7 +39,6 @@ pub fn temperature_reading(kelvin: u16) -> u16 {
     closest(kelvin.saturating_mul(16), |raw| CALIBRATION.sixteenths(raw))
 }
 
-/// A binary search, so `read` must never go down as the reading goes up.
 fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
     let first_at_least = |value: u16| {
         let (mut low, mut high) = (0, FULL_SCALE + 1);
@@ -66,8 +64,6 @@ fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
     }
 }
 
-/// The result comes back a tick after the start, as the firmware's loop sees
-/// the real one.
 #[derive(Clone, Debug)]
 pub struct Adc {
     pub voltage: u16,
@@ -83,7 +79,6 @@ impl Default for Adc {
 }
 
 impl Adc {
-    /// 3.8 V and 25 °C with [`CALIBRATION`].
     pub const fn new() -> Self {
         Self {
             voltage: 3516,
@@ -248,7 +243,6 @@ pub fn parse<'a>(
     })
 }
 
-/// Times ten to the `places`.
 fn decimal(text: &str, places: u32) -> Option<u32> {
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if fraction.len() > places as usize || !fraction.bytes().all(|b| b.is_ascii_digit()) {
@@ -290,14 +284,11 @@ fn ticks(duration: &str) -> Result<u16, Error> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scene {
-    /// Centivolts.
     pub cell: u16,
     pub kelvin: u16,
     pub fault: bool,
     pub corrupt_flash: bool,
-    /// No script word sets it.
     pub adc_dead: bool,
-    /// Every conversion reads the cell. No script word sets it.
     pub adc_frozen: bool,
 }
 
@@ -380,17 +371,13 @@ fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
     iter::repeat_n(pressed, ticks.into())
 }
 
-/// Wired the way `src/main.rs` wires the real ADC, and paced as it paces the
-/// tick.
 #[derive(Clone, Debug)]
 pub struct Rig {
     pub torch: Torch,
     pub adc: Adc,
     pub pace: Pace,
-    /// 64 Hz ticks since power-on, modulo a rest tick.
     frame: u16,
     pressed: bool,
-    /// Whether the firmware ran a pass for the last 64 Hz tick.
     pub ticked: bool,
 }
 
@@ -412,21 +399,16 @@ impl Rig {
         }
     }
 
-    /// What the sleep after the last pass is, as `src/main.rs` asks for it.
     pub const fn powers_down(&self) -> bool {
         self.torch.resting() && self.pace.powers_down()
     }
 
-    /// A 64 Hz tick, never paced.
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
         let event = self.torch.tick(pressed, self.adc.result(), 1);
         self.adc.start(self.torch.convert());
         event
     }
 
-    /// A 64 Hz tick's worth of the switch. At rest the PIT ticks on every
-    /// 64th from power-on, as the simulator models it, and a change of the
-    /// switch wakes the firmware to tick at 64 Hz from the next.
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
         self.frame = (self.frame + 1) % REST_TICKS;
         let changed = core::mem::replace(&mut self.pressed, pressed) != pressed;
@@ -475,7 +457,6 @@ impl Deref for Rig {
     }
 }
 
-/// Xorshift32, for repeatable tests and nothing else.
 #[derive(Clone, Debug)]
 pub struct Rng(u32);
 
@@ -492,7 +473,6 @@ impl Rng {
         self.0
     }
 
-    /// The top of the state is the better end.
     pub const fn next_u16(&mut self) -> u16 {
         (self.next_u32() >> 16) as u16
     }

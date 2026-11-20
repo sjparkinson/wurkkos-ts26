@@ -1,6 +1,3 @@
-//! `cargo xtask breakages` breaks the firmware on purpose, one mistake at a
-//! time, and checks `cargo xtask hex` refuses each for the reason expected.
-//!
 //! A refusal shows one alarm rings for one mistake, not for every mistake of
 //! that kind.
 
@@ -45,6 +42,7 @@ struct Breakage {
 
 const HW: &str = "src/avr/hw.rs";
 const MAIN: &str = "src/main.rs";
+const RT: &str = "src/avr/rt.rs";
 const WATCHDOG: &str = "src/watchdog.rs";
 
 const BREAKAGES: &[Breakage] = &[
@@ -198,7 +196,7 @@ const BREAKAGES: &[Breakage] = &[
         find: "    set_watchdog(regs::WDT_PERIOD_8KCLK);\n",
         replace: "",
         stage: Stage::Simulator,
-        expect: "the library has the watchdog's window off, but WDT.CTRLA has it on",
+        expect: "slows the PIT with the watchdog's window still on",
     },
     // A press at rest then lands the window on a count left from the last rest
     // feed, up to a second old.
@@ -354,6 +352,246 @@ const BREAKAGES: &[Breakage] = &[
         replace: "    Some(u16::from_le_bytes([lo, hi]) / 10)\n",
         stage: Stage::Build,
         expect: "undefined symbol: __mulsi3",
+    },
+    Breakage {
+        name: "pass-too-long-for-the-watchdogs-sums",
+        file: MAIN,
+        find: "            torch.tick(hw::switch_pressed(), hw::adc_result(), pace.ticks());\n",
+        replace: "            for _ in 0..2000_u16 {\n                \
+                  hw::switch_pressed();\n            }\n            \
+                  torch.tick(hw::switch_pressed(), hw::adc_result(), pace.ticks());\n",
+        stage: Stage::Simulator,
+        expect: "a pass took",
+    },
+    Breakage {
+        name: "enable-held-after-the-self-test",
+        file: MAIN,
+        find: "    hw::hold_enable_low();\n\n    \
+               let faults = Faults {\n        \
+               hang: selftest::hung(hw::take_reset_flags()),\n        \
+               flash: !hw::flash_ok(),\n        \
+               fuses: !hw::fuses().ok(),\n    };\n",
+        replace: "    let faults = Faults {\n        \
+                  hang: selftest::hung(hw::take_reset_flags()),\n        \
+                  flash: !hw::flash_ok(),\n        \
+                  fuses: !hw::fuses().ok(),\n    };\n\n    \
+                  hw::hold_enable_low();\n",
+        stage: Stage::Simulator,
+        expect: "leaves PB2 set",
+    },
+    Breakage {
+        name: "clock-divided-by-four",
+        file: HW,
+        find: "        regs::CLKCTRL_PDIV_2X | regs::CLKCTRL_PEN,\n",
+        replace: "        regs::CLKCTRL_PDIV_4X | regs::CLKCTRL_PEN,\n",
+        stage: Stage::Simulator,
+        expect: "the firmware runs at 10 MHz",
+    },
+    Breakage {
+        name: "battery-pin-pull-up",
+        file: HW,
+        find: "            BATTERY => regs::PORT_ISC_INPUT_DISABLE,\n",
+        replace: "            BATTERY => regs::PORT_PULLUPEN,\n",
+        stage: Stage::Simulator,
+        expect: "battery divider",
+    },
+    Breakage {
+        name: "updi-pin-written",
+        file: HW,
+        find: "            UPDI => continue,\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "PA0 is UPDI, and the firmware leaves its settings alone",
+    },
+    Breakage {
+        name: "switch-input-buffer-off",
+        file: HW,
+        find: "const SENSE_OFF: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_INTDISABLE;\n",
+        replace: "const SENSE_OFF: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_INPUT_DISABLE;\n",
+        stage: Stage::Simulator,
+        expect: "reads PA5 with its input buffer off",
+    },
+    Breakage {
+        name: "period-after-the-timer-starts",
+        file: HW,
+        find: "    write16(reg::TCA0_PER, PWM_TOP);\n    \
+               write16(reg::TCA0_CMP0BUF, 0);\n    \
+               write(reg::TCA0_CTRLB, CTRLB_OFF);\n    \
+               write(reg::TCA0_INTCTRL, 0);\n    \
+               write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);\n",
+        replace: "    write16(reg::TCA0_CMP0BUF, 0);\n    \
+                  write(reg::TCA0_CTRLB, CTRLB_OFF);\n    \
+                  write(reg::TCA0_INTCTRL, 0);\n    \
+                  write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);\n    \
+                  write16(reg::TCA0_PER, PWM_TOP);\n",
+        stage: Stage::Simulator,
+        expect: "writes TCA0.PER with the timer running",
+    },
+    Breakage {
+        name: "adc-duty-left-at-reset",
+        file: HW,
+        find: "    write(reg::ADC0_CALIB, regs::ADC_DUTYCYC_DUTY25);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "without ADC0.CALIB at 25% duty",
+    },
+    Breakage {
+        name: "adc-clock-too-fast",
+        file: HW,
+        find: "regs::ADC_REFSEL_INTREF | regs::ADC_PRESC_DIV16,\n",
+        replace: "regs::ADC_REFSEL_INTREF | regs::ADC_PRESC_DIV2,\n",
+        stage: Stage::Simulator,
+        expect: "outside 200 kHz to 1.5 MHz",
+    },
+    Breakage {
+        name: "no-sampling-capacitor",
+        file: HW,
+        find: "        regs::ADC_SAMPCAP | regs::ADC_REFSEL_INTREF",
+        replace: "        regs::ADC_REFSEL_INTREF",
+        stage: Stage::Simulator,
+        expect: "it needs SAMPCAP",
+    },
+    Breakage {
+        name: "no-initial-delay",
+        file: HW,
+        find: "    write(reg::ADC0_CTRLD, regs::ADC_INITDLY_DLY32);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "reads the temperature sensor with INITDLY 0",
+    },
+    Breakage {
+        name: "sample-too-short",
+        file: HW,
+        find: "    write(reg::ADC0_SAMPCTRL, regs::ADC_SAMPLEN_32US);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "reads the temperature sensor with INITDLY",
+    },
+    Breakage {
+        name: "pit-written-mid-sync",
+        file: HW,
+        find: "    while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}\n    \
+               write(reg::RTC_PITCTRLA",
+        replace: "    write(reg::RTC_PITCTRLA",
+        stage: Stage::Simulator,
+        expect: "CTRLBUSY is set",
+    },
+    Breakage {
+        name: "pit-sync-not-waited-out",
+        file: HW,
+        find: "regs::RTC_PITEN);\n    \
+               while read(reg::RTC_PITSTATUS) & regs::RTC_CTRLBUSY != 0 {}\n",
+        replace: "regs::RTC_PITEN);\n",
+        stage: Stage::Simulator,
+        expect: "powers down with RTC.PITSTATUS.CTRLBUSY still set",
+    },
+    Breakage {
+        name: "pit-turned-off",
+        file: HW,
+        find: "period | regs::RTC_PITEN",
+        replace: "period",
+        stage: Stage::Simulator,
+        expect: "sleeps with no interrupt enabled that could wake it",
+    },
+    Breakage {
+        name: "sleep-not-enabled",
+        file: HW,
+        find: "mode | regs::SLPCTRL_SEN",
+        replace: "mode",
+        stage: Stage::Simulator,
+        expect: "sleeps with SLPCTRL.SEN clear",
+    },
+    Breakage {
+        name: "sleep-apart-from-sei",
+        file: HW,
+        find: "asm!(\"sei\", \"sleep\", options(nostack))",
+        replace: "asm!(\"sei\", \"nop\", \"sleep\", options(nostack))",
+        stage: Stage::Layout,
+        expect: "doesn't follow `sei`",
+    },
+    Breakage {
+        name: "pit-slowed-before-the-watchdog",
+        file: HW,
+        find: "    set_watchdog(regs::WDT_PERIOD_8KCLK);\n    set_pit(regs::RTC_PERIOD_CYC32768);\n",
+        replace: "    set_pit(regs::RTC_PERIOD_CYC32768);\n    set_watchdog(regs::WDT_PERIOD_8KCLK);\n",
+        stage: Stage::Simulator,
+        expect: "slows the PIT with the watchdog's window still on",
+    },
+    Breakage {
+        name: "late-rest-tick-kept",
+        file: HW,
+        find: "    set_pit(regs::RTC_PERIOD_CYC512);\n    write(reg::GPIO_GPIOR0, 0);\n",
+        replace: "    set_pit(regs::RTC_PERIOD_CYC512);\n",
+        stage: Stage::Simulator,
+        expect: "with a 1 Hz tick landing as a press speeds the PIT up",
+    },
+    Breakage {
+        name: "window-back-without-its-wdr",
+        file: HW,
+        find: "    start_watchdog();\n    feed_watchdog();\n",
+        replace: "    start_watchdog();\n",
+        stage: Stage::Simulator,
+        expect: "without wdr",
+    },
+    Breakage {
+        name: "watchdog-sync-not-waited-out",
+        file: HW,
+        find: "    protected_write(reg::WDT_CTRLA, ctrla);\n    \
+               while read(reg::WDT_STATUS) & regs::WDT_SYNCBUSY != 0 {}\n",
+        replace: "    protected_write(reg::WDT_CTRLA, ctrla);\n",
+        stage: Stage::Simulator,
+        expect: "wdr before the WDT.CTRLA write has synced",
+    },
+    Breakage {
+        name: "crc-status-read-too-soon",
+        file: HW,
+        find: "    // SAFETY: four `nop`s, which touch nothing.\n    \
+               unsafe {\n        asm!(\n            \
+               \"nop\",\n            \"nop\",\n            \"nop\",\n            \"nop\",\n            \
+               options(nostack, preserves_flags)\n        )\n    };\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "but the library says Blue",
+    },
+    Breakage {
+        name: "adc-reference-not-forced",
+        file: HW,
+        find: "    write(reg::VREF_CTRLB, regs::VREF_ADC0REFEN);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "ADC0REFEN clear",
+    },
+    Breakage {
+        name: "adc-result-high-byte-first",
+        file: HW,
+        find: "    let lo = read(reg::ADC0_RES);\n    let hi = read(reg::ADC0_RES + 1);\n",
+        replace: "    let hi = read(reg::ADC0_RES + 1);\n    let lo = read(reg::ADC0_RES);\n",
+        stage: Stage::Simulator,
+        expect: "without its low byte",
+    },
+    Breakage {
+        name: "halt-leaves-the-tick-on",
+        file: HW,
+        find: "    set_output(Output::OFF);\n    write(reg::RTC_PITINTCTRL, 0);\n",
+        replace: "    set_output(Output::OFF);\n",
+        stage: Stage::Simulator,
+        expect: "sleeps inside the handler for interrupt 13, so no other can wake it",
+    },
+    Breakage {
+        name: "unhandled-interrupt-returns",
+        file: RT,
+        find: "    \"  jmp {halt}\",\n",
+        replace: "    \"  reti\",\n    \"  jmp {halt}\",\n",
+        stage: Stage::Layout,
+        expect: "doesn't `jmp` after clearing r1",
+    },
+    Breakage {
+        name: "unhandled-interrupt-keeps-r1",
+        file: RT,
+        find: "    \"  eor r1, r1\",\n",
+        replace: "",
+        stage: Stage::Layout,
+        expect: "doesn't start with `eor r1, r1`",
     },
 ];
 

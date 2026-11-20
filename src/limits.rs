@@ -1,8 +1,3 @@
-//! What the cell and the temperature allow the UI's level to be.
-//!
-//! A cell that can't be read is a fault that keeps the light off, since the
-//! cell has no protection of its own.
-
 use crate::battery::{self, Protection, Verdict};
 use crate::gradual::Fade;
 use crate::ramp::CEILING;
@@ -33,15 +28,11 @@ pub struct Limits {
     calibration: Calibration,
     protection: Protection,
     thermal: Thermal,
-    /// The UI's level on the last tick.
     asked: u8,
     level: u8,
     fade: Fade,
-    /// A conversion starts before its tick's output is set, so a reading due
-    /// now ran across the last two ticks.
     lit_before: bool,
     convert: Option<Convert>,
-    /// Kept through a rest, since a check of the cell reads no ground.
     bad_grounds: u8,
     fault: bool,
 }
@@ -71,13 +62,10 @@ impl Limits {
         self.level
     }
 
-    /// The light in [`crate::ramp::FRACTION`]ths of a level, which trails
-    /// [`Self::level`] only while heat alone moves it.
     pub const fn position(&self) -> u16 {
         self.fade.position()
     }
 
-    /// Whether a turn-on now would be flat instead.
     pub const fn weak(&self) -> bool {
         self.protection.weak()
     }
@@ -96,8 +84,6 @@ impl Limits {
         }
     }
 
-    /// Starts no conversion, since one running into power-down comes back on
-    /// waking with an invalid result (DS40002204A §30.3.5).
     pub const fn rest(&mut self, ticks: u16) {
         self.schedule.rest();
         self.protection.rest(ticks);
@@ -632,9 +618,8 @@ mod tests {
         assert_eq!(limits.health(), Health::Fault);
     }
 
-    /// A known gap, pinned so that closing it has to change this test.
     #[test]
-    fn a_plausible_voltage_that_never_changes_keeps_the_light_on() {
+    fn known_gap_a_plausible_voltage_that_never_changes_keeps_the_light_on() {
         let mut run = Run::new();
         assert_eq!(battery::centivolts(run.adc.voltage), 380);
         run.ui = 100;
@@ -647,9 +632,8 @@ mod tests {
         assert_eq!(run.offs, 0);
     }
 
-    /// A known gap, pinned so that closing it has to change this test.
     #[test]
-    fn a_plausible_temperature_that_never_changes_never_steps_down() {
+    fn known_gap_a_plausible_temperature_that_never_changes_never_steps_down() {
         let mut run = Run::new();
         assert_eq!(run.adc.temperature, celsius(25));
         run.ui = CEILING;

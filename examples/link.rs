@@ -1,6 +1,3 @@
-//! Not firmware. One static of each kind, for `cargo xtask hex` to check link.x
-//! and src/avr/rt.rs against, since the firmware has none. Never flashed.
-
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]

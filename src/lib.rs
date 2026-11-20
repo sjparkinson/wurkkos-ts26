@@ -1,5 +1,4 @@
 #![no_std]
-// Must match the list on `testing` below and the one in src/main.rs.
 #![cfg_attr(
     not(test),
     deny(
@@ -45,7 +44,6 @@ pub mod torch;
 pub mod ui;
 pub mod watchdog;
 
-/// 32.768 kHz over the PIT's 512.
 pub const TICKS_PER_SECOND: u16 = 64;
 
 #[expect(
