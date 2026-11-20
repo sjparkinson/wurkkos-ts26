@@ -761,7 +761,9 @@ mod tests {
             assert_eq!(torch.aux(), Aux::Off, "{down}");
             torch.adc.voltage = voltage_reading(380);
             torch.tick(false);
-            let running = torch.convert().is_some();
+            let running = torch
+                .convert()
+                .is_some_and(|c| c.channel == Channel::Voltage);
             assert_eq!(torch.tick(false), Some(Event::Release { clicks: 1 }));
             run(&mut torch, false, 2);
             assert!(torch.resting(), "{down}");
@@ -1287,6 +1289,7 @@ mod tests {
             rig.adc
                 .start_with(rig.torch.convert(), |channel| match channel {
                     Channel::Voltage => cell.read(rng),
+                    Channel::Ground => 0,
                     Channel::Temperature => head.read(rng),
                 });
             let health = rig.limits.health();

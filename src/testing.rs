@@ -70,6 +70,7 @@ fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
 #[derive(Clone, Debug)]
 pub struct Adc {
     pub voltage: u16,
+    pub ground: u16,
     pub temperature: u16,
     pending: Option<u16>,
 }
@@ -85,6 +86,7 @@ impl Adc {
     pub const fn new() -> Self {
         Self {
             voltage: 3516,
+            ground: 0,
             temperature: 2124,
             pending: None,
         }
@@ -95,9 +97,10 @@ impl Adc {
     }
 
     pub fn start(&mut self, convert: Option<Convert>) {
-        let (voltage, temperature) = (self.voltage, self.temperature);
+        let (voltage, ground, temperature) = (self.voltage, self.ground, self.temperature);
         self.start_with(convert, |channel| match channel {
             Channel::Voltage => voltage,
+            Channel::Ground => ground,
             Channel::Temperature => temperature,
         });
     }
@@ -293,6 +296,8 @@ pub struct Scene {
     pub corrupt_flash: bool,
     /// No script word sets it.
     pub adc_dead: bool,
+    /// Every conversion reads the cell. No script word sets it.
+    pub adc_frozen: bool,
 }
 
 impl Scene {
@@ -302,6 +307,7 @@ impl Scene {
         fault: false,
         corrupt_flash: false,
         adc_dead: false,
+        adc_frozen: false,
     };
 
     pub const fn faults(&self) -> Faults {
@@ -314,7 +320,9 @@ impl Scene {
 
     pub fn reading(&self, channel: Channel) -> u16 {
         match channel {
+            _ if self.adc_frozen => voltage_reading(self.cell),
             Channel::Voltage => voltage_reading(self.cell),
+            Channel::Ground => 0,
             Channel::Temperature => temperature_reading(self.kelvin),
         }
     }
@@ -695,6 +703,7 @@ mod tests {
             fault: true,
             corrupt_flash: false,
             adc_dead: false,
+            adc_frozen: false,
         };
         let mut samples = samples(script).peekable();
         assert!(samples.peek().is_some());

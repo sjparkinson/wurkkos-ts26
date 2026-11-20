@@ -50,7 +50,7 @@ use crate::world::{CALIBRATION, FUSE_NAMES, World};
 // Only ATDF-generated names, since anything hand-written in src/regs.rs is the
 // firmware's choice, and the model mustn't move with the firmware.
 use ts26::regs::{
-    self, ADC_ENABLE, ADC_MUXPOS_AIN1, ADC_MUXPOS_TEMPSENSE, ADC_PRESC, ADC_REFSEL,
+    self, ADC_ENABLE, ADC_MUXPOS_AIN1, ADC_MUXPOS_GND, ADC_MUXPOS_TEMPSENSE, ADC_PRESC, ADC_REFSEL,
     ADC_REFSEL_INTREF, ADC_RESRDY, ADC_SAMPCAP, ADC_SAMPLEN, ADC_SAMPNUM, ADC_SAMPNUM_ACC4,
     ADC_STCONV, CRCSCAN_BUSY, CRCSCAN_ENABLE, CRCSCAN_OK, PORT_INVEN, PORT_ISC, PORT_PULLUPEN,
     RSTCTRL_PORF, RTC_CTRLBUSY, RTC_PI, RTC_PITEN, SLPCTRL_SEN, TCA_CMP0EN, TCA_OVF,
@@ -224,10 +224,11 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     unhandled_interrupt(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
     let examples = if examples { EXAMPLES } else { &[] };
-    let faults: [(FaultCheck, &str); 4] = [
+    let faults: [(FaultCheck, &str); 5] = [
         (slow_ticks, "with the slowest ticks"),
         (oscillator_stops, "with the 32 kHz oscillator stopped"),
         (adc_never_answers, "with a dead ADC"),
+        (adc_stuck, "with the ADC stuck on the cell's reading"),
         (switch_stuck, "with the switch stuck down"),
     ];
     let power_on = &power_on;
@@ -364,11 +365,20 @@ fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 }
 
 fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
+    adc_broken(sim, report, true)
+}
+
+fn adc_stuck(sim: Sim, report: &mut Report) -> Result<(), String> {
+    adc_broken(sim, report, false)
+}
+
+fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
     let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
     let mut levels = Vec::new();
     let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| Sample {
         scene: Scene {
-            adc_dead: true,
+            adc_dead: dead,
+            adc_frozen: !dead,
             ..sample.scene
         },
         ..sample
@@ -1629,15 +1639,16 @@ impl Chip {
                 }
                 Channel::Temperature
             }
+            ADC_MUXPOS_GND => Channel::Ground,
             _ => {
                 return Err(format!(
-                    "converts MUXPOS {muxpos:#04x}, which is neither AIN1 nor the \
-                     temperature sensor"
+                    "converts MUXPOS {muxpos:#04x}, which is neither AIN1, ground nor \
+                     the temperature sensor"
                 ));
             }
         };
         let setup = Some(muxpos);
-        self.adc.result = if self.adc.last_setup == setup {
+        self.adc.result = if self.adc.last_setup == setup || self.world.scene.adc_frozen {
             self.world.reading(channel)
         } else {
             UNSETTLED
@@ -2513,6 +2524,7 @@ mod tests {
     fn the_first_conversion_after_a_change_is_junk_then_it_reads_the_world() {
         for (muxpos, channel) in [
             (ADC_MUXPOS_AIN1, Channel::Voltage),
+            (ADC_MUXPOS_GND, Channel::Ground),
             (ADC_MUXPOS_TEMPSENSE, Channel::Temperature),
         ] {
             let mut chip = adc_ready(muxpos);
@@ -3221,7 +3233,7 @@ mod tests {
                 "internal 1.1 V",
             ),
             (reg::ADC0_CTRLB, 0, "four samples"),
-            (reg::ADC0_MUXPOS, regs::ADC_MUXPOS_AIN2, "neither AIN1 nor"),
+            (reg::ADC0_MUXPOS, regs::ADC_MUXPOS_AIN2, "neither AIN1,"),
         ] {
             let mut chip = adc_ready(ADC_MUXPOS_AIN1);
             poke(&mut chip, a, value).unwrap();

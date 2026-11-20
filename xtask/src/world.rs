@@ -104,6 +104,7 @@ mod tests {
             fault: true,
             corrupt_flash: true,
             adc_dead: true,
+            adc_frozen: true,
         };
         let world = World::from(scene);
         assert_eq!(world.scene, scene);
