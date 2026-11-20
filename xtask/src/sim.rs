@@ -342,6 +342,11 @@ fn lit(sim: &mut Sim, ticks: u16, report: &mut Report) -> Result<(), String> {
     Ok(())
 }
 
+fn script(words: &'static str) -> impl Iterator<Item = Sample> {
+    let actions = testing::parse(words.split_whitespace());
+    testing::samples(actions.map(|action| action.expect("every fault script parses")))
+}
+
 /// The 32 kHz oscillator 30% slow and the 20 MHz one 5% fast (tables 36-13 and
 /// 36-12, full operating range, from characterisation).
 const SLOWEST_TICK_CYCLES: u64 = TICK_CYCLES * 105 / 70;
@@ -358,15 +363,9 @@ fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 
 fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
     let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
-    let script = [
-        Action::Clicks(1),
-        Action::Wait(10 * TICKS_PER_SECOND),
-        Action::Clicks(1),
-        Action::Wait(2 * TICKS_PER_SECOND),
-    ];
     let levels = std::cell::RefCell::new(Vec::new());
     let mut shadow = Rig::default();
-    let samples = testing::samples(script).map(|sample| {
+    let samples = script("1C wait:10s 1C wait:2s").map(|sample| {
         let sample = Sample {
             scene: Scene {
                 adc_dead: true,
