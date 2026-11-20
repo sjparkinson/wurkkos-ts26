@@ -61,5 +61,5 @@ Agents in `.claude/agents/` report back and never edit. Use them rather than doi
 
 - `.rodata` is linked at 0x808000 and up, because AVR ELF files put data space at 0x800000, plus the mapped-flash window at 0x8000. It's how const tables are read without `lpm`.
 - `src/main.rs` has a host `fn main()` that exits with an error. It's there so the workspace builds and tests on the host.
-- `src/main.rs` idles rather than powers down on the tick after a watchdog feed, at about 0.37 mA. The datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped. T4 on main (branch `build-t4-main`), which powers down on that tick too, has run on the torch since 2026-11-16 with no reset or bite, so the idle may now go, in a commit of its own.
+- `src/main.rs` powers down on the tick after a watchdog feed too, though the datasheet doesn't say a `wdr` finishes syncing with the peripheral clock stopped. T4 (branch `build-t4-main`) did the same on the torch from 2026-11-16 for several days with no reset or bite.
 - `hw::wait_for_tick` only has a deadline while the light's on, about 104 ms with no tick, then `main` calls `hw::halt`, which turns the light off and powers down for good. With the light off there's none, since a dead 32 kHz oscillator then leaves the chip asleep with PB2 low, which is the safe state.

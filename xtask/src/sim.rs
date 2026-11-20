@@ -36,7 +36,7 @@ use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
-use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, Feeder, TICK_DEADLINE_CYCLES};
+use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, TICK_DEADLINE_CYCLES};
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
 use crate::crc;
@@ -587,7 +587,6 @@ fn in_step_with(
     }
     let mut rig = Rig::new(power_on.faults());
     let mut was_resting = false;
-    let mut feeder = Feeder::new();
     let mut finished = true;
     for (tick, sample) in samples.enumerate() {
         let at = |e: String| format!("tick {tick}: {e}");
@@ -629,14 +628,11 @@ fn in_step_with(
         }
         each(&rig);
         was_resting = rig.torch.resting();
-        // The sleep that ended this pass answers the state the pass left, so
-        // the feeder ticks after it, as in `main`.
-        feeder.tick();
-        let power_down = feeder.power_down(was_resting);
-        if powered_down != power_down {
+        // The sleep that ended this pass answers the state the pass left.
+        if powered_down != was_resting {
             return Err(at(format!(
                 "the library says {}, but the firmware {}",
-                if power_down { "power down" } else { "idle" },
+                if was_resting { "power down" } else { "idle" },
                 if powered_down {
                     "powered down"
                 } else {
