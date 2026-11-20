@@ -1,4 +1,6 @@
-//! The one ADC, shared between the cell's voltage and the temperature.
+//! The one ADC, shared between the cell's voltage, its own ground and the
+//! temperature. Ground reads as nearly nothing, so an ADC stuck on a
+//! plausible voltage fails it.
 //!
 //! The first conversion after a setup is thrown away. The datasheet doesn't
 //! ask for that, but gives the ADC settling time on a new channel and the
@@ -8,6 +10,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Voltage,
+    Ground,
     Temperature,
 }
 
@@ -20,14 +23,24 @@ pub struct Convert {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reading {
     Voltage(u16),
+    /// No result at all reads as `u16::MAX`, since 0 would pass.
+    Ground(u16),
     Temperature(u16),
 }
 
 pub const FULL_SCALE: u16 = 4 * 1023;
 
+/// Likely. 3 LSb a sample for each of the four, from table 36-27's typical
+/// absolute error at 1.1 V, which gives no maximum (DS40002204A §36.16).
+pub const GROUND_MAX: u16 = 4 * 3;
+
 /// Four readings a second of each channel, which `battery::Protection` and
 /// `thermal::Thermal` assume.
 pub const CYCLE_TICKS: u8 = 16;
+/// After the voltage rather than the temperature sensor's long sample, and
+/// late enough that a check of the cell at rest is over first. That ground
+/// settles from either in one thrown-away conversion is unconfirmed.
+const GROUND_AT: u8 = CYCLE_TICKS / 4;
 const TEMPERATURE_AT: u8 = CYCLE_TICKS / 2;
 
 const _: () = assert!(CYCLE_TICKS.is_power_of_two());
@@ -36,9 +49,6 @@ const _: () = assert!(CYCLE_TICKS.is_power_of_two());
 pub struct Schedule {
     phase: u8,
     temperature: bool,
-    /// Back to `None` on [`Schedule::rest`], since the firmware turns the
-    /// reference off to power down.
-    set_up: Option<Channel>,
 }
 
 impl Schedule {
@@ -46,7 +56,6 @@ impl Schedule {
         Self {
             phase: 0,
             temperature: false,
-            set_up: None,
         }
     }
 
@@ -61,29 +70,31 @@ impl Schedule {
     ) -> (Option<Reading>, Option<Convert>) {
         let phase = self.phase;
         self.phase = phase.wrapping_add(1) & (CYCLE_TICKS - 1);
-        let (channel, step) = match phase.checked_sub(TEMPERATURE_AT) {
-            None => (Channel::Voltage, phase),
-            Some(step) => (Channel::Temperature, step),
+        let (channel, start) = match phase {
+            TEMPERATURE_AT.. => (Channel::Temperature, TEMPERATURE_AT),
+            GROUND_AT.. => (Channel::Ground, GROUND_AT),
+            _ => (Channel::Voltage, 0),
         };
+        let step = phase.wrapping_sub(start);
         if step == 0 && channel == Channel::Temperature {
             self.temperature = temperature;
         }
         if channel == Channel::Temperature && !self.temperature {
             return (None, None);
         }
-        let convert = |setup| Some(Convert { channel, setup });
         match step {
-            0 => {
-                let setup = self.set_up != Some(channel);
-                self.set_up = Some(channel);
-                (None, convert(setup))
-            }
-            1 => (None, convert(false)),
+            0 | 1 => (
+                None,
+                Some(Convert {
+                    channel,
+                    setup: step == 0,
+                }),
+            ),
             2 => {
-                let reading = result.unwrap_or(0);
                 let reading = match channel {
-                    Channel::Voltage => Reading::Voltage(reading),
-                    Channel::Temperature => Reading::Temperature(reading),
+                    Channel::Voltage => Reading::Voltage(result.unwrap_or(0)),
+                    Channel::Ground => Reading::Ground(result.unwrap_or(u16::MAX)),
+                    Channel::Temperature => Reading::Temperature(result.unwrap_or(0)),
                 };
                 (Some(reading), None)
             }
@@ -115,13 +126,16 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_voltage_then_the_temperature_8_ticks_later() {
+    fn reads_the_voltage_then_ground_4_ticks_later_then_the_temperature() {
         let mut schedule = Schedule::new();
         let ticks = run(&mut schedule, 16, Some(7), true);
         let mut expected = [(None, None); 16];
         expected[0].1 = convert(Channel::Voltage, true);
         expected[1].1 = convert(Channel::Voltage, false);
         expected[2].0 = Some(Reading::Voltage(7));
+        expected[4].1 = convert(Channel::Ground, true);
+        expected[5].1 = convert(Channel::Ground, false);
+        expected[6].0 = Some(Reading::Ground(7));
         expected[8].1 = convert(Channel::Temperature, true);
         expected[9].1 = convert(Channel::Temperature, false);
         expected[10].0 = Some(Reading::Temperature(7));
@@ -132,12 +146,17 @@ mod tests {
     fn each_channel_comes_round_every_16_ticks() {
         let mut schedule = Schedule::new();
         let ticks = run(&mut schedule, 160, Some(1), true);
-        for (channel, at) in [(Channel::Voltage, 2), (Channel::Temperature, 10)] {
+        for (channel, at) in [
+            (Channel::Voltage, 2),
+            (Channel::Ground, 6),
+            (Channel::Temperature, 10),
+        ] {
             let due: Vec<usize> = ticks
                 .iter()
                 .enumerate()
                 .filter(|(_, (reading, _))| match reading {
                     Some(Reading::Voltage(_)) => channel == Channel::Voltage,
+                    Some(Reading::Ground(_)) => channel == Channel::Ground,
                     Some(Reading::Temperature(_)) => channel == Channel::Temperature,
                     None => false,
                 })
@@ -164,7 +183,7 @@ mod tests {
         let mut schedule = Schedule::new();
         for (reading, convert) in run(&mut schedule, 160, Some(1), false) {
             assert!(!matches!(reading, Some(Reading::Temperature(_))));
-            assert!(convert.is_none_or(|c| c.channel == Channel::Voltage));
+            assert!(convert.is_none_or(|c| c.channel != Channel::Temperature));
         }
     }
 
@@ -190,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn only_sets_the_adc_up_when_the_channel_changes() {
+    fn sets_the_adc_up_at_the_start_of_every_turn() {
         let mut schedule = Schedule::new();
         let setups = |ticks: &[(Option<Reading>, Option<Convert>)]| -> Vec<Channel> {
             ticks
@@ -199,14 +218,10 @@ mod tests {
                 .collect()
         };
         let off = run(&mut schedule, 64, Some(1), false);
-        assert_eq!(off[0].1, convert(Channel::Voltage, true));
-        assert_eq!(off[16].1, convert(Channel::Voltage, false));
-        assert_eq!(setups(&off), [Channel::Voltage]);
+        assert_eq!(setups(&off), [Channel::Voltage, Channel::Ground].repeat(4));
         let on = run(&mut schedule, 64, Some(1), true);
-        let alternating = [Channel::Temperature, Channel::Voltage].repeat(4);
-        assert_eq!(setups(&on)[..], alternating[..7]);
-        let off = run(&mut schedule, 64, Some(1), false);
-        assert_eq!(setups(&off), [Channel::Voltage]);
+        let turns = [Channel::Voltage, Channel::Ground, Channel::Temperature];
+        assert_eq!(setups(&on), turns.repeat(4));
     }
 
     #[test]
@@ -226,13 +241,14 @@ mod tests {
         let mut readings = Vec::new();
         for tick in 0..160 {
             let phase = tick % 16;
-            let result = (phase != 2 && phase != 10).then_some(0x155);
+            let result = (![2, 6, 10].contains(&phase)).then_some(0x155);
             let (reading, _) = schedule.tick(result, true);
             readings.push((phase, reading));
         }
         for (phase, reading) in readings {
             match phase {
                 2 => assert_eq!(reading, Some(Reading::Voltage(0))),
+                6 => assert_eq!(reading, Some(Reading::Ground(u16::MAX))),
                 10 => assert_eq!(reading, Some(Reading::Temperature(0))),
                 _ => assert_eq!(reading, None, "phase {phase}"),
             }
@@ -247,10 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn no_result_when_one_is_due_reads_as_zero() {
+    fn no_result_when_one_is_due_reads_as_zero_and_a_bad_ground() {
         let mut schedule = Schedule::new();
         let ticks = run(&mut schedule, 16, None, true);
         assert_eq!(ticks[2].0, Some(Reading::Voltage(0)));
+        assert_eq!(ticks[6].0, Some(Reading::Ground(u16::MAX)));
         assert_eq!(ticks[10].0, Some(Reading::Temperature(0)));
     }
 }

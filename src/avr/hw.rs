@@ -272,6 +272,7 @@ pub fn adc_start(convert: Convert) {
     if convert.setup {
         adc_channel(match convert.channel {
             Channel::Voltage => regs::ADC_MUXPOS_AIN1,
+            Channel::Ground => regs::ADC_MUXPOS_GND,
             Channel::Temperature => regs::ADC_MUXPOS_TEMPSENSE,
         });
     }

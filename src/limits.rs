@@ -6,9 +6,11 @@
 use crate::battery::{self, Protection, Verdict};
 use crate::ramp::CEILING;
 use crate::selftest::Faults;
-use crate::sensors::{Convert, Reading, Schedule};
+use crate::sensors::{Convert, GROUND_MAX, Reading, Schedule};
 use crate::temp::Calibration;
 use crate::thermal::Thermal;
+
+const _: () = assert!(battery::centivolts(GROUND_MAX) < *battery::PLAUSIBLE.start());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Health {
@@ -36,6 +38,8 @@ pub struct Limits {
     /// now ran across the last two ticks.
     lit_before: bool,
     convert: Option<Convert>,
+    /// Kept through a rest, since a check of the cell reads no ground.
+    bad_grounds: u8,
     fault: bool,
 }
 
@@ -50,6 +54,7 @@ impl Limits {
             level: 0,
             lit_before: false,
             convert: None,
+            bad_grounds: 0,
             fault: faults.any(),
         }
     }
@@ -116,6 +121,15 @@ impl Limits {
                     unloaded = Some(centivolts);
                 }
                 if self.protection.sample(centivolts, level) == Verdict::Blind {
+                    self.fault = true;
+                }
+            }
+            Some(Reading::Ground(raw)) => {
+                self.bad_grounds = match raw {
+                    0..=GROUND_MAX => 0,
+                    _ => self.bad_grounds.saturating_add(1),
+                };
+                if self.bad_grounds > battery::GLITCHES {
                     self.fault = true;
                 }
             }
@@ -490,6 +504,56 @@ mod tests {
         assert_eq!(run.secs(30), 0);
         assert_eq!(run.limits.health(), Health::Fault);
         assert_eq!(run.offs, 1);
+    }
+
+    #[test]
+    fn an_adc_stuck_on_a_plausible_voltage_is_a_fault() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.secs(1);
+        let stuck = run.adc.voltage;
+        (run.adc.ground, run.adc.temperature) = (stuck, stuck);
+        assert_eq!(run.secs(30), 0);
+        assert_eq!(run.limits.health(), Health::Fault);
+        assert_eq!(run.offs, 1);
+    }
+
+    #[test]
+    fn a_bad_ground_with_the_light_off_is_a_fault_too() {
+        let mut run = Run::new();
+        run.adc.ground = GROUND_MAX + 1;
+        assert_eq!(run.secs(2), 0);
+        assert_eq!(run.limits.health(), Health::Fault);
+        run.ui = CEILING;
+        assert_eq!(run.ticks(1), 0);
+        assert_eq!(run.offs, 1);
+    }
+
+    #[test]
+    fn a_bad_ground_or_three_is_no_fault() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        for _ in 0..60 {
+            run.adc.ground = u16::MAX;
+            run.ticks(3 * u32::from(CYCLE_TICKS));
+            run.adc.ground = GROUND_MAX;
+            run.ticks(u32::from(CYCLE_TICKS));
+        }
+        assert_eq!(run.limits.health(), Health::Good);
+        assert_eq!(*run.levels.last().unwrap(), CEILING);
+        assert_eq!(run.offs, 0);
+    }
+
+    #[test]
+    fn no_ground_result_is_a_bad_ground() {
+        let mut limits = Limits::new(CALIBRATION, Faults::NONE);
+        let mut adc = Adc::new();
+        for _ in 0..5 * TICKS_PER_SECOND {
+            limits.tick(CEILING, adc.result());
+            let convert = limits.convert();
+            adc.start(convert.filter(|c| c.channel != crate::sensors::Channel::Ground));
+        }
+        assert_eq!(limits.health(), Health::Fault);
     }
 
     /// A known gap (docs/safety.md H3, H12), pinned so that closing it has to

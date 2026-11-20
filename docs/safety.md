@@ -100,9 +100,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** A broken ADC, a shorted or open PA1, or a reading from a rest.
 
-**Cover.** `battery::plausible` (1.00 to 4.40 V) and `thermal::plausible` reject readings that can't be real. A run of bad voltages is a fault, and a bad temperature drops the thermal ceiling to its floor. Garbage at rest is forgiven.
+**Cover.** `battery::plausible` (1.00 to 4.40 V) and `thermal::plausible` reject readings that can't be real. A run of bad voltages is a fault, and a bad temperature drops the thermal ceiling to its floor. Garbage at rest is forgiven. While the torch is awake the ADC also reads its own ground four times a second, and a run of results over `sensors::GROUND_MAX`, or none at all, is a fault too, so an ADC stuck on one plausible result fails it.
 
-**Unproven.** Simulator. A reading that's wrong but plausible and frozen isn't caught. A dead ADC at rest is only found at a press. 4.20 V has about 5 % to the top of `battery::PLAUSIBLE`, and the 1.1 V reference alone is ±2 % (DS40002204A table 36-23), so a light that reads high could call a full cell a fault. Seen, an hour lit reads as valid on this torch.
+**Unproven.** Simulator. A wrong but plausible reading from an ADC that still reads ground isn't caught, such as a drifted divider or a stuck temperature sensor. A dead ADC at rest is only found at a press, since a check at rest reads no ground. `GROUND_MAX` is likely, from typical-only figures for VDD up to 3.6 V (DS40002204A table 36-27), where the cell runs VDD to 4.2 V, and that ground settles in one thrown-away conversion is unconfirmed. 4.20 V has about 5 % to the top of `battery::PLAUSIBLE`, and the 1.1 V reference alone is ±2 % (DS40002204A table 36-23), so a light that reads high could call a full cell a fault. Seen, an hour lit reads as valid on this torch.
 
 ### H13. A wrong clock
 
@@ -127,5 +127,5 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 - No low-voltage step, cut-off, fault or watchdog bite has been seen on this torch (H2, H3, H6, H12).
 - `restore` has never run on this torch (H8).
 - Nothing limits how long a lit light stays lit (H5, H11).
-- Frozen but plausible readings get past both plausibility checks (H12).
+- Wrong but plausible readings from an ADC that still reads ground get past both plausibility checks (H12).
 - The switch's bounce is unmeasured (H11, H14).
