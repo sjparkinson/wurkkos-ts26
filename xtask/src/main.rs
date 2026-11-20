@@ -126,25 +126,27 @@ fn build(examples: bool) -> Result<(elf::Elf, sim::Report), String> {
         "-Zbuild-std=core",
     ]))?;
     let path = root().join(ELF);
-    let bytes = fs::read(&path).map_err(at(&path))?;
-    let elf = elf::Elf::parse(&bytes).map_err(at(&path))?;
+    let elf = load(&path)?;
     layout::check(&elf).map_err(at(&path))?;
     let report =
         sim::check(&elf, examples).map_err(|e| format!("{}: simulator: {e}", path.display()))?;
 
     let probe = root().join(PROBE);
-    let bytes = fs::read(&probe).map_err(at(&probe))?;
-    let probe_elf = elf::Elf::parse(&bytes).map_err(at(&probe))?;
+    let probe_elf = load(&probe)?;
     probe_sections(&probe_elf).map_err(at(&probe))?;
     layout::memory(&probe_elf).map_err(at(&probe))?;
     sim::probe(&probe_elf).map_err(|e| format!("{}: simulator: {e}", probe.display()))?;
 
     let guards = root().join(GUARDS);
-    let bytes = fs::read(&guards).map_err(at(&guards))?;
-    let guards_elf = elf::Elf::parse(&bytes).map_err(at(&guards))?;
+    let guards_elf = load(&guards)?;
     layout::check(&guards_elf).map_err(at(&guards))?;
     sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))?;
     Ok((elf, report))
+}
+
+fn load(path: &Path) -> Result<elf::Elf, String> {
+    let bytes = fs::read(path).map_err(at(path))?;
+    elf::Elf::parse(&bytes).map_err(at(path))
 }
 
 /// `layout::memory` passes an empty .data without looking.
@@ -169,39 +171,23 @@ fn hex(examples: bool) -> Result<(), String> {
     let flash = firmware.len() as u64;
     let ram = elf.ram_bytes().into();
     let ram_size = (elf::RAM.end - elf::RAM.start).into();
-    println!(
-        "{}",
-        row("flash", flash, Some(map::FLASH_SIZE as u64), "bytes")
-    );
-    println!("{}", row("ram", ram, Some(ram_size), "bytes"));
-    println!("{}", row("stack", sim.stack.into(), None, "bytes"));
-    println!(
-        "{}",
-        row(
-            "loop",
-            sim.loop_instructions,
-            Some(sim::TICK_BUDGET),
-            "instructions per 64 Hz tick"
-        )
-    );
-    println!(
-        "{}",
-        row(
-            "off",
-            sim.off_instructions,
-            Some(sim::TICK_BUDGET),
-            "instructions per 64 Hz tick"
-        )
-    );
-    println!(
-        "{}",
-        row(
+    let tick = Some(sim::TICK_BUDGET);
+    let per_tick = "instructions per 64 Hz tick";
+    for (label, used, of, unit) in [
+        ("flash", flash, Some(map::FLASH_SIZE as u64), "bytes"),
+        ("ram", ram, Some(ram_size), "bytes"),
+        ("stack", sim.stack.into(), None, "bytes"),
+        ("loop", sim.loop_instructions, tick, per_tick),
+        ("off", sim.off_instructions, tick, per_tick),
+        (
             "dsm",
             sim.handler_instructions,
             Some(sim::HANDLER_BUDGET),
-            "instructions per PWM cycle"
-        )
-    );
+            "instructions per PWM cycle",
+        ),
+    ] {
+        println!("{}", row(label, used, of, unit));
+    }
     Ok(())
 }
 
