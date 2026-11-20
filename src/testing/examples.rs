@@ -65,13 +65,16 @@ pub const EXAMPLES: &[Example] = &[
         "1C 1H:3s 1C 1C 1H:3s",
         Level(120),
     ),
-    // The first click turns it off at once, and the rest count from off.
+    // The first click turns it off at once, and nothing counts until the
+    // switch has been left alone.
     ex(
         "On: More clicks, or a hold after clicks",
         "1C 1H:1s 2C",
-        Level(52),
+        Off,
     ),
-    ex("On: 4C", "1C 4C 1C", Off),
+    ex("On: 2C", "1C 2C", Off),
+    ex("On: 2C, then 1C", "1C 2C 1C", Level(52)),
+    ex("On: 4C", "1C 4C 1C", Level(52)),
     ex("On: 2H", "1C 2H:2s", Off),
     // Lockout. Any press lights the red for five seconds.
     ex("Lockout: 3C, from off", "3C", Off),
