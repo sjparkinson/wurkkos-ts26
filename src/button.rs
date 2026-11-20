@@ -1,28 +1,19 @@
-//! Turns one switch sample per tick into clicks and holds.
-//!
-//! Sampling at 64 Hz debounces the switch for free, since contact bounce is
-//! over well within the 15.6 ms between samples.
+//! No debounce beyond the 64 Hz sampling, on the assumption that bounce is
+//! over within 15.6 ms. Unmeasured.
 
 use crate::TICKS_PER_SECOND;
 
-/// Press for this long and it's a hold, not a click (about 375 ms).
-/// Counted from the tick the press is first seen, which is tick 0.
 pub const HOLD_TICKS: u16 = TICKS_PER_SECOND * 3 / 8;
 
-/// Leave the switch alone this long and the clicks so far count (about 220 ms).
 pub const RELEASE_TICKS: u16 = TICKS_PER_SECOND * 7 / 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// `n` quick clicks, then nothing for [`RELEASE_TICKS`], or the click
-    /// that made it as many as [`Clicks::tick_up_to`]'s `most`, as it's let
-    /// go.
+    /// After [`RELEASE_TICKS`] up, or as the `most`th click is let go.
     Click(u8),
-    /// The switch is being held after `clicks` quick clicks (so `2` is
-    /// click, click, hold). Sent every tick while held; `ticks` counts from
-    /// the moment the press became a hold.
+    /// `ticks` counts from the press becoming a hold.
     Hold { clicks: u8, ticks: u16 },
-    /// A hold ended.
+    /// The end of a hold.
     Release { clicks: u8 },
 }
 
@@ -42,20 +33,14 @@ impl Clicks {
         }
     }
 
-    /// Whether the switch is up with no clicks waiting to count.
     pub const fn idle(&self) -> bool {
         !self.pressed && self.count == 0
     }
 
-    /// Feeds in one sample, `true` meaning the switch is down.
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
         self.tick_up_to(pressed, None)
     }
 
-    /// [`Clicks::tick`], but with `Some(most)` the click that makes it
-    /// `most` counts as it's let go, with no wait for more. That's for when
-    /// more clicks than `most` mean nothing, so waiting to see them would
-    /// only be slow. `None` always waits.
     pub fn tick_up_to(&mut self, pressed: bool, most: Option<u8>) -> Option<Event> {
         self.ticks = self.ticks.saturating_add(1);
 
@@ -70,8 +55,7 @@ impl Clicks {
                 ticks,
             }),
             (true, false) => {
-                // `ticks` has gone up once since the last pressed tick, so
-                // a press that sent Holds is now past HOLD_TICKS.
+                // `>`, since `ticks` went up once more above.
                 let held = self.ticks > HOLD_TICKS;
                 self.pressed = false;
                 self.ticks = 0;
@@ -100,7 +84,6 @@ mod tests {
     use super::*;
     use std::vec::Vec;
 
-    /// Runs a script of (pressed, ticks) spans and collects the events.
     fn run(script: &[(bool, u16)]) -> ([Option<Event>; 64], usize) {
         let mut clicks = Clicks::new();
         let mut events = [None; 64];
@@ -220,7 +203,6 @@ mod tests {
 
     #[test]
     fn a_press_becomes_a_hold_after_375_ms() {
-        // testing::EXAMPLES promises about 375 ms, which is 24 ticks at 64 Hz.
         assert_eq!(TICKS_PER_SECOND, 64);
         assert_eq!(HOLD_TICKS, 24);
         assert_eq!(
@@ -231,7 +213,6 @@ mod tests {
 
     #[test]
     fn clicks_count_after_the_switch_is_left_alone_for_about_220_ms() {
-        // testing::EXAMPLES promises about 220 ms, which is 14 ticks at 64 Hz.
         assert_eq!(RELEASE_TICKS, 14);
         assert_eq!(
             u32::from(RELEASE_TICKS) * 1000 / u32::from(TICKS_PER_SECOND),
@@ -284,8 +265,6 @@ mod tests {
 
     #[test]
     fn a_press_let_go_just_before_it_becomes_a_hold_is_a_click() {
-        // Down for ticks 0 to HOLD_TICKS - 1, so the tick that would have
-        // been the first Hold sees the switch up.
         let (events, n) = run(&[(true, HOLD_TICKS), (false, RELEASE_TICKS + 1)]);
         assert_eq!(n, 1);
         assert_eq!(events[0], Some(Event::Click(1)));
@@ -293,8 +272,6 @@ mod tests {
 
     #[test]
     fn a_press_let_go_just_after_it_becomes_a_hold_is_a_hold() {
-        // One tick longer, and it sends one Hold and then a Release, and
-        // never counts as a click.
         let (events, n) = run(&[(true, HOLD_TICKS + 1), (false, RELEASE_TICKS + 1)]);
         assert_eq!(n, 2);
         assert_eq!(
@@ -344,25 +321,13 @@ mod tests {
         assert!(clicks.idle());
     }
 
-    /// What one tick should give: the event, and whether the decoder is idle
-    /// after it.
+    /// The event and whether it's idle after each tick.
     type Expected = (Option<Event>, bool);
 
-    /// The decoder as `testing::EXAMPLES` and the doc comments describe it, worked
-    /// out from whole runs of the switch being down or up rather than a
-    /// sample at a time. The runs must alternate.
-    ///
-    /// A press of more than [`HOLD_TICKS`] samples is a hold: it sends a
-    /// Hold on every sample from the one numbered `HOLD_TICKS` (the first
-    /// being 0), and a Release on the first sample after it. Any shorter
-    /// press is a click. Clicks add up until the switch has been up for
-    /// `RELEASE_TICKS` samples after the one that saw it come up, and a hold
-    /// takes the clicks before it with it.
+    /// The runs must alternate.
     fn model(runs: &[(bool, u16)]) -> Vec<Expected> {
         let mut expected = Vec::new();
-        // Clicks waiting to count.
         let mut waiting = 0u8;
-        // Whether the run before this one was a press that became a hold.
         let mut after_hold = false;
         for (index, &(pressed, len)) in runs.iter().enumerate() {
             if pressed {
@@ -399,8 +364,6 @@ mod tests {
         expected
     }
 
-    /// Runs the decoder over `runs` and checks every tick against the model.
-    /// Returns how many ticks that was.
     fn check(runs: &[(bool, u16)]) -> usize {
         let expected = model(runs);
         let samples = runs
@@ -421,8 +384,6 @@ mod tests {
     #[test]
     fn the_model_agrees_with_the_examples() {
         let hold = |clicks, ticks| Some(Event::Hold { clicks, ticks });
-        // Click, then a press held two ticks past becoming a hold, then
-        // a click that counts.
         let expected = model(&[
             (false, 2),
             (true, 1),
@@ -460,7 +421,6 @@ mod tests {
 
     #[test]
     fn matches_the_model_for_every_six_runs_around_the_boundaries() {
-        // Either side of every length that changes what a run means.
         let presses = [
             1,
             2,
@@ -479,10 +439,7 @@ mod tests {
         ];
         const RUNS: usize = 6;
         let mut scripts = 0u32;
-        // Each tick is checked, so every shorter script is covered as the
-        // start of a longer one.
         for first in [true, false] {
-            // Each run's length is one base-6 digit of `code`.
             for code in 0..6usize.pow(RUNS as u32) {
                 let mut runs = [(false, 0); RUNS];
                 let mut digits = code;
@@ -501,8 +458,6 @@ mod tests {
 
     #[test]
     fn matches_the_model_for_every_pattern_of_sixteen_samples() {
-        // Too short to reach a hold or a counted click, so this is the
-        // bounce and the short runs the lengths above leave out.
         const SAMPLES: u16 = 16;
         for pattern in 0..=u16::MAX {
             let mut runs: Vec<(bool, u16)> = Vec::new();
@@ -519,8 +474,6 @@ mod tests {
 
     #[test]
     fn matches_the_model_for_every_two_presses_of_up_to_thirty_samples() {
-        // Every length, not only the ones at the boundaries, for a press,
-        // a gap and a second press, then long enough for a click to count.
         for first in 1..=HOLD_TICKS + 6 {
             for gap in 1..=RELEASE_TICKS + 6 {
                 for second in 1..=HOLD_TICKS + 6 {

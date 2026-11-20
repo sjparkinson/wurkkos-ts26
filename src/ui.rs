@@ -1,22 +1,12 @@
-//! What each click and hold does. `testing::EXAMPLES` is the spec; keep
-//! them in step.
-
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// The lowest level the UI goes to.
-///
-/// The stock firmware's smooth floor on this light is 5 of 150, which is 36
-/// in delta-sigma units on its table, and reviewers saw flicker below that.
-/// This curve is flatter at the bottom, so its level 5 is only 24, and level
-/// 13 is the first at 36 or over. Unmeasured.
+/// The first level at 36 delta-sigma units, the stock firmware's smooth
+/// floor, below which reviewers saw flicker. Unmeasured on this curve.
 pub const FLOOR: u8 = 13;
 
-/// Where every click on starts, a duty of about 10 of 255. Nothing's
-/// remembered, so it's this every time.
 pub const ON_LEVEL: u8 = 52;
 
-// The top of the UI's ramp is [`CEILING`].
 const _: () = assert!(FLOOR >= 1 && FLOOR < ON_LEVEL && ON_LEVEL < CEILING);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,33 +16,22 @@ pub enum Mode {
     Lockout,
 }
 
-/// What the aux LEDs on PC1 to PC3 should be doing.
-///
-/// Every colour is steady, so they never report anything by flashing, and
-/// all but red are dim. The channels are separate emitters that don't blend
-/// well, so the two states a glance most needs, off and lockout, get one
-/// channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aux {
     Off,
-    /// Off, and nothing wrong.
     Blue,
-    /// Locked out. Bright, since dim red is hard to see, so `torch::Torch`
-    /// only shows it for [`crate::torch::LOCKED_TICKS`] after a press.
+    /// Bright, since dim red is hard to see, so it's only shown for
+    /// [`crate::torch::LOCKED_TICKS`].
     Red,
-    /// The cell's flat. Red and green, the usual low-battery warning.
     Yellow,
-    /// A fault, which nothing short of a cell swap clears. All three.
     White,
 }
 
 #[derive(Clone, Debug)]
 pub struct Ui {
     mode: Mode,
-    /// The level it's at while on. Every click on starts it at [`ON_LEVEL`].
     level: u8,
-    /// Whether the last 1H ramped up. Each 1H goes the other way, and every
-    /// click on clears it, so the first 1H goes up.
+    /// Whether the last 1H ramped up.
     up: bool,
 }
 
@@ -75,7 +54,6 @@ impl Ui {
         self.mode
     }
 
-    /// The level the LEDs should be at right now, `0` meaning off.
     pub const fn output_level(&self) -> u8 {
         match self.mode {
             Mode::On => self.level,
@@ -83,11 +61,8 @@ impl Ui {
         }
     }
 
-    /// The most clicks that mean anything right now, for
-    /// `button::Clicks::tick_up_to`, so the click that makes it that many
-    /// counts as it's let go. On, only 1C does anything. Off, 3C is the most.
-    /// Locked, it waits as long as it ever did, so a fourth press in a pocket
-    /// is a 4C, which does nothing, rather than 3C to unlock and 1C to light.
+    /// Locked, it waits the full time, so a fourth press in a pocket is a 4C
+    /// rather than 3C to unlock and 1C to light.
     pub const fn most_clicks(&self) -> Option<u8> {
         match self.mode {
             Mode::On => Some(1),
@@ -96,7 +71,6 @@ impl Ui {
         }
     }
 
-    /// The aux LEDs give way to the main LED whenever it's lit.
     pub const fn aux(&self) -> Aux {
         match self.mode {
             Mode::On => Aux::Off,
@@ -132,8 +106,6 @@ impl Ui {
         }
     }
 
-    /// Puts the light out. This is 1C, and it's also how low-voltage
-    /// protection turns the light off. A locked torch stays locked.
     pub const fn off(&mut self) {
         if matches!(self.mode, Mode::On) {
             self.mode = Mode::Off;
@@ -164,8 +136,6 @@ mod tests {
         assert_eq!(ui.output_level(), 0);
     }
 
-    /// The stock firmware's floor is 36 in these units, and the level under
-    /// ours isn't.
     #[test]
     fn the_floor_is_the_first_level_at_the_stock_smooth_floor() {
         assert!(output(FLOOR).dsm >= 36);
@@ -259,8 +229,6 @@ mod tests {
         }
     }
 
-    /// Clicks past `most_clicks` would never reach `handle`, so none may mean
-    /// anything.
     #[test]
     fn nothing_past_most_clicks_does_anything() {
         for setup in [&[][..], &[Event::Click(1)], &[Event::Click(3)]] {

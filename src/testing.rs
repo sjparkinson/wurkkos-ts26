@@ -1,28 +1,9 @@
-//! Test doubles shared by the library's own tests and xtask's simulators.
+//! Scripts are Anduril's notation.
 //!
-//! So there's one fake ADC, one torch wired to it, one way of turning a
-//! voltage or a temperature into a raw reading, and one list of what the
-//! torch does ([`EXAMPLES`]).
-//!
-//! The firmware never sees it.
-//!
-//! # Scripts
-//!
-//! A script is Anduril's notation, a word at a time, like `1C 2H:1.5s wait:1s`.
-//! `NC` is N quick clicks. `NH` is N - 1 clicks then a hold (so `2H` is
-//! click, hold), for a second unless it says otherwise (`1H:500ms`).
-//! `wait:2s` leaves the switch alone. Every click or hold is followed by
-//! enough of a pause for it to count, so `1C 1C` is two single clicks,
-//! except a hold that's the script's last word. That one's never let go, so
-//! the script ends with the switch still down.
-//!
-//! Some words set the scene, taking no time. `cell:2.95V` is the cell from
-//! there on (3.8 V to start), and `heat:80C` the temperature (25 °C to
-//! start). A cell outside `battery::PLAUSIBLE`, such as `cell:0V`, is one
-//! the firmware can't read, and 0 V is what a dead ADC reads. `fault` starts
-//! a torch whose power-on checks failed, so it has to come before anything
-//! that takes time. So does `flash:corrupt`, a byte of flash that doesn't
-//! match its CRC.
+//! `2H` is click then hold, for a second unless timed (`1H:500ms`). Every
+//! click or hold gets a pause to count, except a hold that ends the script,
+//! which is never let go. `cell:`, `heat:`, `fault` and `flash:corrupt` take
+//! no time, and the last two only go before anything that does.
 
 mod examples;
 
@@ -42,34 +23,24 @@ use crate::temp::Calibration;
 use crate::thermal;
 use crate::torch::Torch;
 
-/// The most four accumulated 10-bit conversions can read.
 const FULL_SCALE: u16 = 4 * 1023;
 
-/// A temperature sensor calibration for tests and the simulated chip's
-/// signature row. Made up, but in the range real parts have, at about 0.55 K
-/// a count, so 25 °C reads 531 a conversion, 2124 over four.
+/// Made up, but in the range real parts have.
 pub const CALIBRATION: Calibration = Calibration {
     offset: -10,
     gain: 141,
 };
 
-/// The accumulated reading of AIN1 for a cell `battery::centivolts` reports
-/// as `cell`, the closest, saturating at four full-scale conversions.
 pub fn voltage_reading(cell: u16) -> u16 {
     closest(cell, battery::centivolts)
 }
 
-/// The temperature sensor reading, four accumulated 10-bit conversions,
-/// closest to `kelvin` with [`CALIBRATION`].
 pub fn temperature_reading(kelvin: u16) -> u16 {
     closest(kelvin.saturating_mul(16), |raw| CALIBRATION.sixteenths(raw))
 }
 
-/// The smallest raw reading whose `read` is closest to `target`. `read` never
-/// goes down as the reading goes up, so a binary search finds it.
+/// A binary search, so `read` must never go down as the reading goes up.
 fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
-    // The first reading that reads as at least `value`, or one past full
-    // scale if none does.
     let first_at_least = |value: u16| {
         let (mut low, mut high) = (0, FULL_SCALE + 1);
         while low < high {
@@ -88,21 +59,14 @@ fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
     }
     let below = read(above - 1);
     if above > FULL_SCALE || target - below <= read(above) - target {
-        // Below wins ties, and a run of readings that read the same starts
-        // further down.
         first_at_least(below)
     } else {
         above
     }
 }
 
-/// An ADC that hands back a conversion's result a tick after it started, the
-/// way the firmware's loop sees the real one. A conversion measures what
-/// was there when it started.
-///
-/// `voltage` and `temperature` are the raw results [`Adc::start`] reads.
-/// Anything else that knows what each channel reads can use
-/// [`Adc::start_with`] instead.
+/// The result comes back a tick after the start, as the firmware's loop sees
+/// the real one.
 #[derive(Clone, Debug)]
 pub struct Adc {
     pub voltage: u16,
@@ -126,13 +90,10 @@ impl Adc {
         }
     }
 
-    /// The result of the conversion started last tick, if there was one.
     pub const fn result(&mut self) -> Option<u16> {
         self.pending.take()
     }
 
-    /// Starts `convert`, if there is one, reading `voltage` or
-    /// `temperature`.
     pub fn start(&mut self, convert: Option<Convert>) {
         let (voltage, temperature) = (self.voltage, self.temperature);
         self.start_with(convert, |channel| match channel {
@@ -141,69 +102,44 @@ impl Adc {
         });
     }
 
-    /// Starts `convert`, if there is one, reading whatever `read` says the
-    /// channel reads.
     pub fn start_with(&mut self, convert: Option<Convert>, read: impl FnOnce(Channel) -> u16) {
         self.pending = convert.map(|convert| read(convert.channel));
     }
 }
 
-/// How long a scripted click holds the switch down (about 60 ms).
 const PRESS_TICKS: u16 = 4;
-/// The pause after each scripted click, well inside `RELEASE_TICKS`.
 const GAP_TICKS: u16 = 4;
-/// Released samples after a click or hold before the next action, enough
-/// for `button::Clicks` to send the click (see its `RELEASE_TICKS` check).
 const SETTLE_TICKS: u16 = RELEASE_TICKS + 1;
-/// A hold with no duration lasts a second.
 const DEFAULT_HOLD_TICKS: u16 = TICKS_PER_SECOND;
 
-/// One word of a script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// This many quick clicks.
     Clicks(u8),
-    /// `clicks` quick clicks, then the switch held down for `ticks`.
     Hold { clicks: u8, ticks: u16 },
-    /// The switch left alone for this many ticks.
     Wait(u16),
-    /// The cell from now on, in centivolts.
     Cell(u16),
-    /// The temperature from now on, in kelvin.
     Heat(u16),
-    /// A flash byte that doesn't match the CRC. Power-on only.
     CorruptFlash,
-    /// The power-on checks fail. Power-on only.
     Fault,
 }
 
 impl Action {
-    /// Whether it takes time, rather than setting the scene.
     const fn takes_time(self) -> bool {
         matches!(self, Self::Clicks(_) | Self::Hold { .. } | Self::Wait(_))
     }
 }
 
-/// Why a word isn't an [`Action`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// No count of 1 or more before the C or H.
     Count,
-    /// Not clicks, a hold or anything else a script knows.
     Kind,
-    /// A click with a duration.
     TimedClick,
-    /// A hold too short to count as one.
     ShortHold,
-    /// A duration it can't read.
     Duration,
-    /// A duration that rounds to no ticks.
     UnderATick,
-    /// A duration of more ticks than a `u16` holds.
     TooLong,
     Voltage,
     Temperature,
-    /// `fault` or `flash:corrupt` after something that takes time.
     NotAtPowerOn,
 }
 
@@ -234,8 +170,6 @@ impl fmt::Display for Error {
 impl FromStr for Action {
     type Err = Error;
 
-    /// `3C`, `2H`, `1H:500ms`, `wait:2s`, `cell:2.95V`, `heat:80C`, `fault`
-    /// or `flash:corrupt`.
     fn from_str(word: &str) -> Result<Self, Error> {
         if word == "fault" {
             return Ok(Self::Fault);
@@ -283,7 +217,6 @@ impl FromStr for Action {
     }
 }
 
-/// A word of a script and why it isn't one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScriptError<'a> {
     pub word: &'a str,
@@ -296,7 +229,6 @@ impl fmt::Display for ScriptError<'_> {
     }
 }
 
-/// Reads a script, word by word.
 pub fn parse<'a>(
     words: impl IntoIterator<Item = &'a str>,
 ) -> impl Iterator<Item = Result<Action, ScriptError<'a>>> {
@@ -312,8 +244,7 @@ pub fn parse<'a>(
     })
 }
 
-/// `whole.fraction`, times ten to the `places`, with no more than `places`
-/// digits after the point.
+/// Times ten to the `places`.
 fn decimal(text: &str, places: u32) -> Option<u32> {
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if fraction.len() > places as usize || !fraction.bytes().all(|b| b.is_ascii_digit()) {
@@ -328,7 +259,6 @@ fn decimal(text: &str, places: u32) -> Option<u32> {
     Some(value)
 }
 
-/// Centivolts from `2.95V`.
 fn centivolts(volts: &str) -> Result<u16, Error> {
     volts
         .strip_suffix('V')
@@ -337,7 +267,6 @@ fn centivolts(volts: &str) -> Result<u16, Error> {
         .ok_or(Error::Voltage)
 }
 
-/// Ticks from `500ms`, `2s` or `1.5s`, rounded to the nearest tick.
 fn ticks(duration: &str) -> Result<u16, Error> {
     let ms = if let Some(ms) = duration.strip_suffix("ms") {
         ms.parse().ok()
@@ -355,23 +284,18 @@ fn ticks(duration: &str) -> Result<u16, Error> {
     }
 }
 
-/// What the torch sees, as far as a script says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scene {
-    /// The cell, in centivolts, as `battery::centivolts` would report it.
+    /// Centivolts.
     pub cell: u16,
     pub kelvin: u16,
-    /// The power-on checks fail.
     pub fault: bool,
-    /// A flash byte doesn't match its CRC.
     pub corrupt_flash: bool,
-    /// The ADC never finishes a conversion, so the firmware's loop never sees
-    /// a result. No script word sets it.
+    /// No script word sets it.
     pub adc_dead: bool,
 }
 
 impl Scene {
-    /// A cell at 3.8 V, a room at 25 °C and nothing wrong.
     pub const NORMAL: Self = Self {
         cell: 380,
         kelvin: thermal::celsius(25),
@@ -380,8 +304,6 @@ impl Scene {
         adc_dead: false,
     };
 
-    /// What the power-on checks find, with `fault` standing for a fuse that
-    /// fails its read-back.
     pub const fn faults(&self) -> Faults {
         Faults {
             fuses: self.fault,
@@ -390,7 +312,6 @@ impl Scene {
         }
     }
 
-    /// The raw reading a conversion on `channel` gives.
     pub fn reading(&self, channel: Channel) -> u16 {
         match channel {
             Channel::Voltage => voltage_reading(self.cell),
@@ -399,14 +320,12 @@ impl Scene {
     }
 }
 
-/// One tick of a script, with the switch and what the torch sees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sample {
     pub pressed: bool,
     pub scene: Scene,
 }
 
-/// The switch and the scene, one sample per tick, for a whole script.
 pub fn samples(actions: impl IntoIterator<Item = Action>) -> impl Iterator<Item = Sample> {
     let mut actions = actions.into_iter().peekable();
     let words = iter::from_fn(move || {
@@ -417,7 +336,6 @@ pub fn samples(actions: impl IntoIterator<Item = Action>) -> impl Iterator<Item 
     words.flat_map(move |(action, last)| {
         let (quick, held, released) = match action {
             Action::Clicks(n) => (n, 0, SETTLE_TICKS),
-            // The last word's hold is never let go.
             Action::Hold { clicks, ticks } => (clicks, ticks, if last { 0 } else { SETTLE_TICKS }),
             Action::Wait(ticks) => (0, 0, ticks),
             Action::Cell(cell) => {
@@ -445,7 +363,6 @@ pub fn samples(actions: impl IntoIterator<Item = Action>) -> impl Iterator<Item 
     })
 }
 
-/// `n` quick clicks, each a press then a short gap, one sample per tick.
 pub fn clicks(n: u8) -> impl Iterator<Item = bool> {
     (0..n).flat_map(|_| span(true, PRESS_TICKS).chain(span(false, GAP_TICKS)))
 }
@@ -454,27 +371,20 @@ fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
     iter::repeat_n(pressed, ticks.into())
 }
 
-/// The library's torch wired to an [`Adc`], the way `src/main.rs` wires it to
-/// the real one, with the result of last tick's conversion in and this tick's
-/// conversion out.
+/// Wired the way `src/main.rs` wires the real ADC.
 #[derive(Clone, Debug)]
 pub struct Rig {
     pub torch: Torch,
-    /// What [`Rig::tick`] reads. [`Rig::tick_in`] reads a scene instead.
     pub adc: Adc,
 }
 
 impl Default for Rig {
-    /// A torch whose power-on checks passed, with a good cell at room
-    /// temperature.
     fn default() -> Self {
         Self::new(Faults::NONE)
     }
 }
 
 impl Rig {
-    /// A torch that's just had its cell put in, `faults` being what its
-    /// power-on checks found.
     pub const fn new(faults: Faults) -> Self {
         Self {
             torch: Torch::new(CALIBRATION, faults),
@@ -482,31 +392,24 @@ impl Rig {
         }
     }
 
-    /// One tick, the ADC reading `adc`'s `voltage` and `temperature`.
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
         let event = self.torch.tick(pressed, self.adc.result());
         self.adc.start(self.torch.convert());
         event
     }
 
-    /// One tick, the ADC reading what `scene` says.
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
         let event = self.torch.tick(pressed, self.adc.result());
-        // A dead ADC is started on but never answers, so nothing's pending.
         let convert = self.torch.convert().filter(|_| !scene.adc_dead);
         self.adc
             .start_with(convert, |channel| scene.reading(channel));
         event
     }
 
-    /// Plays a script on a fresh torch, whose power-on checks find what the
-    /// first tick's scene says.
     pub fn play(actions: impl IntoIterator<Item = Action>) -> Self {
         Self::play_with(actions, |_, _| {})
     }
 
-    /// [`Rig::play`], calling `each` after every tick with the click or hold
-    /// it finished.
     pub fn play_with(
         actions: impl IntoIterator<Item = Action>,
         mut each: impl FnMut(&Self, Option<Event>),
@@ -530,20 +433,17 @@ impl Deref for Rig {
     }
 }
 
-/// A small, fixed-seed random number generator (xorshift32), so tests can
-/// throw varied readings at the firmware's logic and still fail the same way
-/// every time. It's no good for anything else.
+/// Xorshift32, for repeatable tests and nothing else.
 #[derive(Clone, Debug)]
 pub struct Rng(u32);
 
 impl Rng {
-    /// Starts from `seed`. Xorshift never leaves zero, so a seed of zero
-    /// becomes 1.
+    /// Xorshift never leaves zero.
     pub const fn new(seed: u32) -> Self {
         Self(if seed == 0 { 1 } else { seed })
     }
 
-    /// The next 16 bits, from the top of the state, which is the better end.
+    /// The top of the state is the better end.
     pub const fn next_u16(&mut self) -> u16 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
@@ -621,13 +521,10 @@ mod tests {
         }
         for kelvin in [273, 298, 323, 343, 373] {
             let got = CALIBRATION.sixteenths(temperature_reading(kelvin));
-            // A count of the sum is a little over two sixteenths.
             assert!(got.abs_diff(kelvin * 16) <= 2, "{kelvin} K reads as {got}");
         }
     }
 
-    /// The slow way, with every raw reading tried, the closest winning and the
-    /// smallest winning a tie.
     fn linear(target: u16, read: impl Fn(u16) -> u16) -> u16 {
         (0..=FULL_SCALE)
             .min_by_key(|&raw| (read(raw).abs_diff(target), raw))
@@ -761,7 +658,6 @@ mod tests {
         assert!(cells.eq(iter::repeat_n(380, 64).chain(iter::repeat_n(295, 64))));
     }
 
-    /// The torch tests used to read `cell:3.8V` as 0.38 V, dropping the dot.
     #[test]
     fn a_cell_keeps_its_decimal_point() {
         assert_eq!(word("cell:3.8V"), Ok(Action::Cell(380)));
@@ -769,14 +665,10 @@ mod tests {
         assert_eq!(word("cell:4V"), Ok(Action::Cell(400)));
     }
 
-    /// The examples for a cell the firmware can't read lean on this.
-    /// There's no word for a broken reading, only a cell that can't be real.
     #[test]
     fn a_cell_outside_the_plausible_range_reads_as_one_the_firmware_cant_believe() {
         assert_eq!(word("cell:0V"), Ok(Action::Cell(0)));
-        // What a dead ADC gives.
         assert_eq!(voltage_reading(0), 0);
-        // What the firmware makes of the cell a script sets.
         let reads = |cell: &'static str| {
             let script = parse([cell, "wait:1s"]).map(Result::unwrap);
             let scene = samples(script).last().unwrap().scene;
@@ -790,8 +682,6 @@ mod tests {
         }
     }
 
-    /// The torch tests used to start a fresh bench for `fault`, forgetting the
-    /// cell and the heat set before it.
     #[test]
     fn a_fault_keeps_the_cell_and_heat_before_it() {
         let script = parse(["cell:2.95V", "heat:80C", "fault", "1C"]).map(Result::unwrap);
@@ -808,8 +698,6 @@ mod tests {
         assert!(expected.faults().fuses);
     }
 
-    /// The torch tests used to work out `wait:1500ms` as 1500 × 64 in a `u16`,
-    /// which overflows, and couldn't read `1.5s` or a lower-case `c` or `h`.
     #[test]
     fn durations_and_lower_case_read_as_simulate_reads_them() {
         assert_eq!(word("wait:1500ms"), Ok(Action::Wait(96)));
