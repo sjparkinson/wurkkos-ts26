@@ -1,50 +1,13 @@
 //! Thermal regulation, with temperature readings in and a ceiling on the level
 //! out.
 //!
-//! Feed it a reading from `temp::sixteenths` every [`CYCLE_TICKS`] ticks with
-//! [`Thermal::sample`], call [`Thermal::tick`] every tick, and run the light
-//! at whichever is lower, the UI's level or the ceiling. The ceiling's a
-//! [`Ceiling`], so a step-down is a fade of at most one level every other
-//! tick, never a jump.
-//!
-//! The approach follows the stock firmware's (facts only, it's GPL-3.0).
-//!
-//! - Smooth the readings, then predict where the temperature is heading from
-//!   how far it's moved over the last eight samples, times a lookahead of
-//!   four. The stock firmware uses the same history length and lookahead.
-//! - If the prediction is over the limit and it isn't already cooling, step
-//!   down. The error adds up over readings and each step spends some of it,
-//!   so a little over steps down now and then and a lot over steps down
-//!   every reading. The stock firmware's warning threshold works much the
-//!   same way.
-//! - If the prediction is more than 2 °C under the limit (the stock
-//!   firmware's window) and it isn't warming up, step back up the same way,
-//!   but slower and never more than a level a reading. In between, hold. That
-//!   gap, the slow climb and the lookahead are what stop it hunting.
-//! - Never step down below a floor. The stock firmware's TS26 build stops at
-//!   level 50 of 150, so this does too, though the same number on this
-//!   firmware's own curve (`src/ramp.rs`) needn't be the same brightness.
-//!
-//! Only sample while the light's on. The stock firmware leaves the
-//! temperature alone in standby because the ADC costs about 250 µA against
-//! about 20 µA asleep, and the torch will sleep when off. Call
-//! [`Thermal::reset`] when it turns on, so the readings and ceiling from last
-//! time don't carry over. A light that turns on hot then steps down from the
-//! first readings.
-//! - Ignore a reading that's impossible or far from the last one, unless a
-//!   few in a row agree. If the sensor keeps reading impossible values, step
-//!   down to the floor, since a broken sensor can't say it's cool.
-//!
-//! The numbers here are a first guess, carried over from an earlier torch
-//! where they aren't the stock firmware's. None of them has been measured on a
-//! TS26, so expect them to change once one's been run up to temperature.
-//! That's why `ramp::CEILING` holds the light back in the meantime.
+//! None of the numbers has been measured on a TS26, which is why
+//! `ramp::CEILING` holds the light back.
 
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
 
-/// Kelvin, from whole degrees Celsius.
 #[expect(
     clippy::as_conversions,
     reason = "widening u8 to u16 in a const fn, where From can't be called"
@@ -53,82 +16,55 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The temperature to hold the MCU at, 50 °C, in kelvin.
-///
-/// The stock firmware's figure for Wurkkos lights. Unmeasured here. 1Lumen
-/// saw 52 °C on the head on one sample, and nobody knows what the MCU reads
-/// when the head's at that.
+/// The stock firmware's figure for Wurkkos lights. Unmeasured, and nobody
+/// knows what the MCU reads with the head at 50 °C.
 pub const LIMIT: u16 = celsius(50);
 
-/// The lowest level thermal regulation steps down to.
-///
-/// The stock firmware's level number, on this firmware's curve. Unmeasured.
-/// Nobody knows that this level is cool enough to hold in still air, or what
-/// it draws.
+/// The stock firmware's level number, on this firmware's curve, so likely not
+/// the same brightness. Unmeasured.
 pub const FLOOR: u8 = 50;
 
 const _: () = assert!(FLOOR <= CEILING);
 
-/// Readings and the smoothed temperature are in sixteenths of a kelvin, which
-/// is what `temp::sixteenths` hands over.
 const FRACTION: i16 = 16;
-/// Samples of history to measure the trend over. The stock firmware's figure,
-/// unmeasured on this light.
+/// The stock firmware's figure, unmeasured on this light.
 const HISTORY: usize = 8;
-/// How many trend-lengths ahead to predict. The stock firmware's figure,
-/// unmeasured on this light.
+/// The stock firmware's figure, unmeasured on this light.
 const LOOKAHEAD: i16 = 4;
-/// How far under the limit the prediction has to be before stepping up.
 /// The stock firmware's figure, unmeasured on this light.
 const WINDOW: i16 = 2 * FRACTION;
-/// A trend at least this steep counts as warming up, and blocks stepping up.
 /// Unmeasured.
 const WARMING: i16 = FRACTION;
-/// The steepest trend the prediction believes, 64 °C over the history's two
-/// seconds. Unmeasured.
+/// Unmeasured.
 const MAX_TREND: i16 = 64 * FRACTION;
-/// How much accumulated error, in sixteenths of a kelvin over the limit
-/// summed over readings, buys one level down. Unmeasured.
+/// Unmeasured.
 const DOWN_PRESSURE: i16 = 4 * FRACTION;
-/// The same for one level up, counted from the bottom of the window.
 /// Unmeasured.
 const UP_PRESSURE: i16 = 16 * FRACTION;
-/// The most levels to step down per sample. With a sample every 16 ticks
-/// and the ceiling moving a level every other tick, that's as fast as the
-/// ceiling can follow. Unmeasured.
+/// Unmeasured.
 const MAX_STEP_DOWN: u8 = 8;
-/// Ticks per level as the ceiling fades down, and up. Unmeasured.
+/// Unmeasured.
 const DOWN_EVERY: u8 = 2;
 const UP_EVERY: u8 = 4;
-/// Readings outside -40 °C to 150 °C can't be real. The part is rated to
-/// 125 °C at most, so the top leaves some slack. In kelvin. Unmeasured.
+/// -40 °C to 150 °C, for a part rated to 125 °C. Unmeasured.
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 233..=423;
 
-/// [`LIMIT`] in sixteenths, which fits an `i16` because it's plausible.
 const LIMIT_SIXTEENTHS: i16 = LIMIT.cast_signed() * FRACTION;
 
 const _: () = assert!(LIMIT <= *PLAUSIBLE.end());
 
-/// Whether a reading in sixteenths of a kelvin could be real. Anything else
-/// is a broken sensor or a bad ADC setup.
 pub fn plausible(sixteenths: u16) -> bool {
     PLAUSIBLE_SIXTEENTHS.contains(&sixteenths)
 }
 
-/// [`PLAUSIBLE`] in sixteenths, worked out at compile time.
 const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
     *PLAUSIBLE.start() * FRACTION.cast_unsigned()..=*PLAUSIBLE.end() * FRACTION.cast_unsigned();
 
-/// [`PLAUSIBLE_SIXTEENTHS`] as the smoothed temperature's `i16`. The smoothed
-/// temperature and its history never leave it, and clamping to it where
-/// they're read shows release builds, which check for overflow, that the
-/// sums on them can't wrap. The clamps never change a value.
+/// The clamps to these never change a value. They're there so release builds,
+/// which check for overflow, can see the sums can't wrap.
 const NOW_LOW: i16 = PLAUSIBLE_SIXTEENTHS.start().cast_signed();
 const NOW_HIGH: i16 = PLAUSIBLE_SIXTEENTHS.end().cast_signed();
 
-/// The prediction is a plausible reading plus [`LOOKAHEAD`] times a trend
-/// clamped to [`MAX_TREND`], less [`LIMIT_SIXTEENTHS`], and every step of that
-/// fits an `i16` either way.
 #[expect(
     clippy::as_conversions,
     reason = "widening to i32 in a const, where From can't be called"
@@ -143,9 +79,7 @@ const _: () = {
     assert!(low - swing - LIMIT_SIXTEENTHS as i32 >= i16::MIN as i32);
 };
 
-/// A reading further than this from the last good one, in sixteenths of a
-/// kelvin, is a glitch, unless more than `GLITCHES` in a row agree, and then
-/// it's believed. Unmeasured.
+/// Unmeasured.
 const JUMP: u16 = 6 * FRACTION.cast_unsigned();
 const GLITCHES: u8 = 3;
 
@@ -155,7 +89,6 @@ const GLITCHES: u8 = 3;
 )]
 const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
 
-/// For wrapping an index into the history, a power of two long.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::as_conversions,
@@ -169,25 +102,17 @@ const HISTORY_MASK: u8 = HISTORY as u8 - 1;
 )]
 const _: () = assert!(HISTORY.is_power_of_two() && HISTORY <= u8::MAX as usize);
 
-/// The smoothed temperature, in sixteenths of a kelvin, and the last
-/// [`HISTORY`] samples of it.
 #[derive(Clone, Debug)]
 struct Smoothed {
     now: i16,
     history: [i16; HISTORY],
-    /// Where the oldest sample is in `history`.
     next: u8,
-    /// The last reading that wasn't a glitch.
     last: u16,
 }
 
 impl Smoothed {
-    /// Starts `slot` afresh from `reading`, as if it had always been there.
-    /// Only for plausible readings, which keep it well inside an `i16`.
-    ///
-    /// The history's filled in once it's in place. Built whole, it goes
-    /// through a copy on the stack, and that pulls in `memcpy`, which is
-    /// bigger than the `memset` this costs.
+    /// The history's filled in once it's in place, since building it whole
+    /// pulls in `memcpy`, which is bigger than the `memset`.
     fn start(slot: &mut Option<Self>, reading: u16) -> &mut Self {
         let now = reading.cast_signed();
         let smoothed = slot.insert(Self {
@@ -200,12 +125,6 @@ impl Smoothed {
         smoothed
     }
 
-    /// An eighth of the way to `reading`, but always at least a sixteenth,
-    /// so a steady reading is reached exactly.
-    ///
-    /// `now` starts at a plausible reading and only ever moves part of the
-    /// way towards another, so it stays inside [`PLAUSIBLE_SIXTEENTHS`], and
-    /// so does every sample in the history. Returns the new value.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "now is clamped to PLAUSIBLE_SIXTEENTHS and reading is plausible, so they're \
@@ -222,8 +141,6 @@ impl Smoothed {
         self.now
     }
 
-    /// Records `now`, the smoothed temperature from [`follow`](Self::follow)
-    /// or a fresh start, and returns how far it's moved over the history.
     #[expect(
         clippy::indexing_slicing,
         reason = "masking with HISTORY_MASK keeps the index under HISTORY, a power of two"
@@ -244,14 +161,8 @@ impl Smoothed {
 #[derive(Clone, Debug)]
 pub struct Thermal {
     ceiling: Ceiling,
-    /// `None` before the first good reading. Only the tag needs writing to
-    /// start afresh, so neither building a `Thermal` nor a reset clears the
-    /// history.
     smoothed: Option<Smoothed>,
-    /// Glitches in a row.
     rejected: u8,
-    /// Error summed over readings. Positive pushes the ceiling down,
-    /// negative pushes it up.
     pressure: i16,
 }
 
@@ -271,38 +182,28 @@ impl Thermal {
         }
     }
 
-    /// The ceiling right now.
     pub const fn ceiling(&self) -> u8 {
         self.ceiling.level()
     }
 
-    /// Forgets everything, so there's no ceiling, and the next reading starts
-    /// the smoothing and the trend afresh. Call it when the light turns on,
-    /// since nothing's sampled while it's off.
     pub const fn reset(&mut self) {
         *self = Self::new();
     }
 
-    /// One tick. Moves the ceiling a step towards where it's heading and
-    /// returns it.
     pub const fn tick(&mut self) -> u8 {
         self.ceiling.tick()
     }
 
-    /// One temperature reading in sixteenths of a kelvin, taken every
-    /// [`CYCLE_TICKS`] ticks while the light's on, and the level it's at
-    /// right now.
     pub fn sample(&mut self, reading: u16, level: u8) {
         if !plausible(reading) {
             self.rejected = self.rejected.saturating_add(1);
             if self.rejected > GLITCHES {
-                // The sensor's broken. Assume the worst.
                 self.step_down(level, MAX_STEP_DOWN);
             }
             return;
         }
-        // The smoothed temperature comes out of the match rather than being
-        // read back, so release builds can see the range it's in.
+        // Out of the match rather than read back, so release builds can see
+        // the range it's in.
         let (smoothed, smooth) = match &mut self.smoothed {
             Some(smoothed) if reading.abs_diff(smoothed.last) <= JUMP => {
                 let smooth = smoothed.follow(reading);
@@ -312,8 +213,6 @@ impl Thermal {
                 self.rejected = self.rejected.saturating_add(1);
                 return;
             }
-            // The first reading, or a jump that's lasted long enough to be
-            // real.
             slot => (Smoothed::start(slot, reading), reading.cast_signed()),
         };
         self.rejected = 0;
@@ -326,10 +225,6 @@ impl Thermal {
         )]
         let over = smooth + trend * LOOKAHEAD - LIMIT_SIXTEENTHS;
         if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
-            // Each step down costs `DOWN_PRESSURE`, so the rate follows how
-            // far over the prediction is. A kelvin over steps once a second,
-            // four over steps every reading, and a sixteenth over takes
-            // sixteen seconds.
             let pressure = self.pressure.max(0).saturating_add(over);
             let steps = (pressure / DOWN_PRESSURE).min(i16::from(MAX_STEP_DOWN));
             self.pressure = pressure
@@ -340,10 +235,6 @@ impl Thermal {
                 self.step_down(level, steps);
             }
         } else if over < -WINDOW && trend < WARMING {
-            // The same going up, counted from the bottom of the window, but
-            // at most a level a reading and for four times the pressure. The
-            // head takes a minute or so to show what a step up did, so
-            // coming back up too fast is what makes it hunt.
             let pressure = self
                 .pressure
                 .min(0)
@@ -355,15 +246,10 @@ impl Thermal {
                 self.pressure = pressure;
             }
         } else if over <= 0 {
-            // Inside the window, so hold and forget the push either way.
             self.pressure = 0;
         }
-        // Over the limit but already cooling, so hold and keep the pressure
-        // for if it turns.
     }
 
-    /// Steps the ceiling down, never under [`FLOOR`], counting from the
-    /// light's level if that's lower, so the first step shows straight away.
     fn step_down(&mut self, level: u8, steps: u8) {
         let from = match level {
             0 => self.ceiling.target(),
@@ -376,15 +262,10 @@ impl Thermal {
 
 #[cfg(test)]
 mod tests {
-    // Only for `TRACE=1 cargo test -q thermal -- --nocapture`, which prints
-    // what each closed-loop stretch did. Handy when retuning.
     extern crate std;
     use super::*;
     use crate::ramp::{self, DSM_TOP};
 
-    /// The light at whatever level the UI asks for, capped by thermal
-    /// regulation, checking every tick that the cap never moves the output
-    /// more than one level.
     struct Run {
         thermal: Thermal,
         output: u8,
@@ -398,13 +279,10 @@ mod tests {
             }
         }
 
-        /// One reading in whole kelvin and the ticks up to the next. Returns
-        /// the output.
         fn sample(&mut self, kelvin: u16, ui: u8) -> u8 {
             self.sample_fraction(fraction(kelvin), ui)
         }
 
-        /// The same for a reading in sixteenths of a kelvin.
         fn sample_fraction(&mut self, reading: u16, ui: u8) -> u8 {
             self.thermal.sample(reading, self.output);
             for _ in 0..CYCLE_TICKS {
@@ -415,8 +293,6 @@ mod tests {
 
         fn tick(&mut self, ui: u8) {
             let output = ui.min(self.thermal.tick());
-            // Turning on is the UI's jump to make. Everything else is the
-            // ceiling's doing, and that can't jump.
             if self.output != 0 {
                 assert!(
                     output.abs_diff(self.output) <= 1,
@@ -435,11 +311,9 @@ mod tests {
         }
     }
 
-    /// A made-up pseudo-random sequence, so the tests can add noise.
     struct Noise(u32);
 
     impl Noise {
-        /// Something in `-spread..=spread`.
         fn next(&mut self, spread: i16) -> i16 {
             self.0 = self.0.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             ((self.0 >> 16) % (2 * spread as u32 + 1)) as i16 - spread
@@ -450,15 +324,13 @@ mod tests {
         kelvin.saturating_add_signed(noise.next(spread))
     }
 
-    /// A whole number of kelvin as a reading, keeping junk well out of range.
     fn fraction(kelvin: u16) -> u16 {
         kelvin.saturating_mul(FRACTION as u16)
     }
 
-    /// A rough head, with heat in from the LEDs, out to the air, and the MCU a
-    /// few seconds behind the head. Nothing about it is measured; it's
-    /// there to give the controller something with lag to fight against.
-    /// Temperatures are in thousandths of a kelvin.
+    /// Unmeasured, with power taken as proportional to the delta-sigma value.
+    /// It only gives the controller some lag to fight. In thousandths of a
+    /// kelvin.
     struct Head {
         head: i32,
         mcu: i32,
@@ -466,8 +338,6 @@ mod tests {
     }
 
     impl Head {
-        /// About how far over ambient full power would take the head if
-        /// nothing stopped it.
         const FULL_RISE: i64 = 80_000;
 
         fn new(ambient: u16) -> Self {
@@ -479,15 +349,11 @@ mod tests {
             }
         }
 
-        /// Where the head would settle at `level`, taking the power as
-        /// proportional to the delta-sigma value, which is a guess.
         fn settle(&self, level: u8) -> i32 {
             let power = i64::from(ramp::output(level).dsm);
             self.ambient + (Self::FULL_RISE * power / i64::from(DSM_TOP)) as i32
         }
 
-        /// One tick at `level`. The head settles with a time constant of a
-        /// minute, and the MCU follows it over five seconds.
         fn tick(&mut self, level: u8) {
             self.head += (self.settle(level) - self.head) / (60 * 64);
             self.mcu += (self.head - self.mcu) / (5 * 64);
@@ -497,26 +363,19 @@ mod tests {
             ((self.mcu + 500) / 1000) as u16
         }
 
-        /// What the sensor reads, to the sixteenth.
         fn reading(&self) -> u16 {
             ((self.mcu * i32::from(FRACTION) + 500) / 1000) as u16
         }
     }
 
-    /// What a stretch of [`closed_loop`] did.
     #[derive(Debug)]
     struct Stretch {
-        /// The hottest the MCU got, in kelvin.
         hottest: u16,
-        /// The output's range.
         lowest: u8,
         highest: u8,
-        /// How often the output changed direction.
         turns: u16,
     }
 
-    /// Runs the light at `ui` against `head` for `samples` readings, each
-    /// off by up to `spread` kelvin.
     fn closed_loop(
         run: &mut Run,
         head: &mut Head,
@@ -587,7 +446,6 @@ mod tests {
         let mut run = Run::new();
         run.hold(celsius(35), CEILING, 20);
         let mut last = CEILING;
-        // Warming a degree every two seconds, to 15 °C over the limit.
         for step in 0..8 * 30 {
             let output = run.sample(celsius(35) + step / 8, CEILING);
             assert!(output <= last, "stepped up while heating");
@@ -629,7 +487,6 @@ mod tests {
         let mut run = Run::new();
         let ui = FLOOR + 20;
         run.hold(celsius(30), ui, 20);
-        // A believable jump, so it takes a few readings to count.
         run.hold(LIMIT + 5, ui, u16::from(GLITCHES) + 2);
         assert!(
             run.output < ui,
@@ -650,7 +507,6 @@ mod tests {
             samples += 1;
             assert!(samples < 4 * 60, "took over a minute to recover");
         }
-        // No faster than a level a reading.
         assert!(samples >= u16::from(CEILING - FLOOR));
     }
 
@@ -660,7 +516,6 @@ mod tests {
         run.hold(celsius(30), CEILING, 20);
         run.hold(LIMIT + 3, CEILING, 20);
         assert!(run.output < CEILING);
-        // Neither hot enough to step down nor cool enough to step up.
         for kelvin in [LIMIT, LIMIT - 1] {
             let held = run.hold(kelvin, CEILING, 20);
             assert_eq!(
@@ -704,7 +559,6 @@ mod tests {
 
     #[test]
     fn a_fraction_of_a_kelvin_over_the_limit_steps_down() {
-        // Rounded to whole kelvin this would be the limit exactly, and hold.
         let (mut at, mut over) = (Run::new(), Run::new());
         for _ in 0..4 * 60 {
             at.sample_fraction(fraction(LIMIT), CEILING);
@@ -716,9 +570,6 @@ mod tests {
 
     #[test]
     fn a_slow_rise_moves_the_prediction_steadily() {
-        // Warming a sixteenth a reading, the trend should stay the same from
-        // one reading to the next once it's filled. Whole kelvin would show
-        // a kelvin's step every sixteen readings, and predict from that.
         let mut thermal = Thermal::default();
         let start = fraction(celsius(30));
         let mut trends = std::vec::Vec::new();
@@ -736,15 +587,11 @@ mod tests {
         assert!(settled[0] > 0, "{trends:?}");
     }
 
-    /// A plausible reading in sixteenths, anywhere in the range.
     fn any_plausible(rng: &mut crate::testing::Rng) -> u16 {
         let (low, high) = (*PLAUSIBLE_SIXTEENTHS.start(), *PLAUSIBLE_SIXTEENTHS.end());
         low + rng.next_u16() % (high - low + 1)
     }
 
-    /// Asserts that `now` and every sample of the history are inside the
-    /// range the clamps in `follow` and `trend` cap them to, so the clamps
-    /// have nothing to change.
     fn assert_in_range(smoothed: &Smoothed, context: &str) {
         let range = NOW_LOW..=NOW_HIGH;
         assert!(range.contains(&smoothed.now), "{context}: {smoothed:?}");
@@ -754,7 +601,6 @@ mod tests {
         );
     }
 
-    /// What `follow` would return with no clamp, worked out in `i32`.
     fn follow_unclamped(smoothed: &Smoothed, reading: u16) -> i32 {
         let now = i32::from(smoothed.now);
         let difference = i32::from(reading) - now;
@@ -764,7 +610,6 @@ mod tests {
         }
     }
 
-    /// What `trend` would return with no clamp, worked out in `i32`.
     fn trend_unclamped(smoothed: &Smoothed, now: i16) -> i32 {
         i32::from(now) - i32::from(smoothed.history[usize::from(smoothed.next & HISTORY_MASK)])
     }
@@ -774,12 +619,8 @@ mod tests {
         let mut rng = crate::testing::Rng::new(0x5EED);
         let (low, high) = (*PLAUSIBLE_SIXTEENTHS.start(), *PLAUSIBLE_SIXTEENTHS.end());
 
-        // `Smoothed` driven directly, so every `follow` and `trend` can be
-        // compared with the unclamped sums. The readings are the plausible
-        // ones `follow` is given, including jumps from one end to the other.
         let mut slot = None;
         for round in 0..200_u16 {
-            // A fresh start every round, from either end or anywhere between.
             let first = match round % 3 {
                 0 => low,
                 1 => high,
@@ -811,8 +652,6 @@ mod tests {
             }
         }
 
-        // And through `Thermal`, with rests (no readings), resets, glitches
-        // and jumps believed after they last.
         let mut thermal = Thermal::new();
         for step in 0..20_000_u16 {
             let reading = match rng.next_u16() % 16 {
@@ -824,7 +663,6 @@ mod tests {
             };
             match rng.next_u16() % 64 {
                 0 => thermal.reset(),
-                // A rest, as when the light's off. Nothing's sampled.
                 1 => {}
                 _ => thermal.sample(reading, CEILING),
             }
@@ -860,22 +698,16 @@ mod tests {
         let mut thermal = Thermal::default();
         let start = fraction(celsius(30));
         thermal.sample(start, CEILING);
-        // Six kelvin away is believed straight off, and a sixteenth more
-        // waits for the readings after it.
         thermal.sample(start + fraction(6), CEILING);
         assert_eq!(thermal.rejected, 0);
         thermal.sample(start + 2 * fraction(6) + 1, CEILING);
         assert_eq!(thermal.rejected, 1);
     }
 
-    /// A reading `sixteenths` of a kelvin over the limit, or under it.
     fn limit_plus(sixteenths: i16) -> u16 {
         (LIMIT_SIXTEENTHS + sixteenths).cast_unsigned()
     }
 
-    /// A light that's stepped down to the floor and then cooled to `reading`.
-    /// The jump's lasted long enough to be believed, so the smoothing has
-    /// started afresh there, with no trend.
     fn cooled_at_the_floor(reading: u16) -> Thermal {
         let mut thermal = Thermal::default();
         for _ in 0..4 * 10 {
@@ -892,8 +724,6 @@ mod tests {
         thermal
     }
 
-    /// Feeds `reading` until the ceiling's target next steps up, and returns
-    /// how many readings that took.
     fn readings_to_step_up(thermal: &mut Thermal, reading: u16) -> u16 {
         let from = thermal.ceiling.target();
         let mut readings = 0;
@@ -908,8 +738,6 @@ mod tests {
 
     #[test]
     fn the_rate_down_follows_how_far_over_the_limit_it_is() {
-        // A sixteenth over takes sixteen seconds a level, a kelvin over
-        // steps once a second, and four over steps every reading.
         for (over, every) in [(1, 64), (FRACTION, 4), (4 * FRACTION, 1)] {
             let mut thermal = Thermal::default();
             for step in 1..=3 {
@@ -929,10 +757,8 @@ mod tests {
     #[test]
     fn a_step_down_is_eight_levels_at_most_and_the_rest_is_not_saved_up() {
         let mut thermal = Thermal::default();
-        // Forty kelvin over would buy ten levels.
         thermal.sample(fraction(LIMIT + 40), CEILING);
         assert_eq!(thermal.ceiling.target(), CEILING - MAX_STEP_DOWN);
-        // Less than a level's worth carries over to the next reading.
         assert!(thermal.pressure < DOWN_PRESSURE, "{}", thermal.pressure);
         thermal.sample(fraction(LIMIT + 40), CEILING);
         assert_eq!(thermal.ceiling.target(), CEILING - 2 * MAX_STEP_DOWN);
@@ -940,8 +766,6 @@ mod tests {
 
     #[test]
     fn a_reading_that_buys_no_step_leaves_the_ceiling_alone() {
-        // At a level under the ceiling, a step down first pulls the ceiling
-        // down to the level. A reading that's only a little over mustn't.
         let mut thermal = Thermal::default();
         thermal.sample(limit_plus(1), FLOOR + 20);
         assert_eq!(thermal.ceiling(), CEILING);
@@ -960,24 +784,18 @@ mod tests {
     #[test]
     fn cooling_from_the_top_of_the_window_holds_and_keeps_the_pressure() {
         let mut thermal = Thermal::default();
-        // Two steps down, and over half a step's pressure left.
         for _ in 0..5 {
             thermal.sample(limit_plus(WINDOW + 1), CEILING);
         }
         assert_eq!(thermal.ceiling.target(), CEILING - 2);
-        // A dip to the top of the window is cooling, so it holds, though
-        // this reading's error would have bought the next step.
         thermal.sample(limit_plus(WINDOW), CEILING);
         assert_eq!(thermal.ceiling.target(), CEILING - 2);
-        // Then it turns, and what was saved up before the dip still counts.
         thermal.sample(limit_plus(WINDOW + 1), CEILING);
         assert_eq!(thermal.ceiling.target(), CEILING - 3);
     }
 
     #[test]
     fn a_prediction_on_either_edge_of_the_window_holds_and_forgets_the_pressure() {
-        // Over the limit, with pressure to step down, then cooling fast
-        // enough that the prediction is the limit exactly.
         let mut thermal = Thermal::default();
         thermal.sample(limit_plus(50), CEILING);
         assert!(thermal.pressure > 0);
@@ -987,8 +805,6 @@ mod tests {
         assert_eq!(thermal.pressure, 0);
         assert_eq!(thermal.ceiling.target(), CEILING);
 
-        // Under the window, with pressure to step up, then warming so the
-        // prediction is the bottom of the window exactly.
         let mut thermal = cooled_at_the_floor(limit_plus(-WINDOW - 5));
         for _ in 0..10 {
             thermal.sample(limit_plus(-WINDOW - 5), CEILING);
@@ -1001,9 +817,6 @@ mod tests {
 
     #[test]
     fn the_rate_up_follows_how_far_under_the_window_it_is() {
-        // A sixteenth under the window takes 64 seconds a level, a kelvin
-        // under steps every four seconds, and sixteen under or more steps
-        // every reading, which is as fast as it goes.
         for (under, every) in [
             (1, 256),
             (FRACTION, 16),
@@ -1025,9 +838,6 @@ mod tests {
 
     #[test]
     fn the_pressure_left_over_from_a_step_up_counts_towards_the_next() {
-        // A kelvin and a half under the window is a step every ten and
-        // two-thirds readings, so six in sixteen seconds. Starting from
-        // nothing after each step would make it five.
         let reading = limit_plus(-WINDOW - 24);
         let mut thermal = cooled_at_the_floor(reading);
         readings_to_step_up(&mut thermal, reading);
@@ -1050,8 +860,6 @@ mod tests {
 
     #[test]
     fn warming_a_kelvin_every_two_seconds_blocks_stepping_up() {
-        // Thirty kelvin under the limit, so nothing but the trend is in the
-        // way of stepping up.
         let start = fraction(LIMIT - 30);
         let mut thermal = cooled_at_the_floor(start);
         let mut reading = start;
@@ -1061,19 +869,14 @@ mod tests {
                 thermal.sample(reading, CEILING);
             }
         };
-        // The smoothed temperature takes a while to follow at the same
-        // rate, and it steps up until then.
         warm(&mut thermal, 40);
         let smoothed = thermal.smoothed.as_ref().unwrap();
-        // The oldest sample still in the history is seven readings back. The
-        // trend's taken against the one before it, a kelvin away exactly.
         let oldest = smoothed.history[usize::from(smoothed.next)];
         assert_eq!(smoothed.now - oldest, 7 * FRACTION / 8);
         let held = thermal.ceiling.target();
         assert!(held < CEILING);
         warm(&mut thermal, 20);
         assert_eq!(thermal.ceiling.target(), held);
-        // Once it's steady again, it carries on up.
         let reading = reading;
         for _ in 0..HISTORY * 2 {
             thermal.sample(reading, CEILING);
@@ -1086,13 +889,10 @@ mod tests {
         let mut thermal = Thermal::default();
         let start = fraction(LIMIT - 30);
         thermal.sample(start, CEILING);
-        // Six kelvin a reading, as fast as a reading's believed straight
-        // off, up to the limit.
         for step in 1..=5 {
             assert_eq!(thermal.ceiling.target(), CEILING);
             thermal.sample(start + step * fraction(6), CEILING);
         }
-        // The trend's over nine kelvin by now, and all of it counts.
         let smoothed = thermal.smoothed.as_ref().unwrap();
         assert!(smoothed.now < LIMIT_SIXTEENTHS - 20 * FRACTION);
         assert!(thermal.ceiling.target() < CEILING);
@@ -1134,7 +934,6 @@ mod tests {
             let mut run = Run::new();
             run.hold(celsius(30), CEILING, 20);
             assert_eq!(run.hold(broken, CEILING, 4 * 10), FLOOR, "{broken}");
-            // And one that never worked from the start.
             let mut run = Run::new();
             assert_eq!(run.hold(broken, CEILING, 4 * 10), FLOOR, "{broken}");
         }
@@ -1145,7 +944,6 @@ mod tests {
         let mut run = Run::new();
         let mut noise = Noise(13);
         let mut kelvin = celsius(30);
-        // An hour of a temperature wandering about, with junk mixed in.
         for _ in 0..4 * 60 * 60 {
             kelvin = kelvin
                 .saturating_add_signed(noise.next(1))
@@ -1155,12 +953,10 @@ mod tests {
                 -50 => u16::MAX,
                 _ => kelvin,
             };
-            // `Run` checks the step every tick.
             assert!(run.sample(reading, CEILING) >= FLOOR);
         }
     }
 
-    /// Turns the light off (no readings while it is) and on again.
     fn off_and_on(run: &mut Run) {
         run.output = 0;
         run.thermal.reset();
@@ -1173,8 +969,6 @@ mod tests {
         assert_eq!(run.hold(LIMIT + 10, CEILING, 4 * 60), FLOOR);
         off_and_on(&mut run);
         assert_eq!(run.thermal.ceiling(), CEILING);
-        // Cooled while off. It's a fresh start, not a jump to ignore, and
-        // there's no trend from the hot readings to predict with.
         assert_eq!(run.hold(celsius(30), CEILING, 4 * 60), CEILING);
     }
 
@@ -1183,8 +977,6 @@ mod tests {
         let mut run = Run::new();
         run.hold(celsius(30), CEILING, 20);
         off_and_on(&mut run);
-        // Turned on at the top while still 10 °C over. The first reading has
-        // no history, and it still steps down straight away.
         assert!(run.sample(LIMIT + 10, CEILING) < CEILING);
         let mut samples = 1;
         while run.output > FLOOR {
@@ -1200,8 +992,6 @@ mod tests {
         let ui = FLOOR + 30;
         off_and_on(&mut run);
         run.sample(LIMIT + 10, ui);
-        // The first step down shows, rather than spending a second or two
-        // bringing the ceiling down from the top.
         run.hold(LIMIT + 10, ui, 2);
         assert!(run.output < ui);
     }
@@ -1211,7 +1001,6 @@ mod tests {
         let mut run = Run::new();
         let mut head = Head::new(celsius(25));
         let mut noise = Noise(3);
-        // Ten minutes to get hot and settle, then ten to watch.
         let warming = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 0);
         assert!(warming.hottest <= LIMIT + 2, "{warming:?}");
         let settled = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 0);
@@ -1245,8 +1034,6 @@ mod tests {
 
     #[test]
     fn every_reading_held_ends_where_the_limit_says() {
-        // A steady reading has no trend, so the band under the limit is a
-        // hold and the ceiling can only be where it started.
         let limit = LIMIT * FRACTION as u16;
         let mut hot = 0;
         let mut cool = 0;
@@ -1255,8 +1042,6 @@ mod tests {
             let too_hot = !plausible(reading) || reading > limit;
             let mut thermal = Thermal::new();
             let mut settled = 0_u32;
-            // The slowest reading to give way is a sixteenth over the limit,
-            // which takes about sixteen seconds a level.
             for sample in 0..8000_u32 {
                 let level = CEILING.min(thermal.ceiling());
                 thermal.sample(reading, level);
@@ -1271,7 +1056,6 @@ mod tests {
                     true => settled + 1,
                     false => 0,
                 };
-                // Stop once it's stayed where it should be for a while.
                 if settled >= 50 {
                     break;
                 }

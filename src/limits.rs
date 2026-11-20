@@ -1,25 +1,7 @@
-//! What the cell and the temperature allow, with the UI's level in and the
-//! level to run at out.
+//! What the cell and the temperature allow the UI's level to be.
 //!
-//! Each tick this runs the ADC's [`Schedule`], hands each reading to
-//! low-voltage protection (`battery::Protection`) or thermal regulation
-//! (`thermal::Thermal`), and runs the light at the lowest of the UI's level,
-//! the thermal ceiling and the battery ceiling. Both ceilings fade
-//! (`gradual::Ceiling`), so a step-down never jumps.
-//!
-//! Two things stop the light altogether, and [`Limits::health`] says which.
-//! A flat cell turns it off and keeps it off until the cell reads as charged
-//! (`battery::Protection::flat`). A fault turns it off and keeps it off until
-//! the cell comes out. A fault is a failed power-on self-test, or a cell that
-//! can't be read (`battery::Verdict::Blind`), since with no reading there's
-//! no low-voltage cut-off, and this cell has no protection of its own. A
-//! fault that comes up with the light on fades it down the ramp first, so it
-//! doesn't snap out in someone's hand.
-//!
-//! Garbage readings fail safe. Each side has its own idea of a reading that
-//! can't be real (`battery::plausible`, `thermal::plausible`) and lets a few
-//! go. After that a garbage voltage is a fault, and a garbage temperature
-//! drops the thermal ceiling to its floor and does no more.
+//! A cell that can't be read is a fault that keeps the light off, since the
+//! cell has no protection of its own.
 
 use crate::battery::{self, Protection, Verdict};
 use crate::ramp::CEILING;
@@ -28,27 +10,17 @@ use crate::sensors::{Convert, Reading, Schedule};
 use crate::temp::Calibration;
 use crate::thermal::Thermal;
 
-/// Whether the light may come on at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Health {
     Good,
-    /// Turned off for a flat cell, and not yet read as charged.
     Flat,
-    /// A failed self-test, or a cell it couldn't read. Only a reset clears it.
     Fault,
 }
 
-/// One tick's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Step {
-    /// The level to run at, `0` meaning off.
     pub level: u8,
-    /// The cell's flat, or there's a fault, so turn the UI off.
     pub off: bool,
-    /// The centivolts of a voltage reading that came due this tick with the
-    /// light off, and off for the two ticks before as well, so the
-    /// conversion ran with no load on the cell. Implausible readings
-    /// included, and a result that never came reads as zero.
     pub unloaded: Option<u16>,
 }
 
@@ -58,23 +30,16 @@ pub struct Limits {
     calibration: Calibration,
     protection: Protection,
     thermal: Thermal,
-    /// Whether the UI was on last tick.
     on: bool,
-    /// The level the light's at, as of the last tick.
     level: u8,
-    /// Whether the light was lit the tick before that. A conversion starts
-    /// before that tick's output is set, so a reading that comes due now
-    /// ran across the two.
+    /// A conversion starts before its tick's output is set, so a reading due
+    /// now ran across the last two ticks.
     lit_before: bool,
     convert: Option<Convert>,
-    /// A self-test failed, or the cell couldn't be read.
     fault: bool,
 }
 
 impl Limits {
-    /// `calibration` is the chip's own, from the signature row. `faults` is
-    /// what the power-on self-tests found, and any fault keeps the light off
-    /// for as long as this lives.
     pub const fn new(calibration: Calibration, faults: Faults) -> Self {
         Self {
             schedule: Schedule::new(),
@@ -89,24 +54,18 @@ impl Limits {
         }
     }
 
-    /// The conversion the ADC should start this tick, if any.
     pub const fn convert(&self) -> Option<Convert> {
         self.convert
     }
 
-    /// The level the light's at, `0` meaning off, which is the last tick's
-    /// [`Step::level`].
     pub const fn level(&self) -> u8 {
         self.level
     }
 
-    /// The battery and thermal ceilings right now.
     pub const fn ceilings(&self) -> (u8, u8) {
         (self.protection.ceiling(), self.thermal.ceiling())
     }
 
-    /// Whether the light may come on, and if not, why not. A fault outranks
-    /// a flat cell, since a flat cell can be charged and a fault can't.
     pub const fn health(&self) -> Health {
         if self.fault {
             Health::Fault
@@ -117,14 +76,8 @@ impl Limits {
         }
     }
 
-    /// A tick in place of [`Limits::tick`] while the torch rests. The light's
-    /// off, and nothing's measured, since the ADC can't run in power-down. A
-    /// conversion started now would come back on waking with an invalid
-    /// result (DS40002204A §30.3.5). So a battery ceiling only climbs once
-    /// readings start again, and a long rest forgets the last ones
-    /// (`battery::FORGET_TICKS`). The torch's checks of the cell at rest
-    /// (`torch::CHECK_TICKS`) are ordinary ticks with the UI off, three of
-    /// them, between runs of these.
+    /// Starts no conversion, since one running into power-down comes back on
+    /// waking with an invalid result (DS40002204A §30.3.5).
     pub const fn rest(&mut self) {
         self.schedule.rest();
         self.protection.rest();
@@ -133,20 +86,12 @@ impl Limits {
         self.level = 0;
     }
 
-    /// One tick. `ui` is the level the UI wants (`0` for off) and `result`
-    /// the ADC's result, if it has one ready.
     pub fn tick(&mut self, ui: u8, result: Option<u16>) -> Step {
         let on = ui != 0;
         if on && !self.on {
             self.thermal.reset();
         }
         self.on = on;
-        // The level the light's at this tick, before the ceilings move. It's
-        // last tick's level while the UI holds steady, and the UI's on the
-        // tick it turns on. On a tick the UI ramps down it's still last
-        // tick's, the higher of the two, so a ceiling pulled down to it and
-        // then stepped lands where the UI already is. Otherwise the ramp's
-        // level and the ceiling's would both come off in the one tick.
         let ui = ui.min(CEILING);
         let level = match on {
             true => ui
@@ -177,18 +122,12 @@ impl Limits {
             }
             None => {}
         }
-        // Every tick, so a good reading during the fade can't send the
-        // battery ceiling back up and leave a fault lit.
         if self.fault {
             self.protection.fail(level);
         }
 
         let thermal = self.thermal.tick();
         let battery = self.protection.tick();
-        // A fault with the light out keeps it out, and one with it lit lets
-        // the battery ceiling fade it to the bottom first. Level 1 gets its
-        // tick like every level above it, so it's last tick's level that
-        // decides.
         let fault = self.fault && self.level <= 1;
         let off = on && (fault || self.protection.flat());
         self.lit_before = self.level > 0;
@@ -217,14 +156,11 @@ mod tests {
     use crate::thermal::{self, FLOOR};
     use std::vec::Vec;
 
-    /// Self-tests that found something.
     const FAILED: Faults = Faults {
         hang: true,
         ..Faults::NONE
     };
 
-    /// Limits and a fake ADC, a tick at a time, checking the output never
-    /// jumps by more than a level while the UI holds steady.
     struct Run {
         limits: Limits,
         adc: Adc,
@@ -239,7 +175,6 @@ mod tests {
             Self::with(Faults::NONE)
         }
 
-        /// After power-on self-tests that found `faults`.
         fn with(faults: Faults) -> Self {
             Self {
                 limits: Limits::new(CALIBRATION, faults),
@@ -259,7 +194,6 @@ mod tests {
                 self.offs += 1;
                 self.ui = 0;
             }
-            // Only a change of UI level (or the cell going flat) may jump.
             let steady = self.uis.last() == Some(&ui) && ui != 0 && !step.off;
             if let (Some(&last), true) = (self.levels.last(), steady) {
                 assert!(
@@ -285,7 +219,6 @@ mod tests {
         }
     }
 
-    /// The raw temperature reading for `degrees` Celsius.
     fn celsius(degrees: u8) -> u16 {
         temperature_reading(thermal::celsius(degrees))
     }
@@ -355,7 +288,6 @@ mod tests {
         assert_eq!(run.secs(4), 50);
         assert_eq!(run.secs(2), 35);
         assert_eq!(run.secs(5), 20);
-        // From 50 to 35 took a level a tick, not one jump.
         for level in 35..50 {
             assert!(run.levels.contains(&level), "{level}");
         }
@@ -371,12 +303,8 @@ mod tests {
         run.ui = CEILING;
         run.secs(1);
         run.adc.voltage = voltage_reading(280);
-        // The filter takes a few seconds to fall under 2.9 V, then the hold
-        // a second, so it's still at the top.
         assert_eq!(run.secs(4), CEILING);
         assert_eq!(run.offs, 0);
-        // Then it fades all the way down, without ever jumping, and with the
-        // cell still flat it turns off once it's had a second at level 1.
         run.secs(10);
         assert_eq!(run.offs, 1);
         let lit: Vec<u8> = run
@@ -398,7 +326,6 @@ mod tests {
 
     #[test]
     fn a_voltage_reading_on_the_tick_it_turns_on_counts() {
-        // Voltage readings come due on the third tick of each round of 16.
         let sample = usize::from(CYCLE_TICKS);
         let mut run = Run::new();
         run.adc.voltage = voltage_reading(280);
@@ -408,7 +335,6 @@ mod tests {
         run.ticks(1);
         assert_eq!(run.levels[on_at], 1);
         run.secs(2);
-        // A second of flat samples, the first on the turn-on tick itself.
         let off_at = on_at + (usize::from(battery::HOLD_SAMPLES) - 1) * sample;
         assert!(run.levels[on_at..off_at].iter().all(|&l| l == 1));
         assert_eq!(run.levels[off_at], 0);
@@ -422,15 +348,12 @@ mod tests {
         run.ui = 50;
         run.secs(6);
         assert_eq!(run.offs, 1);
-        // Asked again, it won't light, not even for a tick.
         run.ui = 50;
         assert_eq!(run.ticks(1), 0);
         assert_eq!(run.offs, 2);
-        // A rested cell that's still low changes nothing.
         run.adc.voltage = voltage_reading(battery::CHARGED_AT - 1);
         run.secs(10);
         assert_eq!(run.limits.health(), Health::Flat);
-        // A charged one, read with the light off, as a press reads it.
         run.adc.voltage = voltage_reading(380);
         run.ticks(u32::from(CYCLE_TICKS));
         assert_eq!(run.limits.health(), Health::Good);
@@ -446,8 +369,6 @@ mod tests {
             run.ui = CEILING;
             run.secs(2);
             run.adc.voltage = garbage;
-            // Three garbage samples go, the fourth is a fault, and the
-            // light fades from the top a level a tick.
             run.ticks(3 * u32::from(CYCLE_TICKS));
             assert_eq!(run.ticks(1), CEILING, "{garbage}");
             assert_eq!(run.limits.health(), Health::Good, "{garbage}");
@@ -455,13 +376,10 @@ mod tests {
             assert_eq!(run.offs, 1, "{garbage}");
             assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
             let lit: Vec<u8> = run.levels.iter().copied().filter(|&l| l > 0).collect();
-            // Every level gets its tick, level 1 included, and that's the
-            // last lit.
             for level in 1..CEILING {
                 assert!(lit.contains(&level), "{garbage}: faded through {level}");
             }
             assert_eq!(lit.last(), Some(&1), "{garbage}");
-            // It stays a fault with good readings, on or off.
             run.adc.voltage = voltage_reading(380);
             run.secs(10);
             run.ui = CEILING;
@@ -471,8 +389,6 @@ mod tests {
         }
     }
 
-    /// The UI's ramp takes a level a tick and so does a fading ceiling. On a
-    /// tick with both, the light still moves one level and not two.
     #[test]
     fn ramping_down_through_a_fade_still_moves_a_level_a_tick() {
         let mut run = Run::new();
@@ -484,8 +400,6 @@ mod tests {
         }
         let mut last = run.limits.level();
         assert_eq!(last, CEILING - 1, "the fade's first step");
-        // The ramp starts on the tick after the fault's decided, and stops
-        // half-way, so the ceiling's seen leading, level and trailing.
         while last > 0 {
             if run.ui > CEILING / 2 {
                 run.ui -= 1;
@@ -506,8 +420,6 @@ mod tests {
         while run.limits.health() == Health::Good {
             run.tick();
         }
-        // Back to a full cell straight away, for long enough to lift a
-        // ceiling several times over.
         run.adc.voltage = voltage_reading(420);
         run.secs(30);
         assert_eq!(run.offs, 1);
@@ -520,7 +432,6 @@ mod tests {
     fn garbage_voltages_with_the_light_off_are_a_fault_too() {
         let mut run = Run::new();
         run.adc.voltage = 0;
-        // Off but still read, as it is while the switch is held down.
         assert_eq!(run.secs(2), 0);
         assert_eq!(run.limits.health(), Health::Fault);
         run.ui = CEILING;
@@ -555,11 +466,8 @@ mod tests {
         assert_eq!(run.offs, 1);
     }
 
-    /// A known gap, docs/safety.md H3 and H12. A reading that's stuck at a
-    /// good-looking 3.8 V is the same to the firmware as a good cell, so
-    /// nothing here ever steps the light down. Only a reading that can't be
-    /// real gets caught. This pins it down so that if the gap is ever closed,
-    /// this is the test that has to change.
+    /// A known gap (docs/safety.md H3, H12), pinned so that closing it has to
+    /// change this test.
     #[test]
     fn a_plausible_voltage_that_never_changes_keeps_the_light_on() {
         let mut run = Run::new();
@@ -574,9 +482,8 @@ mod tests {
         assert_eq!(run.offs, 0);
     }
 
-    /// The same gap for the temperature, docs/safety.md H4. A sensor stuck at
-    /// a comfortable 25 °C never asks for a step down, however long the light
-    /// has really been cooking.
+    /// A known gap (docs/safety.md H4), pinned so that closing it has to
+    /// change this test.
     #[test]
     fn a_plausible_temperature_that_never_changes_never_steps_down() {
         let mut run = Run::new();
@@ -640,14 +547,12 @@ mod tests {
         run.adc.temperature = celsius(25);
         run.secs(1);
         run.ui = CEILING;
-        // Straight back to the top, since last time's heat doesn't carry over.
         assert_eq!(run.ticks(1), CEILING);
     }
 
     #[test]
     fn a_rest_starts_no_conversions_and_stays_dark() {
         let mut run = Run::new();
-        // A tick of the round that starts a conversion.
         run.ticks(1);
         assert!(run.limits.convert().is_some());
         run.limits.rest();
@@ -704,14 +609,9 @@ mod tests {
         assert_eq!(run.limits.health(), Health::Flat);
     }
 
-    /// Voltage readings come due on the third tick of each round of 16,
-    /// counting from 0. A conversion starts before its tick's output is set,
-    /// so the reading's only the unloaded cell once the light's been out for
-    /// the two ticks before it as well as its own.
     #[test]
     fn an_unloaded_reading_is_one_with_the_light_out_for_two_ticks_before_it() {
         let due = |tick: usize| tick % usize::from(CYCLE_TICKS) == 2;
-        // Off from power-on, and every reading counts, garbage included.
         for voltage in [voltage_reading(320), 0] {
             let mut limits = Limits::new(CALIBRATION, Faults::NONE);
             let mut adc = Adc::new();
@@ -723,8 +623,6 @@ mod tests {
                 assert_eq!(step.unloaded, read, "{voltage}: tick {tick}");
             }
         }
-        // Lit, then out at every point in the round, with the switch still
-        // down so the readings go on.
         for out_at in 64..80 {
             let mut limits = Limits::new(CALIBRATION, Faults::NONE);
             let mut adc = Adc::new();
@@ -738,13 +636,6 @@ mod tests {
         }
     }
 
-    /// A check of the cell at rest, five minutes after the last, the way
-    /// `torch::Torch` runs one. The rest before it is `battery::FORGET_TICKS`
-    /// long, so each check finds the filter forgotten and seeds it afresh,
-    /// as a press after a long rest always did. A press within five minutes
-    /// of a check blends in with that check's reading instead. A check takes
-    /// one reading with the light off, which can't raise a battery ceiling,
-    /// since that takes four seconds of readings in a row.
     #[test]
     fn a_check_at_rest_seeds_the_filter_afresh_and_leaves_the_ceiling() {
         use crate::torch::CHECK_TICKS;
@@ -759,8 +650,6 @@ mod tests {
         run.ticks(1);
         run.limits.rest();
         for cv in [380, 330, 400] {
-            // Two ticks of the check, with the rest that follows the
-            // reading's own tick counted in with the next.
             for _ in 1..CHECK_TICKS {
                 run.limits.rest();
             }
@@ -804,23 +693,16 @@ mod tests {
         assert_eq!(run.offs, 4, "asked for off every time");
     }
 
-    /// A million ticks of random UI levels and ADC results, checking every
-    /// step against `cap` and the UI.
     fn throw_noise_at(mut limits: Limits, cap: u8, seed: u32) {
         let mut rng = crate::testing::Rng::new(seed);
         let mut ticks = 0_u32;
         while ticks < 1_000_000 {
-            // The UI holds a level for a run of ticks, so the ceilings have
-            // time to move. Some runs are off, and some ask for more than
-            // the ramp has.
             let ui = match rng.next_u16() % 8 {
                 0 => 0,
                 1 => 255,
                 _ => rng.next_u16() as u8,
             };
             let run = 1 + u32::from(rng.next_u16() % 4000);
-            // What the ADC says for this run. Anything at all, a believable
-            // reading, or one believable reading over and over.
             let mode = rng.next_u16() % 3;
             let held = rng.next_u16() % (4 * 1023 + 1);
             for _ in 0..run {

@@ -1,72 +1,31 @@
-//! Sharing the one ADC between the cell's voltage and the temperature
-//! sensor.
+//! The one ADC, shared between the cell's voltage and the temperature.
 //!
-//! The ADC alternates every 8 ticks, so each gets a reading every 16 ticks
-//! (four a second, what `battery::Protection` and `thermal::Thermal` expect),
-//! the temperature 8 ticks after the voltage. Each turn takes three ticks.
-//!
-//! ```text
-//! tick 0   set the ADC up for the voltage, start a conversion
-//! tick 1   throw that result away, start another
-//! tick 2   that result is the voltage
-//! tick 8   set it up for the temperature, start a conversion
-//! tick 9   throw that result away, start another
-//! tick 10  that result is the temperature
-//! ```
-//!
-//! The ADC's only set up when the channel changes. While a click's being
-//! counted with the light off it reads nothing but the voltage, so after the
-//! first round it skips the setup and goes straight to converting.
-//!
-//! A conversion takes a fraction of a millisecond, so it's always done by
-//! the next tick, and nothing ever waits on the ADC.
-//!
-//! The datasheet doesn't ask for the first conversion after a switch to be
-//! thrown away. It does say the ADC needs time to settle on a new channel,
-//! and the internal reference about 25 µs to start (DS40002204A, sections
-//! 30.3.2.4 and 36.15). Both channels here use the same 1.1 V reference, so
-//! only the ADC's input moves between them, but PA1 sits behind tens of
-//! kilohms of divider (docs/hardware.md), which is slow to pull the sample
-//! capacitor away from whatever the temperature sensor left on it. The stock
-//! firmware throws the first one away too ("first result is unstable").
-//! It costs a tick, so it's cheap insurance.
-//!
-//! The temperature is only read when asked for, which the caller does while
-//! the light's on. The voltage is read until [`Schedule::rest`], since the
-//! ADC can't run in power-down, and starts again from the top after it.
+//! The first conversion after a setup is thrown away. The datasheet doesn't
+//! ask for that, but gives the ADC settling time on a new channel and the
+//! reference about 25 µs to start (DS40002204A §30.3.2.4, §36.15), and PA1
+//! sits behind tens of kilohms of divider.
 
-/// What the ADC is measuring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
-    /// PA1 (AIN1), the cell through its divider, against the internal 1.1 V
-    /// reference, four conversions accumulated, for `battery::centivolts`.
     Voltage,
-    /// The temperature sensor against the internal 1.1 V reference, four
-    /// conversions accumulated, for `temp::sixteenths`.
     Temperature,
 }
 
-/// A conversion for the firmware to start this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Convert {
     pub channel: Channel,
-    /// Set the ADC (and the reference) up for `channel` first, turning them
-    /// on if they're off. Only the first conversion of a turn on a different
-    /// channel from the last turn's needs it, or the first after a rest.
     pub setup: bool,
 }
 
-/// A reading that's come due, straight from the ADC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reading {
     Voltage(u16),
     Temperature(u16),
 }
 
-/// Ticks in a full round of both channels, and so how many apart each
-/// channel's readings come.
+/// Four readings a second of each channel, which `battery::Protection` and
+/// `thermal::Thermal` assume.
 pub const CYCLE_TICKS: u8 = 16;
-/// Where the temperature's turn starts in the round.
 const TEMPERATURE_AT: u8 = CYCLE_TICKS / 2;
 
 const _: () = assert!(CYCLE_TICKS.is_power_of_two());
@@ -74,12 +33,9 @@ const _: () = assert!(CYCLE_TICKS.is_power_of_two());
 #[derive(Clone, Debug, Default)]
 pub struct Schedule {
     phase: u8,
-    /// Whether this round reads the temperature.
     temperature: bool,
-    /// The channel the ADC was last set up for, `None` before the first.
-    /// Its registers keep their values until a reset, which starts this
-    /// afresh too. [`Schedule::rest`] puts it back to `None`, since the
-    /// firmware turns the reference off to power down.
+    /// Back to `None` on [`Schedule::rest`], since the firmware turns the
+    /// reference off to power down.
     set_up: Option<Channel>,
 }
 
@@ -92,20 +48,10 @@ impl Schedule {
         }
     }
 
-    /// Back to where it started, for after the firmware's powered down. The
-    /// next tick sets the ADC up again, and throws that conversion away as
-    /// usual, which gives the reference a tick to start.
     pub const fn rest(&mut self) {
         *self = Self::new();
     }
 
-    /// One tick. `result` is the ADC's result if it has one ready, and
-    /// `temperature` whether to read the temperature this round, which only
-    /// matters on the tick its turn starts.
-    ///
-    /// Returns the reading that's due this tick, if any, and the conversion
-    /// to start. A reading that's due when the ADC has no result comes out as
-    /// zero, which both channels treat as garbage.
     pub fn tick(
         &mut self,
         result: Option<u16>,
@@ -151,8 +97,6 @@ mod tests {
     use super::*;
     use std::vec::Vec;
 
-    /// What `ticks` ticks of the schedule ask for and hand back, with the
-    /// ADC's result always `result` and the temperature wanted or not.
     fn run(
         schedule: &mut Schedule,
         ticks: usize,
@@ -226,7 +170,6 @@ mod tests {
     fn decides_on_the_temperature_at_the_start_of_its_turn() {
         let mut schedule = Schedule::new();
         run(&mut schedule, 8, Some(1), false);
-        // Asked at the start of its turn, it finishes even if the ask goes.
         assert_eq!(
             schedule.tick(Some(1), true),
             (None, convert(Channel::Temperature, true))
@@ -239,7 +182,6 @@ mod tests {
             schedule.tick(Some(1), false),
             (Some(Reading::Temperature(1)), None)
         );
-        // Not asked at the start, it doesn't start halfway through.
         run(&mut schedule, 13, Some(1), false);
         assert_eq!(schedule.tick(Some(1), false), (None, None));
         assert_eq!(schedule.tick(Some(1), true), (None, None));
@@ -254,17 +196,13 @@ mod tests {
                 .filter_map(|(_, convert)| convert.filter(|c| c.setup).map(|c| c.channel))
                 .collect()
         };
-        // Off, so the first voltage turn sets up and the rest don't.
         let off = run(&mut schedule, 64, Some(1), false);
         assert_eq!(off[0].1, convert(Channel::Voltage, true));
         assert_eq!(off[16].1, convert(Channel::Voltage, false));
         assert_eq!(setups(&off), [Channel::Voltage]);
-        // On, so every turn switches channel and every turn sets up.
         let on = run(&mut schedule, 64, Some(1), true);
         let alternating = [Channel::Temperature, Channel::Voltage].repeat(4);
         assert_eq!(setups(&on)[..], alternating[..7]);
-        // Off again, so the voltage turn after the last temperature one sets
-        // up, and that's all.
         let off = run(&mut schedule, 64, Some(1), false);
         assert_eq!(setups(&off), [Channel::Voltage]);
     }
@@ -280,17 +218,12 @@ mod tests {
         assert_eq!(ticks[2], (Some(Reading::Voltage(7)), None));
     }
 
-    /// `Schedule` doesn't track whether a conversion is pending. It knows
-    /// from the phase when a result is due and reads it then, and any other
-    /// tick's result is dropped. So a result the ADC volunteers when nothing
-    /// was asked for never comes back as a reading.
     #[test]
     fn a_result_with_no_conversion_started_is_ignored() {
         let mut schedule = Schedule::new();
         let mut readings = Vec::new();
         for tick in 0..160 {
             let phase = tick % 16;
-            // A result on every tick except the two that are due one.
             let result = (phase != 2 && phase != 10).then_some(0x155);
             let (reading, _) = schedule.tick(result, true);
             readings.push((phase, reading));
@@ -302,8 +235,6 @@ mod tests {
                 _ => assert_eq!(reading, None, "phase {phase}"),
             }
         }
-        // And with the temperature not asked for, its turn's results are
-        // ignored too, due tick included.
         let mut schedule = Schedule::new();
         for tick in 0..160 {
             let (reading, convert) = schedule.tick(Some(0x155), false);
