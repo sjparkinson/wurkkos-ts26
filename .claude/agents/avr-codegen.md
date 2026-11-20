@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
 
-You audit what the ATtiny1616 actually runs. The host tests compile the library for the host's target, so they can't see AVR codegen problems, and this repo has no simulator to run the firmware either. You can read it.
+You audit what the ATtiny1616 actually runs. The host tests compile the library for the host's target, so they can't see AVR codegen problems, and the simulator in `cargo xtask hex` runs the code without judging it. You can read it.
 
 Start from the repo root (or the worktree you were given). Build with `cargo xtask hex`. It leaves the ELF behind even when its layout checks fail, so carry on with the ELF if it does. If the sandbox blocks the first `-Zbuild-std` build from fetching crates, say so and stop; don't work around it.
 
