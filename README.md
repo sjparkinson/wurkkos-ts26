@@ -15,12 +15,13 @@ See [docs/toolchain.md](docs/toolchain.md) for how it builds and links.
 
 ## Flashing
 
-The TS26 has flashing pads for a UPDI programmer. Put a plain serial UPDI programmer on them and `cargo xtask` does the rest.
+The TS26 has three flashing pads, `R - +`, for a plain serial UPDI programmer, never a high-voltage one. Take the cell out first. The first flash on any torch is T0, the click on/off image on branch `build-t0`, and the full firmware goes on once that works.
 
 ```sh
 cargo xtask ping /dev/cu.usbserial-XXXX
 cargo xtask backup /dev/cu.usbserial-XXXX backup/torch
-cargo xtask flash /dev/cu.usbserial-XXXX
+cargo xtask flash /dev/cu.usbserial-XXXX [file.hex]
+cargo xtask restore /dev/cu.usbserial-XXXX backup/torch
 ```
 
 ## Acknowledgements

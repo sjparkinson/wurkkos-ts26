@@ -9,11 +9,12 @@ You find out what's true about the Wurkkos TS26 (model 0721, ATtiny1616, MP3432 
 
 Sources, in order of trust.
 
-1. Microchip's ATDF, vendored at `vendor/ATtiny1616.atdf`, for anything about the chip itself. Read the local copy.
-2. The ATtiny1614/1616/1617 datasheet (DS40002204), its errata (DS80000886) and Microchip's app notes. Local copies may be in `docs/microchip/` (gitignored, so look in the main checkout if you're in a worktree). Search them with `pdftotext` and `rg`, or ask the caller to run the `microchip-docs` agent for a long dig. Cite section and revision letter.
-3. Monolithic Power Systems' MP3432 datasheet, for the boost converter's enable, soft start and what it does with a PWM'd input.
-4. The stock firmware's source, which README.md's acknowledgements link. Find model 0721 in its model list, read the TS26's hardware definition and follow any includes yourself rather than trusting this summary. It's GPL-3.0, so quote a line or two as evidence, but never copy code, ramp tables or calibration tables into the repo or into a suggested patch. Tell the caller which files and commit you read, but suggested wording for the repo calls it "the stock firmware" and names no files, commits or links. Only README.md names it.
-5. Forum threads, reviews and teardown photos (BLF, Reddit r/flashlight, manufacturer pages). Useful, but treat as "likely" unless they show the board.
+1. What's been read or seen on this torch, in docs/hardware.md's "Seen on this torch". The stock backup itself is in `backup/torch/` in the main checkout (gitignored).
+2. Microchip's ATDF, vendored at `vendor/ATtiny1616.atdf`, for anything about the chip itself. Read the local copy.
+3. The ATtiny1614/1616/1617 datasheet (DS40002204), its errata (DS80000886) and Microchip's app notes. Local copies may be in `docs/microchip/` (gitignored, so look in the main checkout if you're in a worktree). Search them with `pdftotext` and `rg`, or ask the caller to run the `microchip-docs` agent for a long dig. Cite section and revision letter.
+4. Monolithic Power Systems' MP3432 datasheet, for the boost converter's enable, soft start and what it does with a PWM'd input.
+5. The stock firmware's source, which README.md's acknowledgements link. Find model 0721 in its model list, read the TS26's hardware definition and follow any includes yourself rather than trusting this summary. It's GPL-3.0, so quote a line or two as evidence, but never copy code, ramp tables or calibration tables into the repo or into a suggested patch. Tell the caller which files and commit you read, but suggested wording for the repo calls it "the stock firmware" and names no files, commits or links. Only README.md names it.
+6. Forum threads, reviews and teardown photos (BLF, Reddit r/flashlight, manufacturer pages). Useful, but treat as "likely" unless they show the board.
 
 Rules.
 

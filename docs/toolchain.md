@@ -1,92 +1,44 @@
 # Toolchain
 
-How Rust gets onto an ATtiny1616 here, and why it's put together this way.
+How Rust gets onto an ATtiny1616 here.
 
-## The short version
+- rustc's built-in `avr-none` target with `-C target-cpu=attiny1616`, on the nightly pinned in `rust-toolchain.toml`. Nightly because `core` is rebuilt with `-Zbuild-std=core`, and `asm!` and `extern "avr-interrupt"` on AVR aren't stable.
+- Linked by the `rust-lld` rustup ships, against this repo's linker script (`link.x`) and startup code (`src/avr/rt.rs`). No avr-gcc, avr-libc or libgcc.
+- Register constants generated from Microchip's ATDF at build time (`build.rs`, `xtask/src/atdf.rs`), with zero crate dependencies. No PAC covers the 1616.
+- The UPDI programmer, the ELF-to-HEX conversion and the simulator live in `xtask`, so rustup is the only thing to install.
 
-- rustc's built-in `avr-none` target with `-C target-cpu=attiny1616`.
-- A pinned nightly (`rust-toolchain.toml`), because `core` has to be rebuilt for AVR with `-Zbuild-std=core`, and inline assembly on AVR still needs `#![feature(asm_experimental_arch)]`.
-- Linked by the `rust-lld` that rustup ships, against this repo's own linker script (`link.x`) and startup code (`src/avr/rt.rs`).
-- Register constants generated from Microchip's ATDF at build time, with zero crate dependencies. (Rebuilding `core` pulls a few crates of its own, see [First build](#first-build).)
-- The UPDI programmer and the simulator live in `xtask`, so rustup is the only thing to install.
+The first `cargo xtask hex` downloads the pinned nightly with `rust-src`, and the few crates `core`'s build needs from crates.io. After that it's offline.
 
-`cargo xtask hex` builds `target/avr-none/release/ts26.elf`, checks its layout, runs it on the simulator, pads the image to 16 KB with a stamp of the commit and then a CRC in the last two bytes, writes that as Intel HEX at `target/wurkkos-ts26-0721.hex`, and reports flash, RAM, stack and instruction counts. The simulator's a mistake-finder, not proof, and [CONTRIBUTING.md](../CONTRIBUTING.md#the-simulator) has what it leaves out.
+## The memory map
 
-## Linking with rust-lld
+AVR ELF files put data space at 0x800000, so in `link.x` read-only data is linked at its flash address plus 0x808000 and read with ordinary loads through the mapped-flash window at 0x8000, with no `lpm`. All 16 KB of flash fits the window.
 
-`avr-none` defaults to linking with `avr-gcc`, which brings avr-libc's startup files and linker scripts along. That's three more things to install (on macOS, via a Homebrew tap) for maybe 60 bytes of startup code. Writing that code here means
+## No 32-bit multiplication
 
-- the vector table is in `src/avr/rt.rs`, where you can read it
-- `.data` and `.bss` set-up is twenty lines of assembly in the same file
-- the memory layout is in `link.x`, including the bit avr-gcc's default scripts handle awkwardly, where read-only data stays in flash and is read through the mapped-flash window at 0x8000
+The chip's multiplier is 8×8, and LLVM lowers a runtime `u32` or `u64` multiply to a call to `__mulsi3`, which only libgcc has. The link then fails with `undefined symbol: __mulsi3`.
 
-`rust-lld` handles AVR relocations fine. You can check the output by having rustc emit assembly (`cargo rustc --release --target avr-none -Zbuild-std=core -- --emit asm=fw.s`).
+Dividing a `u16` by a constant that isn't a power of two does the same, since LLVM turns `x / 10` and `x % 10` into a 32-bit multiply by a magic number. Host tests don't catch it. `cargo xtask hex` does.
 
-### 32-bit multiplication
+What works is 8- and 16-bit multiplication, dividing a `u8` by a constant, division by a runtime value at any width up to 32 bits, and anything in a `const`.
 
-The rustc book says `avr-none` needs avr-gcc "because a couple of intrinsics (like 32-bit multiplication) rely on libgcc". That's true. The ATtiny1616 does have a hardware multiplier, but it's 8×8, and LLVM lowers a runtime `u32` or `u64` multiply to a call to `__mulsi3`, which `compiler_builtins` doesn't provide for AVR. Without libgcc the link fails with this.
-
-```
-rust-lld: error: undefined symbol: __mulsi3
-```
-
-The one that catches you out is dividing a `u16` by a constant. LLVM swaps `x / 10` and `x % 10` for a multiply by a magic number, done in 32 bits, so it calls `__mulsi3` too. This was checked on another ATtiny1616 project with the nightly-2026-09-23 build. `x % 7` on a `u16` fails to link, and `x % core::hint::black_box(7)` links. Powers of two are shifts, so they're fine.
-
-What does work is 8- and 16-bit multiplication, which compiles to `mul` and `muls` inline. So does dividing a `u8` by a constant (`x % 10` is a `mul`, a shift and a `muls`). Division and remainder by a runtime value, at every width up to 32 bits, come from `compiler_builtins`. Multiplying constants at compile time, in a `const fn` or a `const`, is fine too.
-
-So keep runtime multiplication to 16 bits, and divide a `u16` only by a power of two or a runtime value. Host tests won't catch a slip here, since the host has a 32-bit multiply; `cargo xtask hex` will. If something genuinely needs a 32-bit product, these are the options, in order of preference.
-
-1. Split one operand into bytes so each partial product fits 16 bits. When the result is shifted right by 8 anyway (a calibration scale, say), the low byte's product only needs its top half and the whole thing stays in 16 bits.
-2. Do it as 16 × 16 → 32 in a small shift-and-add helper in the library, tested on the host.
-3. Write `__mulsi3` in `src/avr/rt.rs`. libgcc's version uses a non-standard calling convention (fewer clobbered registers), so a Rust function with the C ABI isn't a safe drop-in. It would need to be assembly that matches libgcc's contract.
-4. Give in and link libgcc from avr-gcc.
-
-If the link ever fails with an undefined `__*` symbol, this is why.
-
-## Registers from the ATDF
-
-[avr-device](https://github.com/Rahix/avr-device) has the ATtiny1614 and 1617 but not the 1616, and [avr-hal](https://github.com/Rahix/avr-hal) has no tinyAVR 1-series support. Using the 1617's PAC would probably work, since it's the same die, but this firmware touches a limited set of registers and takes no dependencies. Instead `build.rs` generates plain constants from the vendored ATDF (`vendor/ATtiny1616.atdf`) into `OUT_DIR`, and `src/regs.rs` includes them. It reuses the small XML parser in `xtask/src/atdf.rs`, by path, so there's no extra crate, and the constants fold away at compile time, so the hex came out byte for byte the same as it did with them typed out. It's a module of the library, because `selftest` checks fuse fields with the same masks.
-
-## Workarounds in use
-
-Each has a comment where it lives. Remove it when a nightly makes it unnecessary.
-
-| Where | What | Why |
-|---|---|---|
-| `src/main.rs` | `#![feature(asm_experimental_arch)]` | `asm!` and `global_asm!` on AVR aren't stable. |
-| `src/main.rs` | `#![feature(abi_avr_interrupt)]` | `extern "avr-interrupt"`, which the handlers in `src/avr/hw.rs` use, isn't stable. |
-| `Cargo.toml` | `panic = "abort"` in both profiles | AVR can't unwind. |
-| Library code | No runtime `u32`/`u64` multiplication, and no `u16` division by a constant that isn't a power of two | There's no `__mulsi3` without libgcc. See above. |
-| `xtask` | Its own ELF-to-HEX conversion | The `rust-objcopy` in the toolchain directory is rustc's private copy and won't run on its own. `llvm-tools` has a working `llvm-objcopy`, but that's one more thing to install for every flash, and `xtask` needs to parse the ELF to program it anyway. |
-
-Up to nightly-2026-09-23 an AVR build needed `--cfg no_fp_fmt_parse` in `.cargo/config.toml`, because `core`'s float formatting wanted a bignum type that only existed for 32- and 64-bit pointers and wouldn't compile for AVR. `core` builds without it on nightly-2026-11-11, so this repo never had it.
+If something needs a 32-bit product, split one operand into bytes so each partial product fits 16 bits, or write a 16 × 16 → 32 shift-and-add helper in the library and test it on the host. A hand-written `__mulsi3` would have to match libgcc's non-standard calling convention, so it isn't a drop-in.
 
 ## Looking inside the ELF
 
-For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. Nothing in the build needs it, but it's in `rust-toolchain.toml` (alongside `rust-analyzer`, for editors), so rustup installs it with the pinned nightly.
-
-The binaries aren't on your `PATH`. They live in the toolchain's sysroot, under the host triple. Run this from the repo so rustup picks the pinned nightly.
+rustup's `llvm-tools` component, pinned in `rust-toolchain.toml`, has `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM. They aren't on your `PATH`, so run this from the repo to get the pinned nightly's.
 
 ```sh
 LLVM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
 ELF=target/avr-none/release/ts26.elf
 ```
 
-Then run these after `cargo xtask hex` (it leaves the ELF behind even when its checks fail).
+Then, after `cargo xtask hex`, which leaves the ELF behind even when its checks fail.
 
 ```sh
-"$LLVM/llvm-objdump" -d --no-show-raw-insn "$ELF"                          # everything, vector table first
+"$LLVM/llvm-objdump" -d --no-show-raw-insn "$ELF"                                 # everything, vector table first
 "$LLVM/llvm-objdump" -d -S --no-show-raw-insn --disassemble-symbols=main "$ELF"   # one function, with source
-"$LLVM/llvm-nm" -S -C --size-sort "$ELF"                                   # what's using the flash
-"$LLVM/llvm-objdump" -h "$ELF"                                             # section addresses
+"$LLVM/llvm-nm" -S -C --size-sort "$ELF"                                          # what's using the flash
+"$LLVM/llvm-objdump" -h "$ELF"                                                    # section addresses
 ```
 
-`-S` works because the release profile keeps debug info. `llvm-size -A` should add `.text` and `.rodata` up to the same number `cargo xtask hex` reports, so that command stays the one to use for budgets. These are for when you want to know *why*, such as which function grew, or whether an interrupt handler saves more registers than it should.
-
-## Host builds
-
-`cargo test`, `cargo clippy` and `cargo fmt` run on your machine as normal. The library (`src/lib.rs` and below) is `no_std` and has no hardware access, so it builds for both. `src/main.rs` compiles to a stub on anything but AVR, and `src/avr/hw.rs` and `src/avr/rt.rs` only exist on AVR, so host clippy never sees them. `cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings` lints them for the AVR target.
-
-## First build
-
-The first `cargo xtask hex` downloads the pinned nightly with `rust-src`, and then the handful of crates that `core`'s build needs from crates.io. After that it's offline.
+`cargo xtask hex` stays the command for flash and RAM budgets. These are for finding out which function grew, or whether a handler saves more registers than it should.
