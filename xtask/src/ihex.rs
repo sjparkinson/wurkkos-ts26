@@ -2,9 +2,7 @@
 
 use std::fmt::Write;
 
-/// Encodes `image` (flash from address 0) as Intel HEX, 16 bytes a line.
-/// Images over 64 KB would need extended address records, which a 16 KB
-/// part never will.
+/// No extended address records, so 64 KB at most.
 pub fn encode(image: &[u8]) -> String {
     assert!(
         image.len() <= 0x1_0000,
@@ -19,9 +17,6 @@ pub fn encode(image: &[u8]) -> String {
     out
 }
 
-/// Decodes Intel HEX into an image from address 0, with gaps as 0xFF.
-/// Understands data, end-of-file and both extended address records, which
-/// covers what avr-objcopy, avrdude and [`encode`] write.
 pub fn decode(text: &str) -> Result<Vec<u8>, String> {
     let mut image = Vec::new();
     let mut base = 0usize;
@@ -85,7 +80,6 @@ fn record(out: &mut String, address: u16, kind: u8, data: &[u8]) {
     let _ = writeln!(out, "{checksum:02X}");
 }
 
-/// Byte sum, mod 256. A valid record, checksum included, sums to zero.
 fn sum(bytes: &[u8]) -> u8 {
     bytes.iter().fold(0, |sum, b| sum.wrapping_add(*b))
 }
@@ -102,8 +96,6 @@ mod tests {
 
     #[test]
     fn decodes_gaps_and_extended_addresses() {
-        // Two bytes at 0x0002, then one at 0x10000 via an extended linear
-        // address record.
         let text = ":020002000102F9\n:020000040001F9\n:01000000AA55\n:00000001FF\n";
         let image = decode(text).unwrap();
         assert_eq!(&image[..4], &[0xFF, 0xFF, 0x01, 0x02]);
@@ -125,7 +117,6 @@ mod tests {
         );
     }
 
-    /// One record as [`encode`] writes them, checksum and newline included.
     fn rec(address: u16, kind: u8, data: &[u8]) -> String {
         let mut line = String::new();
         record(&mut line, address, kind, data);
@@ -136,9 +127,6 @@ mod tests {
 
     #[test]
     fn refuses_a_line_with_half_a_byte_or_too_few_bytes_to_be_a_record() {
-        // A record is five bytes at least, which is ten digits. The first two
-        // have an odd digit, on a line long enough and one too short, and the
-        // rest are whole bytes but too few of them.
         for bad in [
             ":00000001FF0",
             ":00000001F",
@@ -185,7 +173,6 @@ mod tests {
 
     #[test]
     fn an_extended_segment_address_is_sixteen_times_its_value() {
-        // Segment 0x1000 is 0x10000, where a linear address of 1 also is.
         let text = format!(
             "{}{}{END}",
             rec(0, 0x02, &[0x10, 0x00]),
@@ -196,7 +183,6 @@ mod tests {
         assert!(image[..0x1_0002].iter().all(|&b| b == 0xFF), "the gap");
         assert_eq!(&image[0x1_0002..], &[0xAA, 0xBB]);
 
-        // And a small one moves the data by 16 bytes a step.
         let text = format!(
             "{}{}{END}",
             rec(0, 0x02, &[0x00, 0x03]),
@@ -285,7 +271,6 @@ mod tests {
             rec(0x0002, 0x00, &[0xB2, 0xB3]),
         );
         assert_eq!(decode(&text).unwrap(), [0x00, 0x11, 0xB2, 0xB3]);
-        // One byte further and it grows by that byte.
         let text = format!(
             "{}{}{END}",
             rec(0x0000, 0x00, &[0x00, 0x11, 0x22, 0x33]),
@@ -301,7 +286,6 @@ mod tests {
 
     #[test]
     fn splits_into_sixteen_byte_lines_with_checksums() {
-        // A jmp to 0x3E (0C 94 1F 00), as at the start of a vector table.
         let mut image = vec![0x0C, 0x94, 0x1F, 0x00];
         image.extend([0xFF; 14]);
         assert_eq!(

@@ -1,9 +1,5 @@
-//! A serial UPDI adapter on a Unix serial port, set up with `stty`.
-//!
-//! Configuring a port properly means termios, which means libc or a serial
-//! crate. `stty` is on every Mac and Linux box already and does the same
-//! job. The port is opened, the open file handed to `stty` as its stdin, and
-//! the settings stick for as long as it's held open. Windows isn't supported.
+//! A serial UPDI adapter on a Unix serial port, set up with `stty`, since
+//! termios means libc or a crate.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -11,32 +7,24 @@ use std::process::{Command, Stdio};
 
 use crate::updi::Wire;
 
-/// What pymcuprog and avrdude both default to, and comfortably inside what
-/// UPDI manages on the chip's 4 MHz reset clock.
+/// pymcuprog's and avrdude's default.
 const BAUD: u32 = 115_200;
 
-/// Slow enough that one 0x00 frame holds the line low for longer than a
-/// UPDI break needs.
+/// Slow enough that one 0x00 frame is longer than a UPDI break.
 const BREAK_BAUD: u32 = 300;
 
-/// How long a read waits for silence before giving up, in the tenths of a
-/// second that `stty time` counts in. Long enough for any reply.
+/// In the tenths of a second that `stty time` counts in.
 const READ_TIMEOUT: u8 = 10;
 
-/// The same while draining, where 100 ms of quiet means nothing else is
-/// coming.
 const DRAIN_TIMEOUT: u8 = 1;
 
-/// Reads of junk before deciding the line will never go quiet.
 const DRAIN_READS: usize = 64;
 
-/// Silence has two causes that look the same from here, so it names both.
 const NOTHING_ECHOED: &str = "nothing echoed back. A serial UPDI adapter joins TX and RX, so \
      every byte sent should come straight back. Either this adapter doesn't, or something's \
      pulling the UPDI line down: the wrong pad, a short, or a damaged chip. Stop and check \
      the wiring with a meter before trying again";
 
-/// What a line held low sounds like, when the adapter reports it at all.
 const LINE_HELD_LOW: &str = "every byte came back as 0, so something's pulling the UPDI line \
      down: the wrong pad, a short, or a damaged chip. Stop and check the wiring with a meter \
      before trying again";
@@ -45,8 +33,8 @@ pub struct Port {
     file: File,
 }
 
-/// Compares what came back with what was sent. A byte sent as 0 proves nothing
-/// about the line, so only a send with something else in it can say it's low.
+/// A byte sent as 0 proves nothing about the line, so only a send with
+/// something else in it can say it's low.
 fn check_echo(sent: &[u8], echo: &[u8]) -> io::Result<()> {
     if echo == sent {
         return Ok(());
@@ -59,8 +47,6 @@ fn check_echo(sent: &[u8], echo: &[u8]) -> io::Result<()> {
     ))
 }
 
-/// Reads and throws away whatever `port` has until a read comes back empty,
-/// which is a read that timed out with nothing to give.
 fn read_until_quiet(port: &mut impl Read) -> io::Result<()> {
     let mut junk = [0; 64];
     for _ in 0..DRAIN_READS {
@@ -87,13 +73,10 @@ impl Port {
 
     fn configure(&self, baud: u32, timeout: u8) -> io::Result<()> {
         let status = Command::new("stty")
-            // `raw` goes first because on macOS it's cfmakeraw, which also
-            // resets the character size and parity that the later flags set.
+            // `raw` first, since on macOS it's cfmakeraw, which resets the
+            // character size and parity the later flags set.
             .args(["raw", "-echo", "clocal", "-crtscts", "-ixon", "-ixoff"])
-            // UPDI frames are 8 data bits, even parity and two stop bits.
             .args(["cs8", "parenb", "-parodd", "cstopb"])
-            // Reads return after `timeout` of silence rather than blocking
-            // forever.
             .args(["min", "0", "time", &timeout.to_string()])
             .arg(baud.to_string())
             .stdin(Stdio::from(self.file.try_clone()?))
@@ -105,14 +88,8 @@ impl Port {
         }
     }
 
-    /// Sets the port up at [`BAUD`] and throws away anything already waiting
-    /// in the adapter, so the next echo starts clean. `send` checks every
-    /// echo byte for byte, so one stale byte (noise from the probe landing,
-    /// or a run stopped part way) would otherwise fail the first instruction
-    /// with a misleading "echo didn't match". avrdude drains on open and after
-    /// a double break for the same reason, since adapters were seen echoing a
-    /// break late enough to shift every reply after it by a byte (avrdude
-    /// issue #874).
+    /// Without it, one stale byte fails the first echo check. Adapters can
+    /// echo a break late enough to shift every reply by a byte (avrdude #874).
     fn drain(&mut self) -> io::Result<()> {
         self.configure(BAUD, DRAIN_TIMEOUT)?;
         read_until_quiet(&mut self.file)?;
@@ -149,8 +126,7 @@ impl Wire for Port {
     fn double_break(&mut self) -> io::Result<()> {
         self.configure(BREAK_BAUD, READ_TIMEOUT)?;
         self.file.write_all(&[0, 0])?;
-        // The break mangles its own echo, so it may come back as two bytes,
-        // fewer, or late. Wait for what arrives in time, then drain the rest.
+        // The break mangles its own echo, which may come back short or late.
         let mut echo = [0; 2];
         let _ = self.read_full(&mut echo);
         self.drain()
@@ -184,7 +160,6 @@ mod tests {
 
     #[test]
     fn draining_reads_what_is_waiting_and_stops_at_the_first_quiet_read() {
-        // Three reads' worth, the last one short, and then nothing.
         let mut waiting: &[u8] = &[0xA5; 150];
         read_until_quiet(&mut waiting).unwrap();
         assert!(waiting.is_empty());
