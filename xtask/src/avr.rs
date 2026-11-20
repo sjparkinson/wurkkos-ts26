@@ -122,8 +122,7 @@ impl Cpu {
     fn execute(&mut self, bus: &mut impl Bus, w: u16) -> Result<(), String> {
         let d = usize::from((w >> 4) & 0x1F);
         let r = usize::from(w & 0x0F | (w >> 5) & 0x10);
-        let hi = 16 + usize::from((w >> 4) & 0x0F);
-        let k = (((w >> 4) & 0xF0) | (w & 0x0F)) as u8;
+        let (hi, k) = immediate(w);
         let (rd, rr) = (self.r[d], self.r[r]);
         let carry = self.flag(C);
 
@@ -210,7 +209,7 @@ impl Cpu {
             0x9 => self.execute_9(bus, w, d)?,
             0xB => {
                 // in/out's I/O address is the same as its data address.
-                let a = ((w >> 5) & 0x30) | (w & 0x0F);
+                let a = io_address(w);
                 if w & 0x0800 != 0 {
                     self.store(bus, a, rd)?;
                 } else {
@@ -348,8 +347,7 @@ impl Cpu {
                 },
                 0xC..=0xF => {
                     // jmp (110k) and call (111k) take a 22-bit word address.
-                    let high = u32::from(w & 0x01F0) << 13 | u32::from(w & 1) << 16;
-                    let target = high | u32::from(self.next_word(bus)?);
+                    let target = long_target(w, self.next_word(bus)?);
                     if w & 2 != 0 {
                         self.push_pc(bus)?;
                     }
@@ -614,12 +612,65 @@ pub(crate) fn ldi(d: u8, k: u8) -> u16 {
     0xE000 | (k & 0xF0) << 4 | (d - 16) << 4 | k & 0x0F
 }
 
+const fn immediate(w: u16) -> (usize, u8) {
+    (
+        16 + ((w >> 4) & 0x0F) as usize,
+        ((w >> 4) & 0xF0 | w & 0x0F) as u8,
+    )
+}
+
+pub(crate) fn ldi_operands(w: u16) -> Option<(u8, u8)> {
+    let (d, k) = immediate(w);
+    (w >> 12 == 0xE).then_some((d as u8, k))
+}
+
+pub(crate) fn long_target(w0: u16, w1: u16) -> u32 {
+    let high = u32::from(w0 & 0x01F0) << 13 | u32::from(w0 & 1) << 16;
+    high | u32::from(w1)
+}
+
+pub(crate) const fn io_address(w: u16) -> u16 {
+    (w >> 5) & 0x30 | w & 0x0F
+}
+
+pub(crate) const fn is_call(w: u16) -> bool {
+    w & 0xFE0E == 0x940E
+}
+
 fn unknown(w: u16) -> String {
     format!("opcode {w:#06x}, which the simulator doesn't decode")
 }
 
 #[cfg(test)]
+pub(crate) mod asm {
+    pub(crate) const NOP: u16 = 0x0000;
+    pub(crate) const SEI: u16 = 0x9478;
+    pub(crate) const CLI: u16 = 0x94F8;
+    pub(crate) const SLEEP: u16 = 0x9588;
+    pub(crate) const RETI: u16 = 0x9518;
+
+    pub(crate) const fn jmp(byte_addr: u32) -> [u16; 2] {
+        let k = byte_addr / 2;
+        let w0 = 0x940C | ((k >> 13) & 0x01F0) as u16 | ((k >> 16) & 1) as u16;
+        [w0, k as u16]
+    }
+
+    pub(crate) const fn out(a: u16, r: u8) -> u16 {
+        0xB800 | (a & 0x30) << 5 | (r as u16) << 4 | a & 0x0F
+    }
+
+    pub(crate) const fn sts(r: u8, a: u16) -> [u16; 2] {
+        [0x9200 | (r as u16) << 4, a]
+    }
+
+    pub(crate) fn bytes(words: impl IntoIterator<Item = u16>) -> Vec<u8> {
+        words.into_iter().flat_map(u16::to_le_bytes).collect()
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::asm::{CLI, NOP, RETI, SEI, SLEEP, sts};
     use super::*;
     use crate::elf::SRAM as RAM;
 
@@ -856,9 +907,8 @@ mod tests {
     #[test]
     fn skips_over_a_whole_two_word_instruction() {
         // cpse r16,r16 skips the sts; then ldi r17,1 runs.
-        let (cpu, bus) = run(&[0x1300, 0x9300, 0x3800, ldi(17, 1)], |cpu, _| {
-            cpu.r[16] = 9
-        });
+        let [sts0, sts1] = sts(16, 0x3800);
+        let (cpu, bus) = run(&[0x1300, sts0, sts1, ldi(17, 1)], |cpu, _| cpu.r[16] = 9);
         assert_eq!(bus.data[0x3800], 0, "sts was skipped");
         assert_eq!(cpu.r[17], 1);
     }
@@ -1077,13 +1127,7 @@ mod tests {
         }
     }
 
-    const NOP: u16 = 0x0000;
-    const SEI: u16 = 0x9478;
-    const CLI: u16 = 0x94F8;
-    const SLEEP: u16 = 0x9588;
-    const RETI: u16 = 0x9518;
-    /// sts FLAGS, r16
-    const LOG_R16: [u16; 2] = [0x9300, FLAGS];
+    const LOG_R16: [u16; 2] = sts(16, FLAGS);
 
     fn rjmp(from: usize, to: usize) -> u16 {
         0xC000 | (to as i32 - from as i32 - 1) as u16 & 0x0FFF
