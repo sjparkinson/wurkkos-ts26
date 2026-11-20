@@ -312,6 +312,7 @@ fn this_boards_hex(path: &Path) -> Result<(), String> {
 /// An image with a bad CRC flashes and verifies cleanly, then leaves the light
 /// off on every boot. A short one (the stock firmware, T0) needs no CRC.
 fn signed(image: &[u8]) -> Result<(), String> {
+    updi::fits_flash(image)?;
     if image.len() < map::FLASH_SIZE {
         eprintln!(
             "warning: the image isn't the full {} bytes with a CRC, so it isn't a signed build \
@@ -789,6 +790,12 @@ mod tests {
 
     fn no_connection() -> Result<Programmer<Tiny>, String> {
         Programmer::connect_for_programming(no_port()?)
+    }
+
+    #[test]
+    fn an_image_bigger_than_flash_is_refused_as_too_big_before_its_crc_is_checked() {
+        let err = signed(&vec![0x12; FLASH_SIZE + 1]).unwrap_err();
+        assert_eq!(err, "the image is 16385 bytes; the ATtiny1616 has 16384");
     }
 
     #[test]
