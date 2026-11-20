@@ -254,9 +254,13 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     unhandled_interrupt_at_rest(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler at rest: {e}"))?;
     let examples = if examples { EXAMPLES } else { &[] };
-    let faults: [(FaultCheck, &str); 6] = [
+    let faults: [(FaultCheck, &str); 7] = [
         (slow_ticks, "with the slowest ticks"),
         (oscillator_stops, "with the 32 kHz oscillator stopped"),
+        (
+            oscillator_stops_mid_press,
+            "with the 32 kHz oscillator stopped mid-press",
+        ),
         (adc_never_answers, "with a dead ADC"),
         (adc_stuck, "with the ADC stuck on the cell's reading"),
         (switch_stuck, "with the switch stuck down"),
@@ -480,13 +484,34 @@ const DOWN_PERIODS: u64 = 4 * TICKS_PER_SECOND as u64;
 /// oscillator running ends in a watchdog reset instead, which can't run here.
 fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     lit(&mut sim, 0, report)?;
+    stops_at_the_deadline(sim, report)
+}
+
+/// With the switch held from off, so PB0's PWM runs with PB2 low.
+fn oscillator_stops_mid_press(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    let held = iter::repeat_n(
+        Sample {
+            pressed: true,
+            scene: Scene::NORMAL,
+        },
+        4,
+    );
+    in_step(&mut sim, script("wait:2s")?.chain(held), report)?;
+    if !sim.chip.pwm_running() || sim.chip.enabled_high() {
+        return Err("a press from off isn't charging the filter, so this checks nothing".into());
+    }
+    stops_at_the_deadline(sim, report)
+}
+
+fn stops_at_the_deadline(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.osc32k_stopped = true;
     let stopped = sim.chip.now;
-    while sim.chip.enabled_high() {
+    while sim.chip.pwm_running() {
         sim.step()?;
         if sim.chip.now - stopped > DEADLINE_CYCLES + TICK_BUDGET {
             return Err(format!(
-                "PB2's still high {} PWM cycles on, past the deadline of {TICK_DEADLINE_CYCLES}",
+                "the PWM's still running {} PWM cycles on, past the deadline of \
+                 {TICK_DEADLINE_CYCLES}",
                 (sim.chip.now - stopped) / PWM_CYCLE
             ));
         }
@@ -495,7 +520,7 @@ fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     // The first cycle of the wait is a part of one.
     if took < DEADLINE_CYCLES - PWM_CYCLE {
         return Err(format!(
-            "PB2 dropped after {} PWM cycles, before the deadline of {TICK_DEADLINE_CYCLES}",
+            "the PWM stopped after {} PWM cycles, before the deadline of {TICK_DEADLINE_CYCLES}",
             took / PWM_CYCLE
         ));
     }
@@ -505,13 +530,16 @@ fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
             break;
         }
         sim.step()?;
-        if sim.chip.enabled_high() {
-            return Err("dropped PB2, then raised it again".into());
+        if sim.chip.enabled_high() || sim.chip.pwm_running() {
+            return Err("stopped the PWM, then started it again".into());
         }
+    }
+    if sim.chip.enabled_high() {
+        return Err("stopped the PWM with PB2 still high".into());
     }
     if !sim.chip.down {
         return Err(format!(
-            "dropped PB2, but didn't stop for good within {HALT_BUDGET} instructions"
+            "stopped the PWM, but didn't stop for good within {HALT_BUDGET} instructions"
         ));
     }
     if !sim.chip.powering_down() {
@@ -794,7 +822,8 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// examples/guards.rs asks for power-down four times lit and once off.
+/// examples/guards.rs asks for power-down four times lit, once charging the
+/// filter on PB0 and once off.
 pub fn guards(elf: &Elf) -> Result<(), String> {
     let linked = Linked::of(elf)?;
     let mut sim = linked.boot(elf.flash_image())?;
@@ -1542,6 +1571,10 @@ impl Chip {
         &self.sram[usize::from(range.start - SRAM.start)..usize::from(range.end - SRAM.start)]
     }
 
+    fn pwm_running(&self) -> bool {
+        self.io[reg::TCA0_CTRLB] & TCA_CMP0EN != 0
+    }
+
     fn enabled_high(&self) -> bool {
         self.io[reg::VPORTB_OUT] & self.io[reg::VPORTB_DIR] & ENABLE != 0
     }
@@ -1883,8 +1916,12 @@ impl Chip {
                 self.enabled_high()
             ));
         }
-        if !output.enable {
-            return Ok(());
+        let running = self.pwm_running();
+        if running != (output.dsm > 0) {
+            return Err(format!(
+                "PB0's PWM is {}, but the library says {output:?}",
+                if running { "running" } else { "stopped" }
+            ));
         }
         let want = u32::from(output.dsm);
         match self.dsm_sum() {
@@ -1976,6 +2013,13 @@ impl Chip {
             return Err("powers down with PB2 high, so the light's on and can't be \
                         regulated with TCA0 stopped"
                 .into());
+        }
+        if self.io[reg::TCA0_INTCTRL] & TCA_OVF != 0 {
+            return Err(
+                "powers down with the delta-sigma running, which TCA0 stopping \
+                        leaves halfway through a PWM cycle on PB0"
+                    .into(),
+            );
         }
         if self.tca.cmp0buf != 0 {
             return Err(format!(
@@ -2508,6 +2552,9 @@ impl Bus for Chip {
                         "writes {value:#04x} to TCA0.CTRLB: the period and the duty assume \
                          dual-slope at BOTTOM on WO0"
                     ));
+                }
+                if (self.io[a] ^ value) & TCA_CMP0EN != 0 {
+                    self.tca.settled = 0;
                 }
                 self.io[a] = value;
             }
@@ -3326,7 +3373,9 @@ mod tests {
         chip.pit_busy = 0;
         chip.write(reg::SLPCTRL_CTRLA as u16, SLEEP_POWER_DOWN | SLPCTRL_SEN)
             .unwrap();
-        assert!(chip.sleep().unwrap_err().contains("no interrupt"));
+        assert_eq!(chip.wakes_from_power_down() & 1 << VECTOR_TCA0_OVF, 0);
+        let err = chip.sleep().unwrap_err();
+        assert!(err.contains("delta-sigma running"), "{err}");
     }
 
     #[test]

@@ -79,6 +79,21 @@ impl Ui {
         }
     }
 
+    /// The level `event` would light from off, as [`Ui::handle`] does it.
+    pub const fn lights(&self, event: Event) -> u8 {
+        match (self.mode, event) {
+            (Mode::Off, Event::Click(1)) => ON_LEVEL,
+            (
+                Mode::Off,
+                Event::Hold {
+                    clicks: 0,
+                    ticks: 0,
+                },
+            ) => FLOOR,
+            _ => 0,
+        }
+    }
+
     pub fn handle(&mut self, event: Event) {
         match (self.mode, event) {
             (Mode::Off, Event::Click(1)) => {

@@ -12,9 +12,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** PB2, the enable, floats from reset until firmware drives it (DS40002204A §16.3.1) and in programming mode (§33.3.8.2), or is left high after a stray jump to the reset vector, or rises before the duty is set.
 
-**Cover.** `main` calls `hw::hold_enable_low` first, which writes `OUT` before `DIR`. `hw::set_output` sets the duty then raises PB2, and drops PB2 then zeroes the duty. `hw::halt`, also the panic handler, turns off the same way. PB2 never gets a pull-up.
+**Cover.** `main` calls `hw::hold_enable_low` first, which writes `OUT` before `DIR`. `hw::set_output` sets the duty then raises PB2, and drops PB2 then zeroes the duty. `hw::halt`, also the panic handler, turns off the same way. PB2 never gets a pull-up. While a press from off could light the torch, PB0's PWM runs at that level with PB2 low, to charge the filter between PB0 and the driver, and the MP3432 is fully shut down with EN under 0.4 V ([hardware.md](hardware.md)). Lighting only raises PB2, and a press that lights nothing stops the PWM.
 
-**Unproven.** Seen, as ten power-ups of the full firmware with no flash. With T0, one power-up on a bouncing contact gave a brief bright flash and another a red aux T0 never drives. The BOD is off and `SUT` holds code back 64 ms with every output tri-stated, so no firmware covers a power-up on a bouncing supply. The programmer's supply alone runs the converter. What holds PB2 low through reset, and the turn-on order against the MP3432's 180 µs, are unknown.
+**Unproven.** Seen, as ten power-ups of the full firmware with no flash. With T0, one power-up on a bouncing contact gave a brief bright flash and another a red aux T0 never drives. The BOD is off and `SUT` holds code back 64 ms with every output tri-stated, so no firmware covers a power-up on a bouncing supply. The programmer's supply alone runs the converter. What holds PB2 low through reset, and the turn-on order against the MP3432's 180 µs, are unknown. The charging PWM is simulator only, and whether anything couples from PB0 into the driver with EN low is unmeasured.
 
 ### H2. A hang with the light on
 

@@ -62,7 +62,7 @@ extern "C" fn main() -> ! {
         } else if hw::wait_for_tick(torch.resting() && pace.powers_down()) {
             false
         } else {
-            // Most likely a stopped 32 kHz oscillator with the light on, which
+            // Most likely a stopped 32 kHz oscillator with the PWM running, which
             // stops the watchdog too.
             hw::halt();
         };

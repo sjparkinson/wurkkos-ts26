@@ -77,6 +77,11 @@ impl Limits {
         self.fade.position()
     }
 
+    /// Whether a turn-on now would be flat instead.
+    pub const fn weak(&self) -> bool {
+        self.protection.weak()
+    }
+
     pub const fn ceilings(&self) -> (u8, u8) {
         (self.protection.ceiling(), self.thermal.ceiling())
     }

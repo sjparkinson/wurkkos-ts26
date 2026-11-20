@@ -143,8 +143,23 @@ impl Torch {
         self.limits.convert()
     }
 
+    /// Off, while the switch is on its way to lighting it, runs the PWM at the
+    /// level it would light with PB2 low, to charge the filter on PB0 before
+    /// the converter starts (unmeasured).
     pub fn output(&self) -> Output {
-        ramp::faded(self.limits.position())
+        let charge = match self.clicks.pending() {
+            Some(event) if self.limits.health() == Health::Good && !self.limits.weak() => {
+                self.ui.lights(event)
+            }
+            _ => 0,
+        };
+        match self.level() {
+            0 => Output {
+                enable: false,
+                dsm: ramp::output(charge).dsm,
+            },
+            _ => ramp::faded(self.limits.position()),
+        }
     }
 
     pub const fn aux(&self) -> Aux {
@@ -262,9 +277,69 @@ mod tests {
         let mut torch = Rig::default();
         run(&mut torch, true, 4);
         run(&mut torch, false, RELEASE_TICKS + 1);
-        assert_eq!(torch.output(), Output::OFF);
+        assert_eq!(torch.level(), 0);
         assert_eq!(torch.tick(false), Some(Event::Click(1)));
         assert_eq!(torch.output(), dim());
+    }
+
+    fn charging(level: u8) -> Output {
+        Output {
+            enable: false,
+            dsm: ramp::output(level).dsm,
+        }
+    }
+
+    #[test]
+    fn a_press_from_off_runs_the_pwm_with_pb2_low_at_what_it_would_light() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, TICKS_PER_SECOND);
+        torch.tick(true);
+        assert_eq!(torch.output(), Output::OFF, "one sample");
+        torch.tick(true);
+        assert_eq!(
+            torch.output(),
+            charging(ui::FLOOR),
+            "a hold lights the floor"
+        );
+        run(&mut torch, false, 2);
+        assert_eq!(torch.output(), charging(ON_LEVEL), "a click lights 52");
+        run(&mut torch, true, 2);
+        assert_eq!(torch.output(), Output::OFF, "a second press lights nothing");
+        run(&mut torch, false, 2);
+        assert_eq!(torch.output(), Output::OFF, "nor does 2C");
+    }
+
+    #[test]
+    fn the_pwm_runs_straight_on_into_the_light() {
+        for (press, level) in [(4, ON_LEVEL), (HOLD_TICKS + 2, ui::FLOOR)] {
+            let mut torch = Rig::default();
+            run(&mut torch, false, TICKS_PER_SECOND);
+            run(&mut torch, true, press);
+            run(&mut torch, false, RELEASE_TICKS + 2);
+            assert_eq!(torch.output(), ramp::output(level), "{press}");
+        }
+    }
+
+    #[test]
+    fn nothing_charges_in_lockout_with_a_fault_or_on_a_weak_cell() {
+        let mut torch = Rig::default();
+        clicks(&mut torch, 3);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        run(&mut torch, true, 4);
+        assert_eq!(torch.output(), Output::OFF, "locked");
+
+        let mut torch = Rig::new(Faults {
+            fuses: true,
+            ..Faults::NONE
+        });
+        run(&mut torch, true, 4);
+        assert_eq!(torch.output(), Output::OFF, "a fault");
+
+        let mut torch = Rig::default();
+        torch.adc.voltage = voltage_reading(295);
+        run(&mut torch, false, TICKS_PER_SECOND);
+        run(&mut torch, true, 4);
+        assert_eq!(torch.output(), Output::OFF, "a weak cell");
     }
 
     #[test]
@@ -1468,6 +1543,15 @@ mod tests {
                 check!(t, shown.dsm >= from.min(to), "{shown:?} at level {level}");
                 check!(t, shown.dsm <= from.max(to), "{shown:?} at level {level}");
                 seen.between_levels += u32::from(shown != ramp::output(level));
+            } else if level == 0 {
+                check!(t, !shown.enable, "{shown:?} with the light off");
+                let charging = shown.dsm > 0;
+                check!(
+                    t,
+                    !charging || (model.mode == Mode::Off && rig.limits.health() == Health::Good),
+                    "{shown:?} in {:?}",
+                    model.mode
+                );
             } else {
                 check!(t, shown == ramp::output(level), "level {level}");
             }

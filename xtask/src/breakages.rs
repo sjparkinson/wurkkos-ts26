@@ -51,8 +51,8 @@ const BREAKAGES: &[Breakage] = &[
     Breakage {
         name: "enable-before-duty",
         file: HW,
-        find: "    let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;\n",
-        replace: "    let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;\n    \
+        find: "    let stopped = read(reg::TCA0_INTCTRL) == 0;\n",
+        replace: "    let stopped = read(reg::TCA0_INTCTRL) == 0;\n    \
                   write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);\n",
         stage: Stage::Simulator,
         expect: "raises PB2 with the duty at 0",
@@ -60,9 +60,9 @@ const BREAKAGES: &[Breakage] = &[
     Breakage {
         name: "duty-before-enable",
         file: HW,
-        find: "        write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));\n        \
-               without_interrupts(|| {\n",
-        replace: "        without_interrupts(|| {\n",
+        find: "    if !output.enable {\n        \
+               write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));\n    }\n",
+        replace: "",
         stage: Stage::Simulator,
         expect: "writes TCA0.CMP0BUF from the main loop with PB2 high",
     },
@@ -128,10 +128,29 @@ const BREAKAGES: &[Breakage] = &[
     Breakage {
         name: "power-down-with-the-light-on",
         file: HW,
-        find: "    let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {\n",
+        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
         replace: "    let mode = if rest {\n",
         stage: Stage::Simulator,
         expect: "powers down with PB2 high",
+    },
+    // examples/guards.rs again, which charges the filter with power-down asked
+    // for.
+    Breakage {
+        name: "power-down-while-charging",
+        file: HW,
+        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
+        replace: "    let mode = if rest && pb2 == 0 {\n",
+        stage: Stage::Simulator,
+        expect: "powers down with the delta-sigma running",
+    },
+    Breakage {
+        name: "pb2-raised-while-charging",
+        file: HW,
+        find: "    if output.enable {\n        \
+               write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);\n    }\n",
+        replace: "    write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);\n",
+        stage: Stage::Simulator,
+        expect: "PB2 is true, but the library says Output { enable: false",
     },
     Breakage {
         name: "pb2-pull-up",
@@ -277,7 +296,7 @@ const BREAKAGES: &[Breakage] = &[
         replace: "            write(reg::TCA0_CTRLB, CTRLB_ON);\n            \
                   write(reg::TCA0_INTFLAGS, regs::TCA_OVF);\n            \
                   write(reg::TCA0_INTCTRL, regs::TCA_OVF);\n        }\n    });\n    \
-                  if was_off {\n        \
+                  if stopped {\n        \
                   write16(reg::TCA0_CMP0BUF, u16::from(duty));\n    }\n",
         stage: Stage::Simulator,
         expect: "share TCA0's TEMP byte",
@@ -289,6 +308,14 @@ const BREAKAGES: &[Breakage] = &[
         replace: "            cycles = left.max(1);\n",
         stage: Stage::Simulator,
         expect: "past the deadline",
+    },
+    Breakage {
+        name: "tick-deadline-only-when-lit",
+        file: HW,
+        find: "        if read(reg::TCA0_INTCTRL) != 0 {\n            let Some(left)",
+        replace: "        if read(reg::VPORTB_OUT) & 1 << ENABLE != 0 {\n            let Some(left)",
+        stage: Stage::Simulator,
+        expect: "stopped mid-press: the PWM's still running",
     },
     Breakage {
         name: "unlock-apart-from-its-write",

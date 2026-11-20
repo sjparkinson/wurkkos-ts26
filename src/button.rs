@@ -80,6 +80,16 @@ impl Clicks {
         matches!(self.gesture, Gesture::Down { .. } | Gesture::Up { .. })
     }
 
+    /// What the gesture so far becomes if nothing more happens: a hold while
+    /// down, a click once up.
+    pub const fn pending(&self) -> Option<Event> {
+        match self.gesture {
+            Gesture::Down { clicks, .. } => Some(Event::Hold { clicks, ticks: 0 }),
+            Gesture::Up { clicks, .. } => Some(Event::Click(clicks)),
+            Gesture::Idle | Gesture::Spent { .. } => None,
+        }
+    }
+
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
         self.tick_up_to(pressed, None)
     }
