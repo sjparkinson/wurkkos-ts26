@@ -87,6 +87,17 @@ impl Ui {
                 self.up = false;
             }
             (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
+            (
+                Mode::Off,
+                Event::Hold {
+                    clicks: 0,
+                    ticks: 0,
+                },
+            ) => {
+                self.mode = Mode::On;
+                self.level = FLOOR;
+                self.up = false;
+            }
 
             (Mode::On, Event::Click(1)) => self.off(),
             (Mode::On, Event::Hold { clicks: 0, ticks }) => {
@@ -155,12 +166,12 @@ mod tests {
     }
 
     #[test]
-    fn off_answers_to_1c_and_3c_and_nothing_else() {
+    fn off_answers_to_1c_3c_and_1h_and_nothing_else() {
         for event in [
             Event::Click(2),
             Event::Click(4),
             Event::Click(5),
-            hold(0, 0),
+            hold(0, 1),
             hold(1, 0),
             hold(2, 0),
         ] {
@@ -168,6 +179,25 @@ mod tests {
             ui.handle(event);
             assert_eq!(ui.mode(), Mode::Off, "{event:?}");
         }
+    }
+
+    #[test]
+    fn a_1h_from_off_lights_the_floor_and_stays_there() {
+        let mut ui = Ui::new();
+        for ticks in 0..500 {
+            ui.handle(hold(0, ticks));
+            assert_eq!(ui.output_level(), FLOOR, "{ticks}");
+        }
+    }
+
+    #[test]
+    fn the_1h_after_a_1h_from_off_goes_up() {
+        let mut ui = Ui::new();
+        hold_for(&mut ui, 0, 5);
+        hold_for(&mut ui, 0, 10);
+        assert_eq!(ui.output_level(), FLOOR + 10);
+        hold_for(&mut ui, 0, 4);
+        assert_eq!(ui.output_level(), FLOOR + 6);
     }
 
     #[test]

@@ -753,12 +753,13 @@ mod tests {
             let mut torch = Rig::default();
             run(&mut torch, false, 3);
             torch.adc.voltage = voltage_reading(320);
+            clicks(&mut torch, 1);
             run(&mut torch, true, down);
             assert_eq!(torch.aux(), Aux::Off, "{down}");
             torch.adc.voltage = voltage_reading(380);
             torch.tick(false);
             let running = torch.convert().is_some();
-            assert_eq!(torch.tick(false), Some(Event::Release { clicks: 0 }));
+            assert_eq!(torch.tick(false), Some(Event::Release { clicks: 1 }));
             run(&mut torch, false, 2);
             assert!(torch.resting(), "{down}");
             let aux = if running { Aux::Blue } else { Aux::Off };
@@ -993,11 +994,12 @@ mod tests {
     }
 
     #[test]
-    fn a_switch_held_from_power_on_stays_off() {
+    fn a_switch_held_from_power_on_lights_the_floor_and_stays_there() {
         let mut torch = Rig::default();
-        for _ in 0..10 * 60 * u32::from(TICKS_PER_SECOND) {
+        for tick in 0..10 * 60 * u32::from(TICKS_PER_SECOND) {
             torch.tick(true);
-            assert_eq!(torch.level(), 0);
+            let lit = tick > u32::from(HOLD_TICKS);
+            assert_eq!(torch.level(), if lit { ui::FLOOR } else { 0 }, "{tick}");
         }
     }
 
@@ -1182,6 +1184,17 @@ mod tests {
                     self.asked = ON_LEVEL;
                     self.up = false;
                 }
+                (
+                    Mode::Off,
+                    Event::Hold {
+                        clicks: 0,
+                        ticks: 0,
+                    },
+                ) => {
+                    self.mode = Mode::On;
+                    self.asked = ui::FLOOR;
+                    self.up = false;
+                }
                 (Mode::Off, Event::Click(3)) => self.mode = Mode::Lockout,
                 (Mode::Lockout, Event::Click(3)) | (Mode::On, Event::Click(1)) => {
                     self.mode = Mode::Off;
@@ -1219,6 +1232,7 @@ mod tests {
         white: u32,
         results_lost: u32,
         turned_on: u32,
+        lit_by_a_hold: u32,
         went_flat: u32,
         charged: u32,
         went_blind: u32,
@@ -1367,12 +1381,19 @@ mod tests {
             check!(t, !failed || level == 0, "lit after a failed check");
             let moved = level.abs_diff(level_before);
             let click = event == Some(Event::Click(1));
+            let held = event
+                == Some(Event::Hold {
+                    clicks: 0,
+                    ticks: 0,
+                });
             if level_before == 0 && level > 0 {
-                check!(t, click, "on without a click: {event:?}");
+                check!(t, click || held, "on without a click or a hold: {event:?}");
                 check!(t, health_before == Health::Good, "{health_before:?}");
                 check!(t, health == Health::Good, "{health:?}");
-                check!(t, level <= ON_LEVEL, "on at {level}");
+                let most = if held { ui::FLOOR } else { ON_LEVEL };
+                check!(t, level <= most, "on at {level}");
                 seen.turned_on += 1;
+                seen.lit_by_a_hold += u32::from(held);
             } else if level_before > 0 && level == 0 {
                 check!(
                     t,
@@ -1584,6 +1605,7 @@ mod tests {
             ("white", seen.white),
             ("missing a result", seen.results_lost),
             ("turned on", seen.turned_on),
+            ("lit by a hold", seen.lit_by_a_hold),
             ("gone flat", seen.went_flat),
             ("charged", seen.charged),
             ("unable to read the cell", seen.went_blind),
