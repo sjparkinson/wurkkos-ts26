@@ -36,9 +36,9 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
         }
         let bytes = (0..hex.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-            .collect::<Result<Vec<u8>, _>>()
-            .map_err(|_| at("not hex"))?;
+            .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()
+            .ok_or_else(|| at("not hex"))?;
 
         let len = usize::from(bytes[0]);
         if bytes.len() != len + 5 {
@@ -146,6 +146,7 @@ mod tests {
         for (bad, what) in [
             ("00000001FF", "doesn't start with ':'"),
             (":0000000zFF", "not hex"),
+            (":0000000é0FF", "not hex"),
             (":0200000012EC", "length doesn't match"),
             (":00000001FE", "bad checksum"),
             (":00000006FA", "unsupported record type 06"),
