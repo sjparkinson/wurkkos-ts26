@@ -100,6 +100,7 @@ The T0 to T5 test builds are kept on branches `build-t0` (`9d3b7dc`), `build-t2`
 - 2026-11-16. `25f5695` flashed. The 220 ms click window, the ramp turning round on each 1H and lockout's five seconds of red all worked.
 - 2026-11-16 to 2026-11-20. T4 left on the torch for several days with no reset or bite reported.
 - 2026-11-17. Main (`1124a7b`) off overnight with dim blue, then 1C lit at once.
+- 2026-11-20. `2e32708` flashed, the first build with the 1 Hz rest. A peek caught it resting with the PIT at 1 Hz, the 8 s watchdog and PB2 low. Presses from rest worked with no reset or fault seen. Off at the tail 0.13 mA, aux state not noted, against T4's 0.12 to 0.14 mA, so any saving is within the meter's reading.
 - On the breakout, T0's PWM read 19.79 to 19.80 kHz against 19.61 kHz, so its clock ran about 0.9 % fast, and a deliberate hang (T3) made the watchdog bite. Neither has been seen on this torch.
 
 Not measured on this torch yet are PB2 to ground, the pad pitch, the PWM frequency, the battery reading against a meter, current against duty, anything thermal, the low-voltage steps and the top of the ramp.
