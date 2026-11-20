@@ -107,7 +107,11 @@ impl Limits {
         match reading {
             Some(Reading::Voltage(raw)) => {
                 let centivolts = battery::centivolts(raw);
-                if level == 0 && self.level == 0 && !self.lit_before {
+                if level == 0
+                    && self.level == 0
+                    && !self.lit_before
+                    && battery::plausible(centivolts)
+                {
                     unloaded = Some(centivolts);
                 }
                 if self.protection.sample(centivolts, level) == Verdict::Blind {
@@ -640,7 +644,9 @@ mod tests {
             for tick in 0..64 {
                 let step = limits.tick(0, adc.result());
                 adc.start(limits.convert());
-                let read = due(tick).then(|| battery::centivolts(voltage));
+                let read = due(tick)
+                    .then(|| battery::centivolts(voltage))
+                    .filter(|&volts| battery::plausible(volts));
                 assert_eq!(step.unloaded, read, "{voltage}: tick {tick}");
             }
         }
