@@ -436,6 +436,7 @@ mod tests {
             verdicts[..=off],
             [
                 NONE,
+                Verdict::Ceiling(120),
                 Verdict::Ceiling(90),
                 Verdict::Ceiling(60),
                 Verdict::Ceiling(30),
@@ -448,21 +449,21 @@ mod tests {
     #[test]
     fn a_cell_that_recovers_under_the_lighter_load_stays_on() {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 280, CEILING, secs(1)), Verdict::Ceiling(90));
-        let held = Verdict::Ceiling(90);
-        assert!(all(&run(&mut lvp, 315, 90, secs(60)), held));
+        assert_eq!(last(&mut lvp, 280, CEILING, secs(1)), Verdict::Ceiling(120));
+        let held = Verdict::Ceiling(120);
+        assert!(all(&run(&mut lvp, 315, 120, secs(60)), held));
     }
 
     #[test]
     fn waits_for_the_light_to_reach_the_ceiling_before_judging_it() {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 250, CEILING, secs(1)), Verdict::Ceiling(90));
-        let held = Verdict::Ceiling(90);
-        assert!(all(&run(&mut lvp, 250, 91, secs(4)), held));
-        let verdicts = run(&mut lvp, 250, 90, secs(1));
+        assert_eq!(last(&mut lvp, 250, CEILING, secs(1)), Verdict::Ceiling(120));
+        let held = Verdict::Ceiling(120);
+        assert!(all(&run(&mut lvp, 250, 121, secs(4)), held));
+        let verdicts = run(&mut lvp, 250, 120, secs(1));
         let (before, after) = verdicts.split_at(usize::from(secs(1)) - 1);
         assert!(all(before, held));
-        assert_eq!(after, [Verdict::Ceiling(60)]);
+        assert_eq!(after, [Verdict::Ceiling(90)]);
     }
 
     #[test]
