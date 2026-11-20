@@ -475,18 +475,9 @@ fn program<W: Wire>(
     flash: &[u8],
     eeprom: Option<&[u8]>,
 ) -> Result<(), String> {
-    if flash.len() > map::FLASH_SIZE {
-        return Err(format!(
-            "the image is {} bytes; the ATtiny1616 has {}",
-            flash.len(),
-            map::FLASH_SIZE
-        ));
-    }
-    if eeprom.is_some_and(|e| e.len() > map::EEPROM_SIZE) {
-        return Err(format!(
-            "the EEPROM image is bigger than {} bytes",
-            map::EEPROM_SIZE
-        ));
+    updi::fits_flash(flash)?;
+    if let Some(eeprom) = eeprom {
+        updi::fits_eeprom(eeprom)?;
     }
 
     let mut p = connect()?;
