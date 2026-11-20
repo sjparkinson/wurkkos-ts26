@@ -18,7 +18,7 @@ The second clippy is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get lint
 cargo xtask breakages
 ```
 
-This one takes about a minute, so CI doesn't run it. It checks that `hex` refuses copies of the firmware broken on purpose (`xtask/src/breakages.rs`). Run it after touching `xtask/src/sim.rs`, `xtask/src/layout.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`, and when bumping the nightly. Only add a breakage once you've seen it refused for the reason you meant.
+This one takes about two minutes, so CI doesn't run it. It checks that `hex` refuses copies of the firmware broken on purpose (`xtask/src/breakages.rs`). Run it after touching `xtask/src/sim.rs`, `xtask/src/layout.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`, and when bumping the nightly. Only add a breakage once you've seen it refused for the reason you meant.
 
 The simulator finds mistakes and proves nothing. It's one reading of the datasheet, run against code written from the same reading. It doesn't model chip resets (a watchdog bite is a failed run), anything analogue (the driver, the cell, the divider), real time or a probe on the pads, so a firmware change still wants reading against the datasheet before it's flashed. It refuses a register it doesn't model, so teach it what the datasheet says.
 
@@ -33,14 +33,13 @@ The simulator finds mistakes and proves nothing. It's one reading of the datashe
 
 ## Comments
 
-The code is the source of truth, so a comment has to say something the code can't. Keep these, at a line or two each.
+The code is the source of truth, so a comment has to say something the code can't. Keep these, at a line each.
 
 - `// SAFETY:` on an `unsafe` block.
-- Where a number or an ordering comes from, such as `// DS40002204A §30.3.1.1`.
-- A trap, where the obvious edit would be wrong and no test says so.
+- Where a number comes from, such as `// DS40002204A §30.3.1.1`.
 - "Unconfirmed" or "unmeasured" on a guess.
 
-Leave out anything that restates a name or a signature, explains how the code works, narrates a test, records history, or points at a document. A test's name is its description.
+A trap, where the obvious edit would be wrong, gets a test, a breakage or a `const` assert with the reason as its message, not a comment. Leave out anything that restates a name or a signature, explains how the code works, narrates a test, records history, or points at a document. A test's name is its description.
 
 ## Commits
 
