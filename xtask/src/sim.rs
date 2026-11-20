@@ -1009,7 +1009,7 @@ impl Sim {
                     self.chip.forced = None;
                     self.forced = Some(vector);
                 }
-                self.chip.interrupted = self.chip.tca.temp.map(|(low, _)| low);
+                self.chip.interrupted = self.chip.temp;
                 self.handler_steps = 0;
                 self.landed = Some(Landed {
                     r: self.cpu.r,
@@ -1018,7 +1018,7 @@ impl Sim {
                 });
             }
             (Some(vector), None) => {
-                self.chip.interrupted = None;
+                self.chip.interrupted.clear();
                 if vector == VECTOR_TCA0_OVF {
                     self.longest_handler = self.longest_handler.max(self.handler_steps);
                 }
@@ -1049,8 +1049,8 @@ impl Sim {
     /// of an access the handler interrupted, and `halt` may overwrite TEMP.
     const fn abandon(&mut self) {
         self.abandoned = true;
-        self.chip.interrupted = None;
-        self.chip.tca.temp = None;
+        self.chip.interrupted.clear();
+        self.chip.temp.clear();
         self.landed = None;
     }
 
@@ -1213,7 +1213,67 @@ struct Adc {
     last_setup: Option<u8>,
     result: u16,
     ready_at: Option<u64>,
-    temp: Option<u8>,
+}
+
+/// Each has one TEMP byte for all its 16-bit registers (§8.5.6, §20.5.13).
+#[derive(Clone, Copy)]
+enum Wide {
+    Tca0,
+    Adc0,
+}
+
+const WIDE: [(Wide, Range<usize>, &str); 2] = [
+    (Wide::Tca0, reg::TCA0_CNT..TCA0_WIDE_END, "TCA0"),
+    (Wide::Adc0, reg::ADC0_RES..reg::ADC0_RES + 2, "ADC0"),
+];
+
+/// The low byte's address and the byte TEMP holds, for each of `Wide`.
+#[derive(Clone, Copy, Default)]
+struct Temp([Option<(usize, u8)>; 2]);
+
+impl Temp {
+    const fn latch(&mut self, wide: Wide, low: usize, byte: u8) {
+        self.0[wide as usize] = Some((low, byte));
+    }
+
+    fn low(&mut self, wide: Wide, a: usize, value: u8) -> Result<(), String> {
+        if let Some((waiting, _)) = self.0[wide as usize] {
+            return Err(format!(
+                "writes the low byte of {} while {}'s is still waiting for its high byte",
+                name(a),
+                name(waiting)
+            ));
+        }
+        self.latch(wide, a, value);
+        Ok(())
+    }
+
+    fn take(&mut self, wide: Wide, high: usize) -> Option<u8> {
+        let (low, byte) = self.0[wide as usize].take()?;
+        (low + 1 == high).then_some(byte)
+    }
+
+    fn high(&mut self, wide: Wide, a: usize, value: u8) -> Result<u16, String> {
+        let lo = self.take(wide, a).ok_or_else(|| {
+            format!(
+                "writes the high byte of {} without its low byte just before, so the chip \
+                 pairs it with whatever TEMP held",
+                name(a - 1)
+            )
+        })?;
+        Ok(u16::from_le_bytes([lo, value]))
+    }
+
+    const fn waiting(&self, wide: Wide) -> Option<usize> {
+        match self.0[wide as usize] {
+            Some((low, _)) => Some(low),
+            None => None,
+        }
+    }
+
+    const fn clear(&mut self) {
+        self.0 = [None; 2];
+    }
 }
 
 struct Tca {
@@ -1223,8 +1283,6 @@ struct Tca {
     cmp0: u16,
     cmp0buf: u16,
     cmp0bv: bool,
-    /// One for all the 16-bit registers (§20.5.13).
-    temp: Option<(usize, u8)>,
     next_bottom: u64,
     ovf: bool,
     ovf_up_at: u64,
@@ -1267,7 +1325,9 @@ struct Chip {
     forced: Option<u8>,
     in_handler: bool,
     interrupts_on: bool,
-    interrupted: Option<usize>,
+    temp: Temp,
+    /// What `temp` held as the running handler started.
+    interrupted: Temp,
     power_downs: u32,
     register_writes: u32,
     boot: Boot,
@@ -1300,7 +1360,6 @@ impl Chip {
                 cmp0: 0,
                 cmp0buf: 0,
                 cmp0bv: false,
-                temp: None,
                 next_bottom: 0,
                 ovf: false,
                 ovf_up_at: 0,
@@ -1322,7 +1381,8 @@ impl Chip {
             forced: None,
             in_handler: false,
             interrupts_on: false,
-            interrupted: None,
+            temp: Temp::default(),
+            interrupted: Temp::default(),
             power_downs: 0,
             register_writes: 0,
             boot: Boot::default(),
@@ -1888,16 +1948,17 @@ impl Chip {
     }
 
     fn temp_undisturbed(&self, a: usize) -> Result<(), String> {
-        let Some(low) = self.interrupted else {
-            return Ok(());
-        };
-        if (reg::TCA0_CNT..TCA0_WIDE_END).contains(&a) {
-            return Err(format!(
-                "a handler touches {} with the main loop halfway through {}, and they \
-                 share TCA0's TEMP byte, so one corrupts the other (section 8.5.6)",
-                name(a & !1),
-                name(low)
-            ));
+        for (wide, range, peripheral) in WIDE {
+            if let Some(low) = self.interrupted.waiting(wide)
+                && range.contains(&a)
+            {
+                return Err(format!(
+                    "a handler touches {} with the main loop halfway through {}, and they \
+                     share {peripheral}'s TEMP byte, so one corrupts the other (section 8.5.6)",
+                    name(a & !1),
+                    name(low)
+                ));
+            }
         }
         Ok(())
     }
@@ -2184,10 +2245,10 @@ impl Bus for Chip {
                 }
                 self.adc.ready_at = None;
                 let [lo, hi] = self.adc.result.to_le_bytes();
-                self.adc.temp = Some(hi);
+                self.temp.latch(Wide::Adc0, a, hi);
                 Ok(lo)
             }
-            _ if a == reg::ADC0_RES + 1 => self.adc.temp.take().ok_or_else(|| {
+            _ if a == reg::ADC0_RES + 1 => self.temp.take(Wide::Adc0, a).ok_or_else(|| {
                 "reads ADC0.RES's high byte without its low byte just before, so it gets \
                  whatever ADC0.TEMP held"
                     .into()
@@ -2330,28 +2391,11 @@ impl Bus for Chip {
                 self.write_pin_ctrl(a, value)?;
             }
             reg::TCA0_PER | reg::TCA0_PERBUF | reg::TCA0_CMP0 | reg::TCA0_CMP0BUF => {
-                if let Some((pending, _)) = self.tca.temp {
-                    return Err(format!(
-                        "writes the low byte of {} while {}'s is still waiting for its high byte",
-                        name(a),
-                        name(pending)
-                    ));
-                }
-                self.tca.temp = Some((a, value));
+                self.temp.low(Wide::Tca0, a, value)?;
             }
             _ if (reg::TCA0_CNT..TCA0_WIDE_END).contains(&a) && a & 1 != 0 => {
-                match self.tca.temp.take() {
-                    Some((low, lo)) if low == a - 1 => {
-                        self.tca_written(low, u16::from_le_bytes([lo, value]))?;
-                    }
-                    _ => {
-                        return Err(format!(
-                            "writes the high byte of {} without its low byte just before, \
-                             so the chip pairs it with whatever TEMP held",
-                            name(a - 1)
-                        ));
-                    }
-                }
+                let word = self.temp.high(Wide::Tca0, a, value)?;
+                self.tca_written(a - 1, word)?;
             }
             reg::WDT_CTRLA => {
                 self.take_protected_write(a)?;
@@ -2691,7 +2735,7 @@ mod tests {
         chip.write(reg::VPORTB_OUT as u16, ENABLE).unwrap();
         let err = wide(&mut chip, reg::TCA0_CMP0BUF, 11).unwrap_err();
         assert!(err.contains("only the delta-sigma handler"), "{err}");
-        chip.tca.temp = None;
+        chip.temp.clear();
         chip.in_handler = true;
         wide(&mut chip, reg::TCA0_CMP0BUF, 11).unwrap();
     }
@@ -2700,7 +2744,7 @@ mod tests {
     fn a_handler_cant_touch_tca0_with_the_main_loop_mid_access() {
         let mut chip = running();
         chip.write(reg::TCA0_CMP0BUF as u16, 10).unwrap();
-        chip.interrupted = chip.tca.temp.map(|(low, _)| low);
+        chip.interrupted = chip.temp;
         chip.in_handler = true;
         let err = chip.write(reg::TCA0_CMP0BUF as u16, 11).unwrap_err();
         assert!(err.contains("TEMP"), "{err}");
@@ -2751,7 +2795,7 @@ mod tests {
     fn a_handler_in_halt_may_overwrite_temp_and_no_other_may() {
         let run = |halt: u32| {
             let mut sim = forced(halt);
-            sim.chip.tca.temp = Some((reg::TCA0_CMP0, 0x12));
+            sim.chip.temp.latch(Wide::Tca0, reg::TCA0_CMP0, 0x12);
             sim.chip.force_interrupt(13);
             for _ in 0..3 {
                 sim.step()?;
@@ -3231,6 +3275,17 @@ mod tests {
         assert!(err.contains("without its low byte"), "{err}");
         peek16(&mut chip, reg::ADC0_RES);
         assert!(peek(&mut chip, reg::ADC0_RES + 1).is_err());
+    }
+
+    #[test]
+    fn a_handler_cant_read_adc0_with_the_main_loop_mid_read() {
+        let mut chip = adc_ready(ADC_MUXPOS_AIN1);
+        start(&mut chip).unwrap();
+        wait(&mut chip, CONVERSION_INSTRUCTIONS);
+        peek(&mut chip, reg::ADC0_RES).unwrap();
+        chip.interrupted = chip.temp;
+        let err = peek(&mut chip, reg::ADC0_RES + 1).unwrap_err();
+        assert!(err.contains("share ADC0's TEMP byte"), "{err}");
     }
 
     #[test]
