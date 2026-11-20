@@ -135,7 +135,7 @@ impl Torch {
     }
 
     pub fn output(&self) -> Output {
-        ramp::output(self.level())
+        ramp::faded(self.limits.position())
     }
 
     pub const fn aux(&self) -> Aux {
@@ -1199,6 +1199,7 @@ mod tests {
         flat: u32,
         faulted: u32,
         fading_out: u32,
+        between_levels: u32,
         failed_at_power_on: u32,
         blue: u32,
         red: u32,
@@ -1259,6 +1260,7 @@ mod tests {
         // reading.
         let (mut converted, mut converted_before) = (None, None);
         let mut lit_before_last = false;
+        let (mut asked_before, mut shown_before) = (0, Output::OFF);
         for t in 1..=ticks {
             if switch_left == 0 {
                 pressed = !pressed;
@@ -1353,7 +1355,18 @@ mod tests {
 
             // The level.
             check!(t, level <= CEILING, "level {level}");
-            check!(t, rig.output() == ramp::output(level), "level {level}");
+            let shown = rig.output();
+            let heat = level == rig.limits.ceilings().1 && asked == asked_before;
+            if heat && level > 0 && level_before > 0 {
+                let (from, to) = (shown_before.dsm, ramp::output(level).dsm);
+                check!(t, shown.enable, "{shown:?}");
+                check!(t, shown.dsm >= from.min(to), "{shown:?} at level {level}");
+                check!(t, shown.dsm <= from.max(to), "{shown:?} at level {level}");
+                seen.between_levels += u32::from(shown != ramp::output(level));
+            } else {
+                check!(t, shown == ramp::output(level), "level {level}");
+            }
+            (asked_before, shown_before) = (asked, shown);
             check!(t, level <= asked, "level {level} of {asked}");
             check!(t, (level > 0) == (model.mode == Mode::On), "level {level}");
             check!(t, !failed || level == 0, "lit after a failed check");
@@ -1589,6 +1602,7 @@ mod tests {
             ("flat", seen.flat),
             ("faulted", seen.faulted),
             ("fading out for a fault", seen.fading_out),
+            ("between two levels", seen.between_levels),
             ("failed at power-on", seen.failed_at_power_on),
             ("blue", seen.blue),
             ("red", seen.red),

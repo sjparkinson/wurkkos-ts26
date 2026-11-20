@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use ts26::TICKS_PER_SECOND;
 use ts26::button::{Event, HOLD_TICKS};
-use ts26::ramp::{self, LEVELS};
+use ts26::ramp::LEVELS;
 use ts26::testing::{self, Rig, Scene, clicks};
 
 pub use ts26::testing::Action;
@@ -269,7 +269,7 @@ impl Live {
 
     fn status(&self, width: usize) -> String {
         let level = self.torch.level();
-        let output = ramp::output(level);
+        let output = self.torch.output();
         let lit = lit(level);
         let switch = match (self.pressed, self.held) {
             (true, true) => "held",
