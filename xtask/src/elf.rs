@@ -143,6 +143,11 @@ impl Elf {
             .map(|&(_, value)| value)
     }
 
+    pub fn require(&self, name: &str) -> Result<u32, String> {
+        self.symbol(name)
+            .ok_or_else(|| format!("no `{name}` symbol"))
+    }
+
     pub fn symbols(&self) -> impl Iterator<Item = &str> + '_ {
         self.symbols.iter().map(|(name, _)| name.as_str())
     }

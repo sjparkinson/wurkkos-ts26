@@ -48,10 +48,7 @@ fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), Strin
 }
 
 pub fn memory(elf: &Elf) -> Result<(), String> {
-    let symbol = |name| {
-        elf.symbol(name)
-            .ok_or_else(|| format!("no `{name}` symbol"))
-    };
+    let symbol = |name| elf.require(name);
     let reset = symbol("__reset")?;
     if elf.entry() != reset {
         return Err(format!(

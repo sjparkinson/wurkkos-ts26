@@ -182,7 +182,7 @@ struct Ends {
 
 impl Linked {
     fn of(elf: &Elf) -> Result<Self, String> {
-        let symbol = |name| symbol(elf, name);
+        let symbol = |name| elf.require(name);
         let sram = |name| -> Result<u16, String> { Ok((symbol(name)? - DATA_SPACE) as u16) };
         Ok(Self {
             main: symbol("main")? / 2,
@@ -197,21 +197,20 @@ impl Linked {
             },
         })
     }
-}
 
-fn symbol(elf: &Elf, name: &str) -> Result<u32, String> {
-    elf.symbol(name)
-        .ok_or_else(|| format!("no `{name}` symbol"))
+    fn boot(&self, image: Vec<u8>) -> Result<Sim, String> {
+        Sim::new(image, self.layout.bss.end, self.ends)
+    }
 }
 
 pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     let linked = Linked::of(elf)?;
     let image = elf.flash_image();
     let signed = crc::sign(&image, &stamp::TEST)?;
-    let reset = symbol(elf, "__reset")?;
+    let reset = elf.require("__reset")?;
 
     let power_on = || -> Result<Sim, String> {
-        let mut sim = Sim::new(signed.clone(), linked.layout.bss.end, linked.ends)?;
+        let mut sim = linked.boot(signed.clone())?;
         sim.run_to(linked.main, BOOT_BUDGET)
             .map_err(|e| format!("startup: {e}"))?;
         Ok(sim)
@@ -220,18 +219,8 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     check_startup(&sim.chip, &linked.layout).map_err(|e| format!("startup: {e}"))?;
     startup_with_statics(&image, reset, &linked)
         .map_err(|e| format!("startup with statics: {e}"))?;
-    found_lit(Sim::new(
-        signed.clone(),
-        linked.layout.bss.end,
-        linked.ends,
-    )?)
-    .map_err(|e| format!("starting with PB2 high: {e}"))?;
-    boot_order(Sim::new(
-        signed.clone(),
-        linked.layout.bss.end,
-        linked.ends,
-    )?)
-    .map_err(|e| format!("start-up order: {e}"))?;
+    found_lit(linked.boot(signed.clone())?).map_err(|e| format!("starting with PB2 high: {e}"))?;
+    boot_order(linked.boot(signed.clone())?).map_err(|e| format!("start-up order: {e}"))?;
     unhandled_interrupt(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
     let examples = if examples { EXAMPLES } else { &[] };
@@ -667,13 +656,13 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
     if rodata.is_empty() || layout.data.is_empty() || layout.bss.is_empty() {
         return Err(".rodata, .data or .bss is empty, so there's nothing to check".into());
     }
-    let mut sim = Sim::new(elf.flash_image(), layout.bss.end, linked.ends)?;
+    let mut sim = linked.boot(elf.flash_image())?;
     sim.run_to(linked.main, BOOT_BUDGET)
         .and_then(|()| check_startup(&sim.chip, layout))
         .map_err(|e| format!("startup: {e}"))?;
-    sim.run_to(symbol(elf, "link_probe_done")? / 2, BOOT_BUDGET)?;
+    sim.run_to(elf.require("link_probe_done")? / 2, BOOT_BUDGET)?;
 
-    let copy = (symbol(elf, "LINK_PROBE_COPY")? - DATA_SPACE) as u16;
+    let copy = (elf.require("LINK_PROBE_COPY")? - DATA_SPACE) as u16;
     let got = sim.chip.sram(&(copy..copy + PROBE_EXPECTED.len() as u16));
     if got != PROBE_EXPECTED {
         return Err(format!(
@@ -686,9 +675,9 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
 /// examples/guards.rs asks for power-down four times lit and once off.
 pub fn guards(elf: &Elf) -> Result<(), String> {
     let linked = Linked::of(elf)?;
-    let mut sim = Sim::new(elf.flash_image(), linked.layout.bss.end, linked.ends)?;
+    let mut sim = linked.boot(elf.flash_image())?;
     sim.run_to(
-        symbol(elf, "guards_done")? / 2,
+        elf.require("guards_done")? / 2,
         BOOT_BUDGET + 8 * TICK_BUDGET,
     )?;
     match sim.chip.power_downs {
