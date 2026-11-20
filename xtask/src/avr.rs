@@ -53,6 +53,10 @@ pub trait Bus {
     fn holds_interrupts(&self) -> bool {
         false
     }
+    /// Whether something woke the CPU with no interrupt to take.
+    fn woken(&mut self) -> bool {
+        false
+    }
     /// Whether an interrupt is enabled that could wake the CPU.
     fn sleep(&mut self) -> Result<bool, String>;
     fn idle(&mut self) -> Result<(), String>;
@@ -107,9 +111,10 @@ impl Cpu {
             self.handling = Some(vector);
             return Ok(());
         }
-        if self.asleep {
+        if self.asleep && !bus.woken() {
             return bus.idle().map_err(|e| format!("asleep: {e}"));
         }
+        self.asleep = false;
         let at = self.pc;
         let w = bus
             .fetch(at)

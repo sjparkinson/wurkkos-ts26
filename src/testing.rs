@@ -22,6 +22,7 @@ use crate::sensors::{Channel, Convert};
 use crate::temp::Calibration;
 use crate::thermal;
 use crate::torch::Torch;
+use crate::watchdog::{Pace, REST_TICKS, Step};
 
 const FULL_SCALE: u16 = 4 * 1023;
 
@@ -379,11 +380,18 @@ fn span(pressed: bool, ticks: u16) -> impl Iterator<Item = bool> {
     iter::repeat_n(pressed, ticks.into())
 }
 
-/// Wired the way `src/main.rs` wires the real ADC.
+/// Wired the way `src/main.rs` wires the real ADC, and paced as it paces the
+/// tick.
 #[derive(Clone, Debug)]
 pub struct Rig {
     pub torch: Torch,
     pub adc: Adc,
+    pub pace: Pace,
+    /// 64 Hz ticks since power-on, modulo a rest tick.
+    frame: u16,
+    pressed: bool,
+    /// Whether the firmware ran a pass for the last 64 Hz tick.
+    pub ticked: bool,
 }
 
 impl Default for Rig {
@@ -397,20 +405,46 @@ impl Rig {
         Self {
             torch: Torch::new(CALIBRATION, faults),
             adc: Adc::new(),
+            pace: Pace::new(),
+            frame: 0,
+            pressed: false,
+            ticked: false,
         }
     }
 
+    /// What the sleep after the last pass is, as `src/main.rs` asks for it.
+    pub const fn powers_down(&self) -> bool {
+        self.torch.resting() && self.pace.powers_down()
+    }
+
+    /// A 64 Hz tick, never paced.
     pub fn tick(&mut self, pressed: bool) -> Option<Event> {
-        let event = self.torch.tick(pressed, self.adc.result());
+        let event = self.torch.tick(pressed, self.adc.result(), 1);
         self.adc.start(self.torch.convert());
         event
     }
 
+    /// A 64 Hz tick's worth of the switch. At rest the PIT ticks on every
+    /// 64th from power-on, as the simulator models it, and a change of the
+    /// switch wakes the firmware to tick at 64 Hz from the next.
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
-        let event = self.torch.tick(pressed, self.adc.result());
+        self.frame = (self.frame + 1) % REST_TICKS;
+        let changed = core::mem::replace(&mut self.pressed, pressed) != pressed;
+        let slow = self.pace.slow();
+        if slow && changed {
+            assert_eq!(self.pace.woken(), Some(Step::Fast));
+        }
+        self.ticked = !slow || (self.frame == 0 && !changed);
+        if !self.ticked {
+            return None;
+        }
+        let event = self
+            .torch
+            .tick(pressed, self.adc.result(), self.pace.ticks());
         let convert = self.torch.convert().filter(|_| !scene.adc_dead);
         self.adc
             .start_with(convert, |channel| scene.reading(channel));
+        self.pace.tick(self.torch.slow());
         event
     }
 

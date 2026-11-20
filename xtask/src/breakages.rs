@@ -45,6 +45,7 @@ struct Breakage {
 
 const HW: &str = "src/avr/hw.rs";
 const MAIN: &str = "src/main.rs";
+const WATCHDOG: &str = "src/watchdog.rs";
 
 const BREAKAGES: &[Breakage] = &[
     Breakage {
@@ -108,6 +109,14 @@ const BREAKAGES: &[Breakage] = &[
         expect: "with INTFLAGS.OVF still up from before",
     },
     Breakage {
+        name: "halt-leaves-the-switch-sensing",
+        file: HW,
+        find: "    write(SWITCH_CTRL, SENSE_OFF);\n    prepare_sleep(true);\n",
+        replace: "    prepare_sleep(true);\n",
+        stage: Stage::Simulator,
+        expect: "sleeps inside the handler for interrupt 13, so no other can wake it",
+    },
+    Breakage {
         name: "halt-without-cli",
         file: HW,
         find: "    unsafe { asm!(\"cli\", options(nostack)) };\n    set_output(Output::OFF);\n",
@@ -143,18 +152,78 @@ const BREAKAGES: &[Breakage] = &[
     Breakage {
         name: "watchdog-never-fed",
         file: MAIN,
-        find: "            hw::feed_watchdog();\n",
-        replace: "",
+        find: "            Some(Step::Feed) => hw::feed_watchdog(),\n",
+        replace: "            Some(Step::Feed) => {}\n",
         stage: Stage::Simulator,
         expect: "without wdr",
     },
     Breakage {
         name: "watchdog-fed-every-tick",
         file: MAIN,
-        find: "        if feeder.tick() {\n",
-        replace: "        if feeder.tick() || true {\n",
+        find: "            None => {}\n",
+        replace: "            None => hw::feed_watchdog(),\n",
         stage: Stage::Simulator,
         expect: "closed window",
+    },
+    Breakage {
+        name: "power-down-straight-after-the-window",
+        file: MAIN,
+        find: "hw::wait_for_tick(torch.resting() && pace.powers_down())",
+        replace: "hw::wait_for_tick(torch.resting())",
+        stage: Stage::Simulator,
+        expect: "the library says idle, but the firmware powered down",
+    },
+    Breakage {
+        name: "window-left-on-at-rest",
+        file: HW,
+        find: "    set_watchdog(regs::WDT_PERIOD_8KCLK);\n",
+        replace: "",
+        stage: Stage::Simulator,
+        expect: "the library has the watchdog's window off, but WDT.CTRLA has it on",
+    },
+    // A press at rest then lands the window on a count left from the last rest
+    // feed, up to a second old.
+    Breakage {
+        name: "window-without-a-feed-first",
+        file: WATCHDOG,
+        find: "            State::Waking => (State::Arming, Some(Step::Feed)),\n",
+        replace: "            State::Waking => (State::Arming, None),\n",
+        stage: Stage::Simulator,
+        expect: "without wdr",
+    },
+    Breakage {
+        name: "falling-edge-at-rest",
+        file: HW,
+        find: "const SENSE_ON: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_BOTHEDGES;\n",
+        replace: "const SENSE_ON: u8 = regs::PORT_PULLUPEN | regs::PORT_ISC_FALLING;\n",
+        stage: Stage::Simulator,
+        expect: "the switch changed at rest, but the firmware slept through it",
+    },
+    Breakage {
+        name: "switch-flag-left-up",
+        file: HW,
+        find: "    write(SWITCH_CTRL, SENSE_OFF);\n    write(reg::PORTA_INTFLAGS, 1 << SWITCH);\n",
+        replace: "    write(SWITCH_CTRL, SENSE_OFF);\n",
+        stage: Stage::Simulator,
+        expect: "the handler for PORTA_PORT (vector 3) returns with its flag still up",
+    },
+    Breakage {
+        name: "pit-left-at-1hz-on-a-press",
+        file: MAIN,
+        find: "            pace.woken()\n",
+        replace: "            pace.woken().filter(|_| false)\n",
+        stage: Stage::Simulator,
+        expect: "the firmware woke on a press at rest, but left the PIT at 1 Hz",
+    },
+    // The firmware's cell check at rest then comes 64 times later than the
+    // library's.
+    Breakage {
+        name: "rest-tick-worth-one",
+        file: MAIN,
+        find: "hw::adc_result(), pace.ticks());\n",
+        replace: "hw::adc_result(), 1);\n",
+        stage: Stage::Simulator,
+        expect: "the library ticks at 64 Hz, but the PIT at 1 Hz",
     },
     Breakage {
         name: "adc-on-in-power-down",
@@ -243,10 +312,10 @@ const BREAKAGES: &[Breakage] = &[
     Breakage {
         name: "bounds-check",
         file: MAIN,
-        find: "        torch.tick(hw::switch_pressed(), hw::adc_result());\n",
-        replace: "        let reading = hw::adc_result();\n        \
-                  let pressed = [hw::switch_pressed(); 4][usize::from(reading.unwrap_or(0))];\n        \
-                  torch.tick(pressed, reading);\n",
+        find: "            torch.tick(hw::switch_pressed(), hw::adc_result(), pace.ticks());\n",
+        replace: "            let reading = hw::adc_result();\n            \
+                  let pressed = [hw::switch_pressed(); 4][usize::from(reading.unwrap_or(0))];\n            \
+                  torch.tick(pressed, reading, pace.ticks());\n",
         stage: Stage::Layout,
         expect: "panic_bounds_check",
     },
@@ -400,9 +469,14 @@ impl Scratch {
     }
 
     fn refuses(&self, root: &Path, breakage: &Breakage) -> Result<String, String> {
+        // Written rather than copied, since a copy can keep the old modified
+        // time, and cargo would then keep a build of the last breakage.
         for other in BREAKAGES {
-            let file = Path::new(other.file);
-            fs::copy(root.join(file), self.dir.path().join(file)).map_err(at(file))?;
+            let (file, copy) = (root.join(other.file), self.dir.path().join(other.file));
+            let source = fs::read(&file).map_err(at(&file))?;
+            if fs::read(&copy).map_err(at(&copy))? != source {
+                fs::write(&copy, source).map_err(at(&copy))?;
+            }
         }
         let path = self.dir.path().join(breakage.file);
         let source = fs::read_to_string(&path).map_err(at(&path))?;

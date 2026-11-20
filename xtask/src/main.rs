@@ -180,6 +180,12 @@ fn hex(examples: bool) -> Result<(), String> {
         ("loop", sim.loop_instructions, tick, per_tick),
         ("off", sim.off_instructions, tick, per_tick),
         (
+            "rest",
+            sim.rest_instructions,
+            tick,
+            "instructions per 1 Hz tick",
+        ),
+        (
             "dsm",
             sim.handler_instructions,
             Some(sim::HANDLER_BUDGET),

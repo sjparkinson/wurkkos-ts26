@@ -8,7 +8,8 @@ use crate::regs;
 
 // The table below lists the handled vectors in this order.
 const _: () = assert!(
-    0 < regs::VECTOR_RTC_PIT
+    0 < regs::VECTOR_PORTA_PORT
+        && regs::VECTOR_PORTA_PORT < regs::VECTOR_RTC_PIT
         && regs::VECTOR_RTC_PIT < regs::VECTOR_TCA0_OVF
         && regs::VECTOR_TCA0_OVF < regs::VECTORS
 );
@@ -19,6 +20,10 @@ global_asm!(
     ".global __vectors",
     "__vectors:",
     "  jmp __reset",
+    "  .rept {before_porta}",
+    "  jmp __unhandled_interrupt",
+    "  .endr",
+    "  jmp {porta_port}",
     "  .rept {before_pit}",
     "  jmp __unhandled_interrupt",
     "  .endr",
@@ -76,7 +81,9 @@ global_asm!(
     // `main` never returns. This keeps a return out of what's next in flash.
     "5:",
     "  rjmp 5b",
-    before_pit = const regs::VECTOR_RTC_PIT - 1,
+    before_porta = const regs::VECTOR_PORTA_PORT - 1,
+    porta_port = sym super::hw::porta_port,
+    before_pit = const regs::VECTOR_RTC_PIT - regs::VECTOR_PORTA_PORT - 1,
     rtc_pit = sym super::hw::rtc_pit,
     before_ovf = const regs::VECTOR_TCA0_OVF - regs::VECTOR_RTC_PIT - 1,
     tca0_ovf = sym super::hw::tca0_ovf,

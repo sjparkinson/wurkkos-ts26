@@ -55,7 +55,9 @@ impl Torch {
         }
     }
 
-    pub fn tick(&mut self, pressed: bool, adc: Option<u16>) -> Option<Event> {
+    /// `ticks` is what this tick is worth in 64 Hz ones, more than one only at
+    /// rest (`watchdog::Pace::ticks`).
+    pub fn tick(&mut self, pressed: bool, adc: Option<u16>, ticks: u16) -> Option<Event> {
         self.showing = self.showing.saturating_sub(1);
         let down = self.switch.sample(pressed);
         let event = self.clicks.tick_up_to(down, self.ui.most_clicks());
@@ -102,8 +104,8 @@ impl Torch {
         // Checked again, so a pass that turns the light off has already
         // rested if the firmware powers down straight after it.
         if self.resting() {
-            self.limits.rest();
-            self.check_in = self.check_in.saturating_sub(1);
+            self.limits.rest(ticks);
+            self.check_in = self.check_in.saturating_sub(ticks);
         } else {
             self.check_in = CHECK_TICKS;
         }
@@ -124,6 +126,13 @@ impl Torch {
     /// that sees it, in time to read the cell before a click can light it.
     pub const fn resting(&self) -> bool {
         self.quiet() && !self.checking
+    }
+
+    /// The firmware ticks once a second while this holds, so nothing may be
+    /// counting ticks but the rest's own counts, which [`Torch::tick`] takes
+    /// in one go.
+    pub const fn slow(&self) -> bool {
+        self.resting() && self.clicks.idle() && self.showing == 0
     }
 
     pub const fn level(&self) -> u8 {
@@ -178,7 +187,9 @@ mod tests {
     use crate::button::{HOLD_TICKS, RELEASE_TICKS};
     use crate::ramp::CEILING;
     use crate::sensors::{Channel, FULL_SCALE};
-    use crate::testing::{EXAMPLES, Rig, Rng, example, temperature_reading, voltage_reading};
+    use crate::testing::{
+        EXAMPLES, Rig, Rng, Scene, example, temperature_reading, voltage_reading,
+    };
     use crate::thermal;
     use crate::ui::{self, Mode, ON_LEVEL};
 
@@ -693,10 +704,10 @@ mod tests {
         assert_eq!(torch.aux(), Aux::Off);
         rest(&mut torch, CHECK_TICKS - 1, "to the next check");
         for _ in 0..2 {
-            torch.torch.tick(false, None);
+            torch.torch.tick(false, None, 1);
             assert!(!torch.resting());
         }
-        torch.torch.tick(false, None);
+        torch.torch.tick(false, None, 1);
         assert!(torch.resting());
         assert_eq!(torch.convert(), None);
         assert_eq!(torch.aux(), Aux::Off);
@@ -796,6 +807,100 @@ mod tests {
         assert!(!torch.resting(), "on");
         click(&mut torch);
         assert!(torch.resting());
+    }
+
+    #[test]
+    fn ticks_once_a_second_only_with_nothing_counting_ticks() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, TICKS_PER_SECOND);
+        assert!(torch.slow());
+        click(&mut torch);
+        run(&mut torch, true, 4);
+        run(&mut torch, false, 2);
+        assert_eq!(torch.level(), 0);
+        assert!(
+            torch.resting() && !torch.slow(),
+            "the release after a click that acted"
+        );
+        run(&mut torch, false, RELEASE_TICKS);
+        assert!(torch.slow());
+        clicks(&mut torch, 3);
+        run(&mut torch, false, RELEASE_TICKS + 1);
+        assert!(!torch.slow(), "lockout's red");
+        run(&mut torch, false, LOCKED_TICKS);
+        assert!(torch.slow());
+    }
+
+    #[test]
+    fn a_rest_tick_counts_a_second_towards_the_next_check() {
+        let mut torch = Rig::default();
+        run(&mut torch, false, TICKS_PER_SECOND);
+        let mut seconds = 1;
+        while torch.resting() {
+            torch.torch.tick(false, None, TICKS_PER_SECOND);
+            seconds += 1;
+            assert!(seconds <= 302, "no check");
+        }
+        assert!(torch.convert().is_some());
+        assert_eq!(
+            seconds,
+            CHECK_TICKS / TICKS_PER_SECOND + 2,
+            "up to a rest tick late, then the rest tick that starts it"
+        );
+    }
+
+    fn paced(torch: &mut Rig, pressed: bool, ticks: u16) {
+        for _ in 0..ticks {
+            torch.tick_in(pressed, &Scene::NORMAL);
+        }
+    }
+
+    fn at_rest() -> Rig {
+        let mut torch = Rig::default();
+        paced(&mut torch, false, TICKS_PER_SECOND);
+        assert!(torch.pace.slow());
+        torch
+    }
+
+    #[test]
+    fn a_press_at_rest_counts_once_two_64_hz_ticks_after_the_wake_see_it() {
+        for (down, lights) in [(2, false), (3, true)] {
+            let mut torch = at_rest();
+            paced(&mut torch, true, down);
+            assert!(!torch.pace.slow());
+            paced(&mut torch, false, TICKS_PER_SECOND);
+            assert_eq!(torch.level() > 0, lights, "down for {down} ticks");
+        }
+    }
+
+    #[test]
+    fn a_press_at_rest_is_seen_whatever_the_rest_tick_it_lands_by() {
+        for wait in 0..2 * TICKS_PER_SECOND {
+            let mut torch = at_rest();
+            paced(&mut torch, false, wait);
+            paced(&mut torch, true, 4);
+            paced(&mut torch, false, RELEASE_TICKS + 2);
+            assert_eq!(torch.level(), ui::ON_LEVEL, "{wait} ticks on");
+        }
+    }
+
+    #[test]
+    fn the_light_only_comes_on_with_the_watchdogs_window() {
+        let mut torch = Rig::default();
+        let mut rng = Rng::new(0x5EED);
+        let mut lit = 0;
+        for _ in 0..40_000 {
+            let pressed = rng.next_u16() < 0x5000;
+            let span = rng.next_u16() % (2 * TICKS_PER_SECOND);
+            for _ in 0..span {
+                torch.tick_in(pressed, &Scene::NORMAL);
+                if torch.level() > 0 {
+                    assert!(torch.pace.windowed());
+                    lit += 1;
+                }
+            }
+        }
+        assert!(lit > 0);
     }
 
     #[test]
@@ -1292,7 +1397,7 @@ mod tests {
             if lose != 0 && rng.next_u16().is_multiple_of(lose) {
                 seen.results_lost += u32::from(result.take().is_some());
             }
-            let event = rig.torch.tick(pressed, result);
+            let event = rig.torch.tick(pressed, result, 1);
             rig.adc
                 .start_with(rig.torch.convert(), |channel| match channel {
                     Channel::Voltage => cell.read(rng),
