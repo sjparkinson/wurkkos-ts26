@@ -1,15 +1,6 @@
-//! Checks on the linked firmware for things src/avr/rt.rs, src/avr/hw.rs and
-//! link.x assume but no compiler or linker error would catch. That's the
-//! vector table's shape, where the startup code copies and zeroes memory, and
-//! that every unlock of a protected register is followed straight away by the
-//! write. And that nothing in the firmware can reach a panic, since the
-//! handler in src/main.rs is there because Rust requires one.
-//!
-//! `build()` in main.rs runs these, so `size`, `hex` and `flash` all refuse
-//! an image that fails, and CI runs them through `size`.
-//!
-//! The opcodes come from Microchip's AVR Instruction Set Manual. Only the
-//! handful the checks look for are decoded.
+//! Checks on the linked firmware for what src/avr/rt.rs, src/avr/hw.rs and
+//! link.x assume but no compiler or linker error would catch. Opcodes are
+//! from the AVR Instruction Set Manual.
 
 use ts26::regs::{VECTORS, addr};
 
@@ -17,13 +8,12 @@ use crate::avr::is_two_words;
 use crate::elf::{DATA_SPACE, Elf, RAM, Segment};
 use crate::updi::map;
 
-/// CPU.CCP's I/O address, the same number as its data-space one.
+/// CPU.CCP's I/O address is the same number as its data-space one.
 const CPU_CCP: u16 = addr::CPU_CCP as u16;
 
-/// Where tinyAVR maps flash into data space, and how much of it there is.
 const MAPPED_FLASH: u32 = map::FLASH as u32;
 const FLASH_SIZE: u32 = map::FLASH_SIZE as u32;
-/// `eor r1, r1`. `eor Rd, Rr` is 0010 01rd dddd rrrr.
+/// `eor Rd, Rr` is 0010 01rd dddd rrrr.
 const EOR_R1_R1: u16 = 0x2411;
 
 pub fn check(elf: &Elf) -> Result<(), String> {
@@ -37,15 +27,10 @@ pub fn check(elf: &Elf) -> Result<(), String> {
     no_panics(elf.symbols())
 }
 
-/// LTO drops the panic machinery while nothing reaches it, so a symbol with
-/// one of these in its name means an `[i]`, an `unwrap` or the like now does.
-/// The names are `core::panicking::*`, `core::slice::index::*_fail` (which
-/// call into `panicking`) and the `rust_begin_unwind` the panic handler is
-/// linked as. They're what this nightly emits, so re-prove the check fires
-/// when bumping it (CONTRIBUTING.md).
+/// LTO drops the panic machinery while nothing reaches it. These are the
+/// names this nightly emits, so a new nightly can rename them past the check.
 const PANIC_PATTERNS: [&str; 2] = ["panic", "begin_unwind"];
 
-/// Refuses an image with a panic or a bounds check linked in.
 fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
     let found: Vec<&str> = symbols
         .into_iter()
@@ -62,8 +47,6 @@ fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), Strin
     ))
 }
 
-/// The checks that are about link.x and src/avr/rt.rs rather than the
-/// firmware, which the link probe (examples/link.rs) gets too.
 pub fn memory(elf: &Elf) -> Result<(), String> {
     let symbol = |name| {
         elf.symbol(name)
@@ -96,14 +79,10 @@ pub fn memory(elf: &Elf) -> Result<(), String> {
     mapped(elf.segments())
 }
 
-/// What a symbol for `hw::halt` has in its name. It isn't `no_mangle`, so the
-/// name is mangled, but both of Rust's schemes spell each path segment as its
-/// length then its name. The firmware's is `ts26::avr::hw::halt` and the link
-/// probe's `link::hw::halt`.
+/// `hw::halt` is mangled, but both of Rust's schemes spell each path segment
+/// as its length then its name.
 const HALT: &str = "2hw4halt";
 
-/// The byte address of `hw::halt`, the one symbol with `HALT` in its name.
-/// `value` looks a symbol up by name.
 pub(crate) fn halt<'a>(
     names: impl IntoIterator<Item = &'a str>,
     value: impl Fn(&str) -> Option<u32>,
@@ -119,10 +98,6 @@ pub(crate) fn halt<'a>(
     }
 }
 
-/// Every slot is a `jmp`. Slot 0 goes to `__reset`, the rest somewhere in
-/// flash past the table. `__unhandled_interrupt` is `eor r1, r1` then a `jmp`
-/// to `halt`, src/avr/rt.rs's way of going dark rather than returning into
-/// an interrupt that would fire again forever.
 fn vectors(image: &[u8], reset: u32, unhandled: u32, halt: u32) -> Result<(), String> {
     let table_end = (VECTORS * 4) as u32;
     for slot in 0..VECTORS {
@@ -155,7 +130,6 @@ fn vectors(image: &[u8], reset: u32, unhandled: u32, halt: u32) -> Result<(), St
     Ok(())
 }
 
-/// The symbols src/avr/rt.rs's startup loops use, from link.x.
 struct Ram {
     data_start: u32,
     data_end: u32,
@@ -165,10 +139,8 @@ struct Ram {
     data_load: u32,
 }
 
-/// .data then .bss, in order, inside SRAM. The loops in src/avr/rt.rs stop
-/// when the pointer equals the end, so an end below its start would run through
-/// all of data space. And .data's initial values have to sit where
-/// `__data_load` says, or the copy fills SRAM with the wrong bytes.
+/// The loops in src/avr/rt.rs stop when the pointer equals the end, so an end
+/// below its start would run through all of data space.
 fn ram(r: &Ram, segments: &[Segment]) -> Result<(), String> {
     let order = [
         (RAM.start, "the start of SRAM"),
@@ -214,9 +186,6 @@ fn ram(r: &Ram, segments: &[Segment]) -> Result<(), String> {
     Ok(())
 }
 
-/// Code is linked where it's loaded, and anything linked in the mapped-flash
-/// window (.rodata) at its flash address plus the window's ELF address, so
-/// an ordinary load finds it.
 fn mapped(segments: &[Segment]) -> Result<(), String> {
     let elf_window = DATA_SPACE + MAPPED_FLASH;
     for s in segments {
@@ -237,10 +206,8 @@ fn mapped(segments: &[Segment]) -> Result<(), String> {
     Ok(())
 }
 
-/// Every `out CCP, rN` is followed at once by `st Z, rM`, the pairing
-/// `protected_write` in src/avr/hw.rs relies on, because the chip only accepts
-/// the write within four instructions of the key. Also insists there's at
-/// least one, since `hw::init` sets the clock prescaler that way.
+/// The chip only accepts a protected write within four instructions of the
+/// CCP key.
 fn protected_writes(text: &[u8]) -> Result<usize, String> {
     let mut found = 0;
     let mut at = 0;
@@ -261,14 +228,12 @@ fn protected_writes(text: &[u8]) -> Result<usize, String> {
     Ok(found)
 }
 
-/// The little-endian word at byte `at`, if there's one there.
 pub(crate) fn word(bytes: &[u8], at: usize) -> Option<u16> {
     let b = bytes.get(at..at + 2)?;
     Some(u16::from_le_bytes([b[0], b[1]]))
 }
 
-/// The byte address a `jmp` at `at` goes to. `jmp k` is
-/// 1001 010k kkkk 110k, then the low 16 bits of k, a word address.
+/// `jmp k` is 1001 010k kkkk 110k, then the low 16 bits of k, a word address.
 pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
     let (w0, w1) = (word(image, at)?, word(image, at + 2)?);
     if w0 & 0xFE0E != 0x940C {
@@ -278,7 +243,7 @@ pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
     Some((high | u32::from(w1)) * 2)
 }
 
-/// The I/O address an `out A, Rr` writes. The encoding is 1011 1AAr rrrr AAAA.
+/// `out A, Rr` is 1011 1AAr rrrr AAAA.
 fn out_address(w: u16) -> Option<u16> {
     (w & 0xF800 == 0xB800).then_some((w >> 5) & 0x30 | w & 0x0F)
 }
@@ -306,20 +271,17 @@ mod tests {
         [w0, k as u16]
     }
 
-    /// Where `image` puts `__unhandled_interrupt`, reset and `hw::halt`.
     const UNHANDLED: u32 = 0x7C;
     const RESET: u32 = 0x82;
     const HALT_AT: u32 = 0x84;
     const RETI: u16 = 0x9518;
 
-    /// `__unhandled_interrupt` as src/avr/rt.rs has it.
     fn clear_r1_and_halt() -> [u16; 3] {
         let [w0, w1] = jmp(HALT_AT);
         [EOR_R1_R1, w0, w1]
     }
 
-    /// A vector table, then `unhandled` at 0x7C, and a `nop` each for reset
-    /// at 0x82 and `hw::halt` at 0x84.
+    /// `unhandled` at 0x7C, reset at 0x82 and `hw::halt` at 0x84.
     fn image_with(table: impl Fn(usize) -> [u16; 2], unhandled: [u16; 3]) -> Vec<u8> {
         let mut words: Vec<u16> = (0..VECTORS).flat_map(table).collect();
         words.extend(unhandled);
@@ -357,7 +319,6 @@ mod tests {
 
     #[test]
     fn rejects_a_short_table() {
-        // One slot short, so the last slot is `eor r1, r1` and half a `jmp`.
         let mut img = image(standard);
         img.drain(..4);
         assert!(vectors(&img, RESET - 4, UNHANDLED - 4, HALT_AT - 4).is_err());
@@ -365,8 +326,6 @@ mod tests {
 
     #[test]
     fn rejects_a_vector_into_the_table_or_past_the_image() {
-        // 0x78 is the table's last slot, and 0x86 the first byte past the
-        // image.
         for bad in [0x10, 0x78, 0x86, 0x1000] {
             let img = image(|slot| if slot == 5 { jmp(bad) } else { standard(slot) });
             let err = vectors(&img, RESET, UNHANDLED, HALT_AT).unwrap_err();
@@ -377,8 +336,6 @@ mod tests {
     #[test]
     fn the_table_is_four_bytes_a_vector() {
         assert_eq!(VECTORS * 4, 0x7C, "the ATtiny1616 has 31 vectors");
-        // The first byte after the table is the first a vector can go to, and
-        // the image's last word the last.
         for good in [0x7C, 0x84] {
             let img = image(|slot| if slot == 5 { jmp(good) } else { standard(slot) });
             let checked = vectors(&img, RESET, UNHANDLED, HALT_AT);
@@ -392,14 +349,11 @@ mod tests {
             let [w0, w1] = jmp(addr);
             [EOR_R1_R1, w0, w1]
         };
-        // `__unhandled_interrupt` jumps to where `hw::halt` is said to be,
-        // which is inside the table, or past the end of the image.
         for bad in [0x10, 0x78, 0x86, 0x1000] {
             let img = image_with(standard, to(bad));
             let err = vectors(&img, RESET, UNHANDLED, bad).unwrap_err();
             assert!(err.contains("hw::halt is at"), "{bad:#x}: {err}");
         }
-        // Straight after the table is code, so a halt there is fine.
         let img = image_with(standard, to(0x7C));
         assert_eq!(vectors(&img, RESET, UNHANDLED, 0x7C), Ok(()));
     }
@@ -501,29 +455,23 @@ mod tests {
         assert!(err.contains("mapped-flash"), "{err}");
     }
 
-    /// The mapped-flash window, as data-space addresses.
     const WINDOW: std::ops::Range<u32> = 0x8000..0xC000;
 
     #[test]
     fn accepts_data_loaded_at_either_end_of_the_mapped_window() {
         assert_eq!(MAPPED_FLASH..MAPPED_FLASH + FLASH_SIZE, WINDOW);
-        // The first four bytes of flash, and the last four.
         for paddr in [0, 0x3FFC] {
             let segs = [segment(RAM.start, paddr, 4)];
             let r = ram_at(RAM.start, 4, 8, WINDOW.start + paddr);
             assert_eq!(ram(&r, &segs), Ok(()), "flash {paddr:#06x}");
         }
-        // And a single byte, the very last of flash.
         let segs = [segment(RAM.start, 0x3FFF, 1)];
         assert_eq!(ram(&ram_at(RAM.start, 1, 0, WINDOW.end - 1), &segs), Ok(()));
     }
 
     #[test]
     fn rejects_data_that_starts_or_ends_outside_the_mapped_window() {
-        // (flash address the segment says, bytes), each with `__data_load`
-        // agreeing with the segment, so only the window can refuse it. They
-        // start just below the window, run one byte past its end, start at
-        // its end, and start far past it.
+        // `__data_load` agrees with each segment, so only the window refuses.
         for (load, len) in [
             (WINDOW.start - 1, 4),
             (WINDOW.end - 3, 4),
@@ -564,15 +512,10 @@ mod tests {
 
     #[test]
     fn data_space_starts_where_program_space_stops() {
-        // The last byte of program space is code, linked where it's loaded.
         let last = DATA_SPACE - 1;
         assert_eq!(mapped(&[segment(last, last, 1)]), Ok(()));
         assert!(mapped(&[segment(last, 0x200, 1)]).is_err());
-        // The first byte of data space isn't, and it's below the window, so
-        // it's left to `ram`.
         assert_eq!(mapped(&[segment(DATA_SPACE, 0x200, 2)]), Ok(()));
-        // The window's two ends, linked somewhere other than where it's
-        // loaded. Inside is checked, and one past the end isn't.
         let start = DATA_SPACE + MAPPED_FLASH;
         let end = start + FLASH_SIZE;
         assert!(mapped(&[segment(start, 0x200, 2)]).is_err());
@@ -610,7 +553,6 @@ mod tests {
         // r24`.
         let text = bytes(&[0x9180, OUT_CCP_R24, NOP, OUT_CCP_R24, ST_Z_R25]);
         assert_eq!(protected_writes(&text), Ok(1));
-        // And a `call` whose address does the same.
         let text = bytes(&[0x940E, OUT_CCP_R24, OUT_CCP_R24, ST_Z_R25]);
         assert_eq!(protected_writes(&text), Ok(1));
     }

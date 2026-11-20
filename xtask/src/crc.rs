@@ -1,30 +1,10 @@
-//! The checksum the chip's CRCSCAN checks flash against at power-on.
-//!
-//! DS40002204A §27.2 has CRC-16-CCITT (x¹⁶ + x¹² + x⁵ + 1, so 0x1021), the
-//! checksum register starting at 0xFFFF, each byte fed in most significant
-//! bit first. That's the parameter set usually called CRC-16/CCITT-FALSE
-//! (or CRC-16/IBM-3740), with no reflection and no final XOR. §27.3.2.1 and
-//! table 27-1 put the checksum for a whole-flash scan in the last two bytes
-//! of flash, high byte at FLASHEND - 1.
-//!
-//! With no final XOR, running the same CRC over the data and then the
-//! checksum high byte first always ends at 0, which is how the scan can
-//! "pass if the last bytes contain the correct checksum". `sim.rs` models
-//! the scan that way, over all 16 KB, so it checks [`sign`] rather than
-//! repeating it.
-//!
-//! Microchip's AN2521A ("CRCSCAN on devices in the tinyAVR 1-series", not
-//! in docs/microchip/) agrees. Its whole-flash post-build step (§5) is
-//! `srec_cat ... -fill 0xFF ... -CRC16_Big_Endian <end-2> -broken`, where
-//! `-broken` is this CRC, and §6 says a signed section scans to 0x0000.
-//!
-//! None of this has been checked against a real chip yet.
+//! The checksum CRCSCAN checks flash against at power-on: CRC-16/CCITT-FALSE
+//! (DS40002204A §27.2, and AN2521A §5), in the last two bytes of flash, high
+//! byte first (§27.3.2.1, table 27-1). Unconfirmed on a real chip.
 
 use crate::stamp::STAMP_LEN;
 use crate::updi::map::FLASH_SIZE;
 
-/// CRC-16-CCITT as CRCSCAN computes it, with seed 0xFFFF, MSB first and no
-/// final XOR.
 pub fn crc16(bytes: impl IntoIterator<Item = u8>) -> u16 {
     bytes.into_iter().fold(0xFFFF, |crc, byte| {
         (0..8).fold(crc ^ u16::from(byte) << 8, |crc, _| {
@@ -37,16 +17,11 @@ pub fn crc16(bytes: impl IntoIterator<Item = u8>) -> u16 {
     })
 }
 
-/// Where the checksum goes, in the last two bytes of flash.
 pub const CHECKSUM_AT: usize = FLASH_SIZE - 2;
 
-/// Where the commit stamp goes, in the bytes just before the checksum.
 pub const STAMP_AT: usize = CHECKSUM_AT - STAMP_LEN;
 
-/// The firmware as it's flashed. It's padded to all of flash with 0xFF, which
-/// is what erased flash reads as, with the stamp (`stamp.rs`) just before the
-/// end. The checksum of everything before it goes in the last two bytes, high
-/// byte first, so it covers the stamp too.
+/// Padded with 0xFF, which is what erased flash reads as.
 pub fn sign(image: &[u8], stamp: &[u8; STAMP_LEN]) -> Result<Vec<u8>, String> {
     if image.len() > STAMP_AT {
         return Err(format!(
@@ -74,25 +49,19 @@ mod tests {
 
     #[test]
     fn matches_the_crc_16_ccitt_false_check_value() {
-        // The standard check input is the ASCII digits 1 to 9.
         assert_eq!(crc16(*b"123456789"), 0x29B1);
         assert_eq!(crc16([]), 0xFFFF, "the seed");
     }
 
     #[test]
     fn is_the_unaugmented_crc_not_the_augmented_one() {
-        // Published values for "A" with the 0xFFFF seed: 0xB915 for this
-        // CRC, 0x9479 for the "augmented" CCITT that feeds 16 zero bits
-        // after the message. The datasheet's figure 27-1 XORs data in at
-        // the top of the register, which is this one.
+        // Not the augmented CCITT's 0x9479 (DS40002204A figure 27-1).
         assert_eq!(crc16(*b"A"), 0xB915);
     }
 
     #[test]
     fn feeds_bytes_most_significant_bit_first() {
-        // 0x80 goes into the top of the register first; worked by hand,
-        // three shifts with the polynomial and five without. A reflected
-        // CRC would treat it like 0x01.
+        // Worked by hand.
         assert_eq!(crc16([0x80]), 0x7078);
         assert_ne!(crc16([0x80]), crc16([0x01]));
     }
@@ -117,8 +86,6 @@ mod tests {
         for image in [&[][..], &[0x12, 0x34], &[0xAA; 4000]] {
             let flash = sign(image, &stamp::TEST).unwrap();
             assert_eq!(crc16(flash.iter().copied()), 0);
-            // A flipped bit anywhere, the stamp and checksum included,
-            // doesn't.
             for at in [
                 0,
                 1000,

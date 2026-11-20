@@ -1,30 +1,17 @@
-//! A short text stamp of the commit, kept in flash just before the CRC.
-//!
-//! It's there so a `backup` can say which build was on a torch. The firmware
-//! never reads it. The CRC covers it (`crc.rs`), so a damaged stamp fails the
-//! power-on scan like any other bad byte.
-//!
-//! The stamp reads `ts26 <hash>`, with a `+` after the hash if the tree had
-//! uncommitted changes to tracked files, padded to [`STAMP_LEN`] bytes with
-//! 0xFF, which is what erased flash reads as. A build outside a git checkout,
-//! or one where git fails, says `ts26 unknown`.
+//! A text stamp of the commit, just before the CRC, so a `backup` can say
+//! which build was on a torch. The firmware never reads it.
 
 use std::path::Path;
 use std::process::Command;
 
 use crate::crc::STAMP_AT;
 
-/// How many bytes the stamp takes, the padding included.
 pub const STAMP_LEN: usize = 16;
 
-/// What every stamp starts with, and what `read` looks for.
 const PREFIX: &[u8] = b"ts26 ";
 
-/// A fixed stamp for the simulator and the tests, so neither depends on git.
 pub const TEST: [u8; STAMP_LEN] = *b"ts26 test\xFF\xFF\xFF\xFF\xFF\xFF\xFF";
 
-/// `ts26 <hash>`, then `+` if `dirty`, padded with 0xFF. A hash too long to
-/// fit is cut short.
 pub fn format(hash: &str, dirty: bool) -> [u8; STAMP_LEN] {
     let mut stamp = [0xFF; STAMP_LEN];
     let room = STAMP_LEN - PREFIX.len() - usize::from(dirty);
@@ -39,8 +26,7 @@ pub fn format(hash: &str, dirty: bool) -> [u8; STAMP_LEN] {
     stamp
 }
 
-/// The stamp for the commit checked out in `root`. If git can't say, that's
-/// `ts26 unknown`, since a build shouldn't fail over a label.
+/// `ts26 unknown` if git can't say, since a build shouldn't fail over a label.
 pub fn current(root: &Path) -> [u8; STAMP_LEN] {
     let git = |args: &[&str]| -> Option<String> {
         let out = Command::new("git")
@@ -58,10 +44,6 @@ pub fn current(root: &Path) -> [u8; STAMP_LEN] {
     )
 }
 
-/// The stamp for what git said, which is `hash` from `git rev-parse` and
-/// `status` from `git status --porcelain`, each `None` if git failed. A
-/// status with anything in it is a dirty tree. With no hash, an empty one, or
-/// no status, the stamp is `ts26 unknown`.
 fn from_git(hash: Option<&str>, status: Option<&str>) -> [u8; STAMP_LEN] {
     match (hash.filter(|hash| !hash.is_empty()), status) {
         (Some(hash), Some(status)) => format(hash, !status.is_empty()),
@@ -69,9 +51,6 @@ fn from_git(hash: Option<&str>, status: Option<&str>) -> [u8; STAMP_LEN] {
     }
 }
 
-/// The stamp text found in `flash`, or `None` if the bytes at the stamp's
-/// place don't start with `ts26 `. That's erased flash, the stock firmware,
-/// T0 (first light), or an image too short to reach it.
 pub fn read(flash: &[u8]) -> Option<String> {
     let bytes = flash.get(STAMP_AT..STAMP_AT + STAMP_LEN)?;
     if !bytes.starts_with(PREFIX) {
@@ -106,7 +85,6 @@ mod tests {
         let dirty = format("0123456789", true);
         assert_eq!(&dirty[..16], b"ts26 0123456789+");
 
-        // A long hash is cut to fit, and the plus survives.
         let long = format("0123456789abcdef", true);
         assert_eq!(&long[..], b"ts26 0123456789+");
 
@@ -115,7 +93,6 @@ mod tests {
         assert!(short[8..].iter().all(|&b| b == 0xFF));
     }
 
-    /// A stamp as text, up to its padding.
     fn text(stamp: &[u8; STAMP_LEN]) -> String {
         let end = stamp.iter().position(|&b| b == 0xFF).unwrap_or(STAMP_LEN);
         String::from_utf8(stamp[..end].to_vec()).unwrap()
@@ -140,7 +117,6 @@ mod tests {
             (None, Some("")),
             (None, Some(" M src/main.rs")),
             (Some("abc1234567"), None),
-            // No commits yet, or whatever else leaves git with nothing to say.
             (Some(""), Some("")),
             (Some(""), Some(" M src/main.rs")),
         ] {
@@ -152,9 +128,8 @@ mod tests {
         }
     }
 
-    /// A directory under the system's temporary one that git won't take for
-    /// a checkout, nor look above for one, because its `.git` is a file that
-    /// doesn't say where a repository is. Gone again when the test's done.
+    /// Its `.git` is a file that names no repository, so git won't look
+    /// above it for one.
     struct NotACheckout(std::path::PathBuf);
 
     impl NotACheckout {
@@ -178,12 +153,9 @@ mod tests {
     fn a_build_outside_a_git_checkout_is_stamped_unknown() {
         let dir = NotACheckout::new();
         assert_eq!(text(&current(&dir.0)), "ts26 unknown");
-        // And so is one in a directory that isn't there to run git in.
         assert_eq!(text(&current(&dir.0.join("missing"))), "ts26 unknown");
     }
 
-    /// Whatever this checkout's state, or with no checkout at all, the stamp
-    /// is one `read` finds and one of the two shapes the module's notes give.
     #[test]
     fn the_stamp_for_this_checkout_is_a_hash_or_unknown() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -219,7 +191,6 @@ mod tests {
     fn a_short_image_has_no_stamp() {
         assert_eq!(read(&[]), None);
         assert_eq!(read(&[0x12; 628]), None);
-        // One byte short of reaching the end of the stamp.
         let mut short = vec![0xFF; STAMP_AT + STAMP_LEN - 1];
         short[STAMP_AT..STAMP_AT + PREFIX.len()].copy_from_slice(PREFIX);
         assert_eq!(read(&short), None);
