@@ -1,4 +1,47 @@
-use crate::ramp::CEILING;
+use crate::ramp::{CEILING, FRACTION};
+
+/// A fade closes a sixteenth of the gap a tick, and at least a step, so one
+/// level takes a quarter of a second. Unmeasured for what looks smooth.
+const FADE_TICKS: u16 = 16;
+
+// A power of two, since dividing a u16 by anything else links `__mulsi3`.
+const _: () = assert!(FADE_TICKS.is_power_of_two());
+
+/// A level in [`FRACTION`]ths that eases onto the level it's given.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fade {
+    position: u16,
+}
+
+impl Fade {
+    pub const fn new() -> Self {
+        Self { position: 0 }
+    }
+
+    pub const fn position(&self) -> u16 {
+        self.position
+    }
+
+    /// Jumps to `level` unless `gentle`, and always from off or to it.
+    pub fn tick(&mut self, level: u8, gentle: bool) -> u16 {
+        let target = u16::from(level) * FRACTION;
+        let position = self.position;
+        self.position = if !gentle || level == 0 || position == 0 {
+            target
+        } else {
+            // Wrapping, as the step is at most the gap so can't pass the
+            // target, and a checked one links a panic.
+            let gap = target.abs_diff(position);
+            let step = (gap / FADE_TICKS).max(1).min(gap);
+            if target < position {
+                position.wrapping_sub(step)
+            } else {
+                position.wrapping_add(step)
+            }
+        };
+        self.position
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Gradual {
@@ -181,6 +224,80 @@ mod tests {
         gradual.cap(98);
         assert_eq!(run(&mut gradual, 0, 3), 98);
         assert_eq!(gradual.tick(0), 97);
+    }
+
+    fn at(level: u8) -> u16 {
+        u16::from(level) * FRACTION
+    }
+
+    fn lit(level: u8) -> Fade {
+        let mut fade = Fade::new();
+        fade.tick(level, false);
+        fade
+    }
+
+    #[test]
+    fn a_fade_starts_off_and_jumps_from_off_and_to_it_however_gentle() {
+        let mut fade = Fade::new();
+        assert_eq!(fade.position(), 0);
+        assert_eq!(fade.tick(CEILING, true), at(CEILING));
+        assert_eq!(fade.tick(0, true), 0);
+        assert_eq!(fade.tick(52, true), at(52));
+    }
+
+    #[test]
+    fn a_fade_that_isnt_gentle_jumps() {
+        let mut fade = lit(CEILING);
+        assert_eq!(fade.tick(50, false), at(50));
+        fade.tick(100, true);
+        assert_eq!(fade.tick(100, false), at(100));
+    }
+
+    #[test]
+    fn a_gentle_fade_takes_a_quarter_second_over_a_level_a_step_at_a_time() {
+        for (from, to) in [(150, 149), (149, 150), (51, 50)] {
+            let mut fade = lit(from);
+            for tick in 1..=FADE_TICKS {
+                let now = fade.tick(to, true);
+                assert_eq!(now.abs_diff(at(from)), tick, "{from} → {to}");
+            }
+            assert_eq!(fade.tick(to, true), at(to));
+        }
+    }
+
+    #[test]
+    fn a_gentle_fade_closes_in_and_never_overshoots() {
+        let mut fade = lit(100);
+        let mut seed = 1u32;
+        for _ in 0..10_000 {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let level = 1 + (seed >> 16) as u8 % CEILING;
+            for _ in 0..=(seed >> 24) % 40 {
+                let before = fade.position();
+                let after = fade.tick(level, true);
+                let target = at(level);
+                assert!(after.abs_diff(target) < before.abs_diff(target) || after == target);
+                assert!((before < target) == (after < target) || after == target);
+            }
+        }
+    }
+
+    #[test]
+    fn a_gentle_fade_trails_a_level_every_two_ticks_by_eight_levels_at_most() {
+        let mut fade = lit(CEILING);
+        let mut worst = 0;
+        for level in (50..CEILING).rev() {
+            for _ in 0..2 {
+                worst = worst.max(fade.tick(level, true) - at(level));
+            }
+        }
+        assert_eq!(worst, at(8));
+        let mut ticks = 0;
+        while fade.position() != at(50) {
+            fade.tick(50, true);
+            ticks += 1;
+            assert!(ticks < 2 * 64, "still at {}", fade.position());
+        }
     }
 
     #[test]

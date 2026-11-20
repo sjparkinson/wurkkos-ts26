@@ -4,6 +4,7 @@
 //! cell has no protection of its own.
 
 use crate::battery::{self, Protection, Verdict};
+use crate::gradual::Fade;
 use crate::ramp::CEILING;
 use crate::selftest::Faults;
 use crate::sensors::{Convert, GROUND_MAX, Reading, Schedule};
@@ -32,8 +33,10 @@ pub struct Limits {
     calibration: Calibration,
     protection: Protection,
     thermal: Thermal,
-    on: bool,
+    /// The UI's level on the last tick.
+    asked: u8,
     level: u8,
+    fade: Fade,
     /// A conversion starts before its tick's output is set, so a reading due
     /// now ran across the last two ticks.
     lit_before: bool,
@@ -50,8 +53,9 @@ impl Limits {
             calibration,
             protection: Protection::new(),
             thermal: Thermal::new(),
-            on: false,
+            asked: 0,
             level: 0,
+            fade: Fade::new(),
             lit_before: false,
             convert: None,
             bad_grounds: 0,
@@ -65,6 +69,12 @@ impl Limits {
 
     pub const fn level(&self) -> u8 {
         self.level
+    }
+
+    /// The light in [`crate::ramp::FRACTION`]ths of a level, which trails
+    /// [`Self::level`] only while heat alone moves it.
+    pub const fn position(&self) -> u16 {
+        self.fade.position()
     }
 
     pub const fn ceilings(&self) -> (u8, u8) {
@@ -87,18 +97,20 @@ impl Limits {
         self.schedule.rest();
         self.protection.rest();
         self.convert = None;
-        self.on = false;
+        self.asked = 0;
         self.level = 0;
+        self.fade = Fade::new();
     }
 
     #[inline(never)]
     pub fn tick(&mut self, ui: u8, result: Option<u16>) -> Step {
         let on = ui != 0;
-        if on && !self.on {
+        if on && self.asked == 0 {
             self.thermal.reset();
             self.protection.turn_on();
         }
-        self.on = on;
+        let steady = ui == self.asked;
+        self.asked = ui;
         let ui = ui.min(CEILING);
         let level = match on {
             true => ui
@@ -158,6 +170,7 @@ impl Limits {
         } else {
             0
         };
+        self.fade.tick(self.level, steady && self.level == thermal);
         Step {
             level: self.level,
             off,
@@ -172,7 +185,7 @@ mod tests {
 
     use super::*;
     use crate::TICKS_PER_SECOND;
-    use crate::ramp::LEVELS;
+    use crate::ramp::{FRACTION, LEVELS};
     use crate::sensors::{CYCLE_TICKS, FULL_SCALE};
     use crate::testing::{Adc, CALIBRATION, temperature_reading, voltage_reading};
     use crate::thermal::{self, FLOOR};
@@ -300,6 +313,61 @@ mod tests {
         run.ui = FLOOR - 10;
         run.adc.temperature = celsius(80);
         assert_eq!(run.secs(120), FLOOR - 10);
+    }
+
+    fn at(level: u8) -> u16 {
+        u16::from(level) * FRACTION
+    }
+
+    #[test]
+    fn heat_fades_the_light_between_levels_down_and_back_up() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.secs(2);
+        assert_eq!(run.limits.position(), at(CEILING));
+        let mut between = 0;
+        for degrees in [70, 25] {
+            run.adc.temperature = celsius(degrees);
+            let mut last = run.limits.position();
+            for _ in 0..120 * TICKS_PER_SECOND {
+                let level = run.tick();
+                let now = run.limits.position();
+                assert!(now.abs_diff(last) < FRACTION, "{last} → {now}");
+                assert!(now.abs_diff(at(level)) <= at(8), "{now} at level {level}");
+                between += u32::from(!now.is_multiple_of(FRACTION));
+                last = now;
+            }
+        }
+        assert!(between > 10 * u32::from(TICKS_PER_SECOND), "{between}");
+        assert_eq!(run.limits.position(), at(CEILING));
+    }
+
+    #[test]
+    fn a_ramp_by_hand_while_hot_moves_whole_levels() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.adc.temperature = celsius(80);
+        assert_eq!(run.secs(120), FLOOR);
+        run.ui = FLOOR + 20;
+        run.tick();
+        for ui in (1..FLOOR).rev() {
+            run.ui = ui;
+            let level = run.tick();
+            assert_eq!(level, ui);
+            assert_eq!(run.limits.position(), at(ui));
+        }
+    }
+
+    #[test]
+    fn a_low_cell_moves_whole_levels() {
+        let mut run = Run::new();
+        run.adc.voltage = voltage_reading(295);
+        run.ui = 50;
+        for _ in 0..11 * TICKS_PER_SECOND {
+            let level = run.tick();
+            assert_eq!(run.limits.position(), at(level));
+        }
+        assert_eq!(run.limits.level(), 20);
     }
 
     #[test]

@@ -49,6 +49,35 @@ pub fn output(level: u8) -> Output {
     }
 }
 
+/// Steps in a level, for a fade that moves finer than the table.
+pub const FRACTION: u16 = 16;
+
+const _: () = assert!(FRACTION.is_power_of_two());
+
+/// `position` in [`FRACTION`]ths of a level, lit only from level 1.
+pub fn faded(position: u16) -> Output {
+    let position = position.min(u16::from(CEILING) * FRACTION);
+    let Some(index) = (position / FRACTION).checked_sub(1) else {
+        return Output::OFF;
+    };
+    let Some(&below) = TABLE.get(usize::from(index)) else {
+        return Output::OFF;
+    };
+    let above = TABLE.get(usize::from(index.saturating_add(1)));
+    // Wrapping, since a checked u16 multiply links `__mulsi3`. The gap between
+    // two levels is under 700, so it can't wrap.
+    let gap = above.map_or(0, |&above| {
+        above
+            .saturating_sub(below)
+            .wrapping_mul(position % FRACTION)
+            / FRACTION
+    });
+    Output {
+        enable: true,
+        dsm: below.saturating_add(gap),
+    }
+}
+
 /// `const fn`, since the u64 maths would need `__mulsi3` and up at runtime.
 #[expect(
     clippy::arithmetic_side_effects,
@@ -110,5 +139,44 @@ mod tests {
     #[test]
     fn the_ceiling_is_the_top_of_the_table() {
         assert_eq!(output(CEILING).dsm, DSM_TOP);
+    }
+
+    #[test]
+    fn a_whole_level_fades_to_its_own_output() {
+        for level in 0..=LEVELS {
+            assert_eq!(faded(u16::from(level) * FRACTION), output(level));
+        }
+    }
+
+    #[test]
+    fn a_fade_climbs_between_levels_and_never_past_the_ceiling() {
+        let top = u16::from(CEILING) * FRACTION;
+        let mut last = output(1);
+        for position in FRACTION + 1..=top + 2 * FRACTION {
+            let now = faded(position);
+            assert!(now.enable, "{position}");
+            assert!(now.dsm >= last.dsm && now.dsm <= DSM_TOP, "{position}");
+            last = now;
+        }
+        assert_eq!(faded(top + 1), output(CEILING));
+        assert_eq!(faded(u16::MAX), output(CEILING));
+    }
+
+    #[test]
+    fn no_gap_between_two_levels_wraps_a_faded_multiply() {
+        let widest = TABLE.windows(2).map(|pair| pair[1] - pair[0]).max();
+        assert!(widest.is_some_and(|gap| gap < 700), "{widest:?}");
+    }
+
+    #[test]
+    fn a_fade_under_level_one_stays_off() {
+        assert!((0..FRACTION).all(|position| faded(position) == Output::OFF));
+    }
+
+    #[test]
+    fn halfway_between_two_levels_is_halfway_between_their_outputs() {
+        let (below, above) = (output(140).dsm, output(141).dsm);
+        let halfway = faded(140 * FRACTION + FRACTION / 2);
+        assert_eq!(halfway.dsm, (below + above) / 2);
     }
 }
