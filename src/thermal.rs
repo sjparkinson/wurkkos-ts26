@@ -46,6 +46,13 @@ const UP_PRESSURE: i16 = 16 * FRACTION;
 const MAX_STEP_DOWN: u8 = 8;
 /// Unmeasured.
 const DOWN_EVERY: u8 = 2;
+/// Above this level the same error steps down [`FAST_GAIN`] times as fast.
+/// The ramp's a cubic, so a level up here is more power than one lower down.
+/// At or below it nothing changes.
+const FAST_ABOVE: u8 = 120;
+/// The least that holds the thermal tests' head model inside their limits at
+/// level 150. Unmeasured.
+const FAST_GAIN: i16 = 2;
 const UP_EVERY: u8 = 4;
 /// -40 °C to 150 °C, for a part rated to 125 °C. Unmeasured.
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 233..=423;
@@ -222,7 +229,11 @@ impl Thermal {
         )]
         let over = smooth + trend * LOOKAHEAD - LIMIT_SIXTEENTHS;
         if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
-            let pressure = self.pressure.max(0).saturating_add(over);
+            let push = match level > FAST_ABOVE {
+                true => over.saturating_mul(FAST_GAIN),
+                false => over,
+            };
+            let pressure = self.pressure.max(0).saturating_add(push);
             let steps = (pressure / DOWN_PRESSURE).min(i16::from(MAX_STEP_DOWN));
             self.pressure = pressure
                 .saturating_sub(steps.saturating_mul(DOWN_PRESSURE))
@@ -734,20 +745,50 @@ mod tests {
         readings
     }
 
+    /// The highest level that steps down at the plain rate, where the tests of
+    /// the pressure's arithmetic run.
+    const PLAIN: u8 = FAST_ABOVE;
+
+    /// Where the ceiling's heading after `stepped` steps down from a light at
+    /// `level`. The first step pulls the ceiling down to the level.
+    fn after(stepped: u8, level: u8) -> u8 {
+        match stepped {
+            0 => CEILING,
+            stepped => level - stepped,
+        }
+    }
+
     #[test]
     fn the_rate_down_follows_how_far_over_the_limit_it_is() {
         for (over, every) in [(1, 64), (FRACTION, 4), (4 * FRACTION, 1)] {
             let mut thermal = Thermal::default();
             for step in 1..=3 {
                 for reading in 1..=every {
-                    thermal.sample(limit_plus(over), CEILING);
+                    thermal.sample(limit_plus(over), PLAIN);
                     let stepped = if reading == every { step } else { step - 1 };
                     assert_eq!(
                         thermal.ceiling.target(),
-                        CEILING - stepped,
+                        after(stepped, PLAIN),
                         "{over} over, step {step}, reading {reading}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn above_level_120_the_rate_down_doubles() {
+        assert_eq!((FAST_ABOVE, FAST_GAIN), (120, 2));
+        for (level, every) in [(PLAIN, 4), (PLAIN + 1, 2), (CEILING, 2)] {
+            let mut thermal = Thermal::default();
+            for reading in 1..=every {
+                thermal.sample(limit_plus(FRACTION), level);
+                let stepped = u8::from(reading == every);
+                assert_eq!(
+                    thermal.ceiling.target(),
+                    after(stepped, level),
+                    "level {level}, reading {reading}"
+                );
             }
         }
     }
@@ -783,21 +824,21 @@ mod tests {
     fn cooling_from_the_top_of_the_window_holds_and_keeps_the_pressure() {
         let mut thermal = Thermal::default();
         for _ in 0..5 {
-            thermal.sample(limit_plus(WINDOW + 1), CEILING);
+            thermal.sample(limit_plus(WINDOW + 1), PLAIN);
         }
-        assert_eq!(thermal.ceiling.target(), CEILING - 2);
-        thermal.sample(limit_plus(WINDOW), CEILING);
-        assert_eq!(thermal.ceiling.target(), CEILING - 2);
-        thermal.sample(limit_plus(WINDOW + 1), CEILING);
-        assert_eq!(thermal.ceiling.target(), CEILING - 3);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 2);
+        thermal.sample(limit_plus(WINDOW), PLAIN);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 2);
+        thermal.sample(limit_plus(WINDOW + 1), PLAIN);
+        assert_eq!(thermal.ceiling.target(), PLAIN - 3);
     }
 
     #[test]
     fn a_prediction_on_either_edge_of_the_window_holds_and_forgets_the_pressure() {
         let mut thermal = Thermal::default();
-        thermal.sample(limit_plus(50), CEILING);
+        thermal.sample(limit_plus(50), PLAIN);
         assert!(thermal.pressure > 0);
-        thermal.sample(limit_plus(-30), CEILING);
+        thermal.sample(limit_plus(-30), PLAIN);
         let smoothed = thermal.smoothed.as_ref().unwrap();
         assert_eq!(smoothed.now, LIMIT_SIXTEENTHS + 40);
         assert_eq!(thermal.pressure, 0);
@@ -886,10 +927,10 @@ mod tests {
     fn a_fast_rise_steps_down_long_before_the_smoothed_temperature_gets_there() {
         let mut thermal = Thermal::default();
         let start = fraction(LIMIT - 30);
-        thermal.sample(start, CEILING);
+        thermal.sample(start, PLAIN);
         for step in 1..=5 {
             assert_eq!(thermal.ceiling.target(), CEILING);
-            thermal.sample(start + step * fraction(6), CEILING);
+            thermal.sample(start + step * fraction(6), PLAIN);
         }
         let smoothed = thermal.smoothed.as_ref().unwrap();
         assert!(smoothed.now < LIMIT_SIXTEENTHS - 20 * FRACTION);
@@ -994,19 +1035,17 @@ mod tests {
         assert!(run.output < ui);
     }
 
-    /// The highest level the head model holds inside these tests' limits with
-    /// today's constants. From `CEILING` it warms to 3 K over the limit and
-    /// dips to about level 50 before it settles.
-    const TUNED: u8 = 120;
-
+    /// At the plain rate the top warmed to 3 K over the limit, and dipped to
+    /// about level 50 before it settled.
     #[test]
     fn the_top_settles_near_the_limit_without_hunting() {
         let mut run = Run::new();
         let mut head = Head::new(celsius(25));
         let mut noise = Noise(3);
-        let warming = closed_loop(&mut run, &mut head, TUNED, 4 * 60 * 10, &mut noise, 0);
+        let warming = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 0);
         assert!(warming.hottest <= LIMIT + 2, "{warming:?}");
-        let settled = closed_loop(&mut run, &mut head, TUNED, 4 * 60 * 10, &mut noise, 0);
+        assert!(warming.lowest > FLOOR + 10, "{warming:?}");
+        let settled = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 0);
         assert!(settled.hottest <= LIMIT, "{settled:?}");
         assert!(settled.lowest > FLOOR, "{settled:?}");
         assert!(settled.highest - settled.lowest <= 4, "{settled:?}");
@@ -1017,9 +1056,10 @@ mod tests {
         let mut run = Run::new();
         let mut head = Head::new(celsius(25));
         let mut noise = Noise(5);
-        let warming = closed_loop(&mut run, &mut head, TUNED, 4 * 60 * 10, &mut noise, 1);
+        let warming = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 1);
         assert!(warming.hottest <= LIMIT + 2, "{warming:?}");
-        let settled = closed_loop(&mut run, &mut head, TUNED, 4 * 60 * 10, &mut noise, 1);
+        assert!(warming.lowest > FLOOR + 10, "{warming:?}");
+        let settled = closed_loop(&mut run, &mut head, CEILING, 4 * 60 * 10, &mut noise, 1);
         assert!(settled.hottest <= LIMIT + 1, "{settled:?}");
         assert!(settled.lowest > FLOOR, "{settled:?}");
         assert!(settled.highest - settled.lowest <= 20, "{settled:?}");
