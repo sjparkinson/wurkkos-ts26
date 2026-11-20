@@ -1,8 +1,3 @@
-//! The power-on checks.
-//!
-//! The datasheet, the errata and the ATDF disagree about the factory fuse
-//! bytes, so the fuses are checked by field, and never written.
-
 use crate::regs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,14 +10,9 @@ pub struct Fuses {
 }
 
 impl Fuses {
-    /// - `WDTCFG` is 0. A non-zero PERIOD starts the watchdog at boot, with
-    ///   LOCK set (DS §19.3.1), and what a WINDOW alone does isn't in the
-    ///   datasheet.
-    /// - `OSCCFG.FREQSEL` is 20 MHz and `OSCLOCK` clear, since OSCLOCK stops
-    ///   the calibration loading (errata 2.2.1).
-    /// - `SYSCFG0.RSTPINCFG` is UPDI, so the light can still be reflashed.
-    /// - `APPEND` and `BOOTEND` are 0, where the whole-flash CRC scan expects
-    ///   the checksum where `xtask` puts it.
+    /// - A non-zero `WDTCFG` starts the watchdog at boot with LOCK set (DS40002204A §19.3.1).
+    /// - `OSCLOCK` stops the calibration loading (errata 2.2.1).
+    /// - `APPEND` and `BOOTEND` at 0 leave the CRC scan's checksum where `xtask` puts it.
     pub const fn ok(self) -> bool {
         self.wdtcfg == 0
             && self.osccfg & regs::FUSE_FREQSEL == regs::FUSE_FREQSEL_20MHZ
@@ -33,7 +23,6 @@ impl Fuses {
     }
 }
 
-/// Only a loop that stopped feeding the watchdog gets the chip reset by it.
 pub const fn hung(flags: u8) -> bool {
     flags & regs::RSTCTRL_WDRF != 0
 }
@@ -61,8 +50,6 @@ impl Faults {
 mod tests {
     use super::*;
 
-    /// The fields the check reads are right, and the rest as the datasheet has
-    /// them.
     const GOOD: Fuses = Fuses {
         wdtcfg: 0x00,
         osccfg: 0x02,

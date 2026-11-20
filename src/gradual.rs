@@ -1,13 +1,12 @@
 use crate::ramp::{CEILING, FRACTION};
 
-/// A fade closes a sixteenth of the gap a tick, and at least a step, so one
-/// level takes a quarter of a second. Unmeasured for what looks smooth.
 const FADE_TICKS: u16 = 16;
 
-// A power of two, since dividing a u16 by anything else links `__mulsi3`.
-const _: () = assert!(FADE_TICKS.is_power_of_two());
+const _: () = assert!(
+    FADE_TICKS.is_power_of_two(),
+    "dividing a u16 by anything else links __mulsi3"
+);
 
-/// A level in [`FRACTION`]ths that eases onto the level it's given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Fade {
     position: u16,
@@ -22,15 +21,12 @@ impl Fade {
         self.position
     }
 
-    /// Jumps to `level` unless `gentle`, and always from off or to it.
     pub fn tick(&mut self, level: u8, gentle: bool) -> u16 {
         let target = u16::from(level) * FRACTION;
         let position = self.position;
         self.position = if !gentle || level == 0 || position == 0 {
             target
         } else {
-            // Wrapping, as the step is at most the gap so can't pass the
-            // target, and a checked one links a panic.
             let gap = target.abs_diff(position);
             let step = (gap / FADE_TICKS).max(1).min(gap);
             if target < position {
@@ -65,8 +61,6 @@ impl Gradual {
         self.level
     }
 
-    /// Each step sits under the comparison that bounds it. Comparing with
-    /// `cmp`, or twice, hides that from the optimiser and links a panic.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "level is over target going down, so at least 1, and under it going up, \
@@ -90,7 +84,6 @@ impl Gradual {
         self.level
     }
 
-    /// Only where nothing can see the jump.
     pub const fn cap(&mut self, max: u8) {
         if self.level > max {
             self.level = max;

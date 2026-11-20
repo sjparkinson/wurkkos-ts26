@@ -1,6 +1,4 @@
-//! Checks on the linked firmware for what src/avr/rt.rs, src/avr/hw.rs and
-//! link.x assume but no compiler or linker error would catch. Opcodes are
-//! from the AVR Instruction Set Manual.
+//! Opcodes are from the AVR Instruction Set Manual.
 
 use ts26::regs::{VECTORS, addr};
 
@@ -24,6 +22,7 @@ pub fn check(elf: &Elf) -> Result<(), String> {
         .get(text.start as usize..text.end as usize)
         .ok_or(".text isn't in the flash image")?;
     protected_writes(text)?;
+    sleeps(text)?;
     no_panics(elf.symbols())
 }
 
@@ -221,6 +220,32 @@ fn protected_writes(text: &[u8]) -> Result<usize, String> {
     }
     if found == 0 {
         return Err("no CCP unlock in .text, but hw::init should set the clock through one".into());
+    }
+    Ok(found)
+}
+
+const SEI: u16 = 0x9478;
+const SLEEP: u16 = 0x9588;
+const RJMP_TO_THE_SLEEP_BEFORE: u16 = 0xCFFE;
+
+fn sleeps(text: &[u8]) -> Result<usize, String> {
+    let (mut found, mut at, mut before) = (0, 0, None);
+    while let Some(w) = word(text, at) {
+        if w == SLEEP {
+            let for_good = word(text, at + 2) == Some(RJMP_TO_THE_SLEEP_BEFORE);
+            if before != Some(SEI) && !for_good {
+                return Err(format!(
+                    "the `sleep` at {at:#06x} doesn't follow `sei`, so an interrupt that lands \
+                     between them is slept through"
+                ));
+            }
+            found += 1;
+        }
+        before = Some(w);
+        at += if is_two_words(w) { 4 } else { 2 };
+    }
+    if found == 0 {
+        return Err("no `sleep` in .text, but hw::wait_for_tick should have one".into());
     }
     Ok(found)
 }
@@ -534,6 +559,26 @@ mod tests {
     #[test]
     fn insists_on_at_least_one_protected_write() {
         assert!(protected_writes(&bytes([NOP, ST_Z_R25])).is_err());
+    }
+
+    #[test]
+    fn accepts_a_sleep_straight_after_sei_or_in_a_loop_of_its_own() {
+        let text = bytes([SEI, SLEEP, NOP, SLEEP, RJMP_TO_THE_SLEEP_BEFORE]);
+        assert_eq!(sleeps(&text), Ok(2));
+    }
+
+    #[test]
+    fn rejects_a_sleep_with_anything_between_it_and_sei() {
+        let err = sleeps(&bytes([SEI, NOP, SLEEP])).unwrap_err();
+        assert!(err.contains("0x0004"), "{err}");
+        assert!(sleeps(&bytes([SLEEP, NOP])).is_err());
+        assert!(sleeps(&bytes([SEI, NOP])).is_err(), "no sleep at all");
+    }
+
+    #[test]
+    fn a_sleep_in_the_address_word_of_an_instruction_is_not_one() {
+        let text = bytes([0x9180, SLEEP, SEI, SLEEP]);
+        assert_eq!(sleeps(&text), Ok(1));
     }
 
     #[test]

@@ -1,44 +1,15 @@
-//! A fake ATtiny1616 around `avr.rs`'s CPU, wired up like the TS26's driver,
-//! and the checks that run the real firmware on it.
+//! Guesses where DS40002204A is silent, all unconfirmed on a chip.
 //!
-//! This finds mistakes and proves nothing. It is one reading of the datasheet,
-//! run against code written from that same reading, and has never been
-//! compared with a real chip. It doesn't model resets, so a watchdog bite is a
-//! failed run, nor anything analogue. The board's rules have no section
-//! number, since they come from what the stock firmware does.
-//!
-//! Guesses where the datasheet is silent, all unconfirmed.
-//!
-//! - A TCA0 cycle is 2 × PER clocks, worked back from §20.3.3.4.4's frequency.
-//!   Whether OVF and the BUF copies (table 20-6) land on the same clock, and
-//!   what a BUF write on that clock does, aren't modelled.
-//! - A timer that's just been enabled isn't taken as being at BOTTOM, so the
-//!   whole first cycle runs at whatever PER is.
-//! - VPORTA.IN follows the pin at once. The real one stops following it in
-//!   power-down, and nothing says how soon after a wake it catches up
-//!   (§16.3.5).
-//! - Power-down wants PB0 back with PORT, since nothing says what a waveform
-//!   output holds with TCA0 stopped (§20.3.6), and CMP0 and CMP0BUF at 0,
-//!   since registers keep their contents through sleep (§11.2).
-//! - `sleep` with SREG.I clear and an interrupt still enabled is an error,
-//!   and `hw::halt` wants SREG.I clear too. The only evidence is figure 13-1
-//!   having SREG.I gate the wake-up.
-//! - The PIT follows a bit of a prescaler that counts from power-on, as
-//!   §23.5.2.2's example has it, so a new PERIOD ticks on that count's own
-//!   boundaries. Time moves in 512-cycle frames, and nothing shorter is
-//!   modelled.
-//! - A WDT.CTRLA write lands when the firmware's seen SYNCBUSY clear, or at
-//!   the next frame, and leaves the count running, since nothing says it
-//!   restarts it. Window mode written over normal waits for a `wdr` to start
-//!   its closed window (§19.3.3.2), and until then times out after the open
-//!   window alone.
-//! - A PORT interrupt's request lasts until its flag's cleared, even with the
-//!   sense turned off (§16.3.3). PA5's edges in power-down either raise the
-//!   flag or, with `flagless_wakes`, wake the CPU with none (table 16-3's note
-//!   1), since the switch holds still for a frame.
-//!
-//! Time counts instructions, not cycles, so the budgets take every
-//! instruction as the slowest, four clocks.
+//! - A TCA0 cycle is 2 × PER clocks (§20.3.3.4.4), and one just enabled runs a
+//!   whole first cycle.
+//! - VPORTA.IN follows the pin at once, power-down or not (§16.3.5).
+//! - `sleep` with SREG.I clear and an interrupt enabled is an error (figure 13-1).
+//! - The PIT ticks on a prescaler that counts from power-on (§23.5.2.2), in
+//!   frames of 512 RTC clocks, and nothing shorter is modelled.
+//! - A WDT.CTRLA write leaves the count running, and window mode waits for a
+//!   `wdr` to start its closed window (§19.3.3.2).
+//! - A PORT interrupt's request lasts until its flag's cleared (§16.3.3).
+//! - Every instruction takes four clocks.
 
 use std::iter;
 use std::ops::Range;
@@ -49,7 +20,7 @@ use ts26::board;
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
-use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, TICK_DEADLINE_CYCLES};
+use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, PASS_CLOCKS, TICK_DEADLINE_CYCLES};
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
 use crate::crc;
@@ -104,8 +75,7 @@ const _: () = assert!(CLOCK_HZ == CLK_PER);
 const WDT_SYNC_READS: u8 = 2;
 /// The PIT divides the same oscillator by 512, and the WDT by 32.
 const WDT_CLOCKS_PER_TICK: u32 = 16;
-/// Three cycles after ENABLE (§27.3.1), and no instruction is quicker than a
-/// cycle.
+/// Three cycles after ENABLE (§27.3.1).
 const CRC_START_INSTRUCTIONS: u64 = 3;
 /// Priority mode stalls the CPU, so a real chip may never show BUSY.
 const CRC_BUSY_READS: u8 = 2;
@@ -151,7 +121,6 @@ const DSM_SUM: usize = reg::GPIO_GPIOR3;
 
 /// Unmeasured; any non-zero count makes the firmware wait.
 const PIT_SYNC_READS: u8 = 2;
-/// A frame is 512 RTC clocks, so the PIT's shortest modelled period.
 const PIT_FRAME: u8 = regs::RTC_PERIOD_CYC512;
 /// Two to three WDT clocks (§19.3.6), and a `wdr` meanwhile is ignored.
 const WDR_SYNC_CYCLES: u64 = 3 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64;
@@ -164,15 +133,12 @@ const fn pit_frames(pitctrla: u8) -> u32 {
 #[derive(Clone, Copy, Default)]
 pub struct Report {
     pub stack: u16,
-    /// From the runs without overflows landed on purpose.
     pub loop_instructions: u64,
     pub off_instructions: u64,
-    /// A pass at 1 Hz.
     pub rest_instructions: u64,
     pub handler_instructions: u64,
     landed: u32,
     last_new: u32,
-    /// Presses at 1 Hz rest.
     woken: u32,
 }
 
@@ -254,7 +220,7 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     unhandled_interrupt_at_rest(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler at rest: {e}"))?;
     let examples = if examples { EXAMPLES } else { &[] };
-    let faults: [(FaultCheck, &str); 7] = [
+    let faults: [(FaultCheck, &str); 8] = [
         (slow_ticks, "with the slowest ticks"),
         (oscillator_stops, "with the 32 kHz oscillator stopped"),
         (
@@ -267,6 +233,10 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
         (
             flagless_wakes,
             "with presses that wake it without an interrupt",
+        ),
+        (
+            tick_lands_on_a_press,
+            "with a 1 Hz tick landing as a press speeds the PIT up",
         ),
     ];
     let power_on = &power_on;
@@ -305,15 +275,25 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
     if report.landed == 0 {
         return Err("no overflow ever landed mid-pass, so this checked nothing".into());
     }
+    let longest = report
+        .loop_instructions
+        .max(report.off_instructions)
+        .max(report.rest_instructions);
+    if longest > PASS_BUDGET {
+        return Err(format!(
+            "a pass took {longest} instructions, over the {PASS_BUDGET} that fit the \
+             {PASS_CLOCKS} WDT clocks watchdog.rs's sums allow it"
+        ));
+    }
     Ok(report)
 }
+
+const PASS_BUDGET: u64 = PASS_CLOCKS as u64 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64 / 4;
 
 type FaultCheck = fn(Sim, &mut Report) -> Result<(), String>;
 
 const LANDING_MARGIN: u32 = 2 * TICKS_PER_SECOND as u32;
 
-/// Overflows only land on the first time each instruction's reached, so past
-/// the first run's last new code the second would only repeat it.
 fn both_ways(
     power_on: &impl Fn() -> Result<Sim, String>,
     example: Option<&Example>,
@@ -349,8 +329,6 @@ fn run(
 const RANDOM_TICKS: usize = 20_000;
 
 fn ui_example(mut sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
-    // The level is the library's alone, so the run that wasn't cut short has
-    // checked it.
     let Some(level) = in_step(&mut sim, testing::samples(example.actions()), report)? else {
         return Ok(());
     };
@@ -391,15 +369,14 @@ fn script(words: &'static str) -> Result<impl Iterator<Item = Sample>, String> {
     Ok(testing::samples(actions))
 }
 
-/// The 32 kHz oscillator 30% slow and the 20 MHz one 5% fast (tables 36-13 and
-/// 36-12, full operating range, from characterisation).
+/// The 32 kHz oscillator 30% slow and the 20 MHz one 5% fast (tables 36-13 and 36-12).
 const SLOWEST_TICK_CYCLES: u64 = TICK_CYCLES * 105 / 70;
 const DEADLINE_CYCLES: u64 = TICK_DEADLINE_CYCLES as u64 * PWM_CYCLE;
-// Only a stopped oscillator may trip the deadline, since it stops the chip for
-// good.
-const _: () = assert!(4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES);
+const _: () = assert!(
+    4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES,
+    "only a stopped oscillator may trip the deadline, since it stops the chip for good"
+);
 
-/// The model's watchdog counts frames, so a slower PIT doesn't move it.
 fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.tick_cycles = SLOWEST_TICK_CYCLES;
     lit(&mut sim, 2 * TICKS_PER_SECOND, report)
@@ -443,10 +420,18 @@ fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Table 16-3's note 1: a press that's gone before the chip has woken from
-/// power-down wakes it with no interrupt.
+/// Table 16-3's note 1.
 fn flagless_wakes(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.flagless_wakes = true;
+    wakes_from_rest(sim, report)
+}
+
+fn tick_lands_on_a_press(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+    sim.chip.tick_on_speed_up = true;
+    wakes_from_rest(sim, report)
+}
+
+fn wakes_from_rest(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     let samples = script("wait:2s 1C wait:2s 1C wait:3s 3C wait:7s 3C wait:2s 1H")?;
     let end = in_step(&mut sim, samples, report)?;
     if end != Some(ts26::ui::FLOOR) {
@@ -479,15 +464,11 @@ fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 const HALT_BUDGET: u64 = 100;
 const DOWN_PERIODS: u64 = 4 * TICKS_PER_SECOND as u64;
 
-/// The stopped oscillator takes the tick and the watchdog with it, so
-/// `hw::wait_for_tick`'s deadline is all that's left. A tick lost with the
-/// oscillator running ends in a watchdog reset instead, which can't run here.
 fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     lit(&mut sim, 0, report)?;
     stops_at_the_deadline(sim, report)
 }
 
-/// With the switch held from off, so PB0's PWM runs with PB2 low.
 fn oscillator_stops_mid_press(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     let held = iter::repeat_n(
         Sample {
@@ -517,7 +498,6 @@ fn stops_at_the_deadline(mut sim: Sim, report: &mut Report) -> Result<(), String
         }
     }
     let took = sim.chip.now - stopped;
-    // The first cycle of the wait is a part of one.
     if took < DEADLINE_CYCLES - PWM_CYCLE {
         return Err(format!(
             "the PWM stopped after {} PWM cycles, before the deadline of {TICK_DEADLINE_CYCLES}",
@@ -552,7 +532,6 @@ fn stops_at_the_deadline(mut sim: Sim, report: &mut Report) -> Result<(), String
             return Err("woke up or raised PB2 after stopping for good".into());
         }
     }
-    // `hw::halt` is a call deeper than the loop.
     report.stack = report.stack.max(sim.stack());
     Ok(())
 }
@@ -560,9 +539,6 @@ fn stops_at_the_deadline(mut sim: Sim, report: &mut Report) -> Result<(), String
 /// Nothing in the firmware touches TCB0.
 const VECTOR_UNHANDLED: u8 = regs::VECTOR_TCB0_INT as u8;
 
-/// A real chip's watchdog then resets it, which can't run here, so the run
-/// stops one PIT period short of the bite. Forcing it on the pass after a
-/// `wdr` leaves the most periods to watch.
 fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
     if sim.handled & 1 << VECTOR_UNHANDLED != 0 {
         return Err(format!(
@@ -571,7 +547,6 @@ fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
         ));
     }
     lit(&mut sim, TICKS_PER_SECOND / 4, &mut Report::default())?;
-    // A pass that feeds leaves the count lower than the pass before it did.
     let mut fed = false;
     for _ in 0..=FEED_TICKS {
         let before = sim.chip.wdt.ticks;
@@ -589,7 +564,6 @@ fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
     stops_for_good(sim)
 }
 
-/// With PA5's sense on, and asleep in power-down.
 fn unhandled_interrupt_at_rest(mut sim: Sim) -> Result<(), String> {
     in_step(&mut sim, script("wait:2s")?, &mut Report::default())?;
     if sim.chip.io[reg::RTC_PITCTRLA] & RTC_PERIOD == PIT_FRAME {
@@ -656,7 +630,6 @@ fn stops_for_good(mut sim: Sim) -> Result<(), String> {
     Ok(())
 }
 
-/// `None` if `Landing::Until` cut it short.
 fn in_step(
     sim: &mut Sim,
     samples: impl IntoIterator<Item = Sample>,
@@ -671,12 +644,10 @@ fn in_step_with(
     report: &mut Report,
     mut each: impl FnMut(&Rig),
 ) -> Result<Option<u8>, String> {
-    // The firmware reads the fuses before its first tick.
     let mut samples = samples.into_iter().peekable();
     let power_on = World::from(samples.peek().map_or(Scene::NORMAL, |s| s.scene));
     sim.chip.world = power_on;
     if power_on.scene.corrupt_flash {
-        // The checksum's byte is never code, however big the firmware gets.
         let byte = sim
             .chip
             .flash
@@ -711,7 +682,6 @@ fn in_step_with(
         let powered_down = sim.chip.power_downs > power_downs;
         rig.tick_in(sample.pressed, &sample.scene);
         let woken = was_slow && !rig.ticked && !rig.pace.slow();
-        // A real tick never sees that many handlers on top of the pass.
         if !landing && rig.ticked {
             report.loop_instructions = report.loop_instructions.max(took);
         }
@@ -738,7 +708,6 @@ fn in_step_with(
         }
         each(&rig);
         paced(&sim.chip, &rig, took, woken).map_err(at)?;
-        // The sleep that ended this pass answers the state the pass left.
         let resting = rig.powers_down();
         if (rig.ticked || woken) && powered_down != resting {
             return Err(at(format!(
@@ -756,8 +725,6 @@ fn in_step_with(
     Ok(finished.then(|| rig.level()))
 }
 
-/// The firmware's PIT, watchdog and passes against the library's pace, after
-/// a frame.
 fn paced(chip: &Chip, rig: &Rig, took: u64, woken: bool) -> Result<(), String> {
     if woken && took == 0 {
         return Err("the switch changed at rest, but the firmware slept through it".into());
@@ -795,8 +762,6 @@ const fn on(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
-/// The .rodata table, the .data static's starting values, then a byte it
-/// doesn't touch.
 const PROBE_EXPECTED: [u8; 7] = [0x12, 0x34, 0x56, 0x9A, 0xBC, 0xDE, 0];
 
 pub fn probe(elf: &Elf) -> Result<(), String> {
@@ -822,8 +787,6 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
     Ok(())
 }
 
-/// examples/guards.rs asks for power-down four times lit, once charging the
-/// filter on PB0 and once off.
 pub fn guards(elf: &Elf) -> Result<(), String> {
     let linked = Linked::of(elf)?;
     let mut sim = linked.boot(elf.flash_image())?;
@@ -878,7 +841,6 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
     let load = MAPPED + image.len() as u16;
     image.extend(values);
 
-    // An odd start, away from the edges of SRAM, so off-by-ones show.
     let start = SRAM.start + 0x11;
     let moved = Layout {
         data: start..start + 5,
@@ -898,7 +860,6 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
     Ok(())
 }
 
-/// (register, byte) for each `ldi`, in src/avr/rt.rs's order.
 fn loads(l: &Layout) -> Vec<(u8, u8)> {
     [
         (26, l.data.start),
@@ -947,8 +908,7 @@ fn patch_startup(
     Ok(())
 }
 
-/// Not a model of a stray jump to the reset vector, since only PORTB starts
-/// dirty and the rest of the chip is as a reset leaves it.
+/// Only PORTB starts dirty, so this isn't a model of a stray jump to the reset vector.
 fn found_lit(mut sim: Sim) -> Result<(), String> {
     sim.chip.io[reg::VPORTB_DIR] = ENABLE | PWM;
     sim.chip.io[reg::VPORTB_OUT] = ENABLE;
@@ -994,7 +954,6 @@ fn handled(image: &[u8], unhandled: u32) -> u32 {
     })
 }
 
-/// With the return address pushed.
 struct Landed {
     r: [u8; 32],
     sreg: u8,
@@ -1006,7 +965,6 @@ struct Sim {
     chip: Chip,
     stack_floor: u16,
     lowest_sp: u16,
-    /// Unlike `Chip::now`, stops while asleep.
     executed: u64,
     /// Word address.
     unhandled: u32,
@@ -1014,7 +972,6 @@ struct Sim {
     halt: u32,
     handled: u32,
     forced: Option<u8>,
-    /// The running handler has reached `hw::halt`, so it'll never return.
     abandoned: bool,
     landed: Option<Landed>,
     handler_steps: u64,
@@ -1064,9 +1021,6 @@ impl Sim {
         })
     }
 
-    /// A landed overflow isn't a real BOTTOM, and the handler can overwrite a
-    /// carry in CMP0BUF before BOTTOM takes it, so neither the sum in
-    /// `Chip::shows` nor the zero-duty count holds across one.
     fn land(&mut self) {
         if matches!(self.landing, Landing::Off) {
             return;
@@ -1097,7 +1051,6 @@ impl Sim {
         let pc = self.cpu.pc;
         let awake = !self.cpu.asleep;
         let handling = self.cpu.handling;
-        // `hw::halt` gets the main loop's rules, wherever it was reached from.
         self.chip.in_handler = handling.is_some() && !self.abandoned;
         self.chip.interrupts_on = self.cpu.flag(I);
         self.cpu.step(&mut self.chip)?;
@@ -1164,7 +1117,6 @@ impl Sim {
                     sp: self.cpu.sp,
                 });
             }
-            // Only these two can't have raised their flag again meanwhile.
             (Some(vector @ (VECTOR_PORTA | VECTOR_RTC_PIT)), None)
                 if self.chip.requests() & 1 << vector != 0 =>
             {
@@ -1184,8 +1136,6 @@ impl Sim {
                         .map_err(|e| format!("the handler for {}: {e}", vector_name(vector)))?;
                 }
             }
-            // A handler in `hw::halt` has stopped being one in all but
-            // LVL0EX, and sleeps from there until a reset.
             (Some(_), Some(_)) if self.abandoned => {}
             (Some(vector), Some(_)) => {
                 self.handler_steps += 1;
@@ -1202,8 +1152,6 @@ impl Sim {
         Ok(())
     }
 
-    /// `hw::halt` never returns, so the main loop never writes the high byte
-    /// of an access the handler interrupted, and `halt` may overwrite TEMP.
     const fn abandon(&mut self) {
         self.abandoned = true;
         self.chip.interrupted.clear();
@@ -1249,7 +1197,6 @@ impl Sim {
         ))
     }
 
-    /// To the next frame, the PIT's 64 Hz, whatever it's set to.
     fn tick(&mut self, pressed: bool) -> Result<u64, String> {
         let deep = self.cpu.asleep && self.chip.powering_down();
         self.chip.set_switch(pressed, deep)?;
@@ -1280,13 +1227,11 @@ impl Sim {
     }
 }
 
-/// Timed in frames, since it shares an oscillator with the PIT.
 #[derive(Default)]
 struct Wdt {
     ticks: u32,
     windowed: bool,
     busy: u8,
-    /// A WDT.CTRLA write that hasn't landed.
     pending: Option<u8>,
     last_wdr: Option<u64>,
 }
@@ -1365,8 +1310,7 @@ impl Boot {
 struct CrcScan {
     started: Option<(u64, u8)>,
     busy_reads: u8,
-    /// OK from reset, before any scan (§27.5.3), so the firmware has to wait
-    /// for its own.
+    /// OK from reset, before any scan (§27.5.3).
     status: u8,
 }
 
@@ -1389,7 +1333,6 @@ const WIDE: [(Wide, Range<usize>, &str); 2] = [
     (Wide::Adc0, reg::ADC0_RES..reg::ADC0_RES + 2, "ADC0"),
 ];
 
-/// The low byte's address and the byte TEMP holds, for each of `Wide`.
 #[derive(Clone, Copy, Default)]
 struct Temp([Option<(usize, u8)>; 2]);
 
@@ -1470,7 +1413,7 @@ struct Chip {
     porta_request: bool,
     flagless_wakes: bool,
     flagless: bool,
-    /// The start of the next frame.
+    tick_on_speed_up: bool,
     next_pit: u64,
     tick_cycles: u64,
     /// The PIT and the WDT both count it (§23.12.7's reset value, §19.3.2). A
@@ -1492,7 +1435,6 @@ struct Chip {
     in_handler: bool,
     interrupts_on: bool,
     temp: Temp,
-    /// What `temp` held as the running handler started.
     interrupted: Temp,
     power_downs: u32,
     register_writes: u32,
@@ -1516,6 +1458,7 @@ impl Chip {
             porta_request: false,
             flagless_wakes: false,
             flagless: false,
+            tick_on_speed_up: false,
             next_pit: TICK_CYCLES,
             tick_cycles: TICK_CYCLES,
             osc32k_stopped: false,
@@ -1559,10 +1502,7 @@ impl Chip {
         }
     }
 
-    /// A one-shot stand-in, kept out of `enabled`. A real stray interrupt stays
-    /// enabled and flagged, and whether one blocked by LVL0EX still wakes
-    /// `halt`'s `sleep` isn't in the datasheet. Either way PB2 is low first,
-    /// so the worst case is spinning dark until the watchdog resets the chip.
+    /// Unconfirmed: whether a stray interrupt blocked by LVL0EX still wakes `halt`'s `sleep`.
     const fn force_interrupt(&mut self, vector: u8) {
         self.forced = Some(vector);
     }
@@ -1579,7 +1519,6 @@ impl Chip {
         self.io[reg::VPORTB_OUT] & self.io[reg::VPORTB_DIR] & ENABLE != 0
     }
 
-    /// An input with its pull-up on glows dimly.
     fn aux(&self) -> u8 {
         let dir = self.io[reg::VPORTC_DIR];
         let pulled_up = (0..8).fold(0, |bits, pin| {
@@ -1593,7 +1532,6 @@ impl Chip {
         self.io[reg::VPORTC_OUT] & self.io[reg::VPORTC_DIR] & AUX
     }
 
-    /// Wrong writes are refused already; this catches one that never happened.
     fn clocked_as_modelled(&self) -> Result<(), String> {
         if self.io[reg::CLKCTRL_MCLKCTRLB] != CLOCK_10MHZ {
             return Err("never set the clock to 10 MHz".into());
@@ -1638,7 +1576,6 @@ impl Chip {
         Ok(())
     }
 
-    /// The one place simulated time moves.
     fn advance_to(&mut self, to: u64) -> Result<(), String> {
         self.now = to;
         if self.now < self.next_event {
@@ -1689,7 +1626,6 @@ impl Chip {
         u64::from(last_safe.saturating_sub(self.wdt.ticks)).min(DOWN_PERIODS)
     }
 
-    /// A count already past the new timeout bites as it lands.
     fn land_wdt(&mut self) -> Result<(), String> {
         let Some(value) = self.wdt.pending.take() else {
             return Ok(());
@@ -1864,7 +1800,6 @@ impl Chip {
     /// Table 20-6.
     fn bottom(&mut self) -> Result<(), String> {
         let tca = &mut self.tca;
-        // `now` has already moved past it.
         if !tca.ovf {
             tca.ovf_up_at = tca.next_bottom;
         }
@@ -2448,7 +2383,6 @@ impl Bus for Chip {
                 Ok(if busy { RTC_CTRLBUSY } else { 0 })
             }
             reg::RTC_PITINTFLAGS => {
-                // Finding it up is a wait that's ending, not one starting.
                 self.tick_polled |= !self.pit_flag;
                 Ok(if self.pit_flag { RTC_PI } else { 0 })
             }
@@ -2623,6 +2557,22 @@ impl Bus for Chip {
                          doesn't model: it moves in frames of 512 RTC clocks"
                     ));
                 }
+                let wdt = self.io[reg::WDT_CTRLA] | self.wdt.pending.unwrap_or(0);
+                if period != PIT_FRAME && wdt & WDT_WINDOW != 0 {
+                    return Err(
+                        "slows the PIT with the watchdog's window still on, which bites \
+                         before a slower tick could feed it"
+                            .into(),
+                    );
+                }
+                let was = self.io[a];
+                if self.tick_on_speed_up
+                    && was & RTC_PITEN != 0
+                    && was & RTC_PERIOD != PIT_FRAME
+                    && period == PIT_FRAME
+                {
+                    self.pit_flag = true;
+                }
                 self.io[a] = value;
                 self.pit_busy = PIT_SYNC_READS;
             }
@@ -2695,7 +2645,6 @@ impl Bus for Chip {
                 }
             }
             reg::ADC0_INTFLAGS => {
-                // A conversion still running sets it again when it finishes.
                 if value & ADC_RESRDY != 0 && !self.converting() {
                     self.adc.ready_at = None;
                 }
@@ -2711,7 +2660,6 @@ impl Bus for Chip {
             }
             _ if plain(a) => {
                 if a == reg::ADC0_CTRLA && value & ADC_ENABLE == 0 {
-                    // The next conversion catches the ADC starting up.
                     self.adc.last_setup = None;
                 }
                 self.io[a] = value;
@@ -2824,7 +2772,6 @@ mod tests {
         chip
     }
 
-    /// As `hw::set_watchdog` does it, waiting for the write to land.
     fn set_watchdog(chip: &mut Chip, value: u8) {
         unlocked(chip, reg::WDT_CTRLA, value).unwrap();
         while peek(chip, reg::WDT_STATUS).unwrap() != 0 {}
@@ -3087,8 +3034,6 @@ mod tests {
 
     const SLOT_13: u32 = 13 * VECTOR_WORDS * 2;
 
-    /// `sei`, then `nop`s up to vector 13's slot, which writes CMP0BUF with
-    /// r1, low byte then high, with `halt` at `halt`.
     fn forced(halt: u32) -> Sim {
         let sts = |a: usize| [0x9210, a as u16];
         let mut words = vec![0x9478u16];
@@ -3843,6 +3788,30 @@ mod tests {
     }
 
     #[test]
+    fn the_pit_only_slows_once_the_watchdogs_window_is_off() {
+        let mut chip = watched();
+        let slow = regs::RTC_PERIOD_CYC32768 | RTC_PITEN;
+        let err = pit(&mut chip, slow).unwrap_err();
+        assert!(err.contains("window still on"), "{err}");
+        unlocked(&mut chip, reg::WDT_CTRLA, REST).unwrap();
+        assert!(pit(&mut chip, slow).is_err(), "not landed yet");
+        while peek(&mut chip, reg::WDT_STATUS).unwrap() != 0 {}
+        pit(&mut chip, slow).unwrap();
+    }
+
+    #[test]
+    fn a_tick_can_be_made_to_land_as_the_pit_speeds_up_and_at_no_other_change() {
+        let mut chip = Chip::new(Vec::new());
+        chip.tick_on_speed_up = true;
+        let (fast, slow) = (PIT_FRAME | RTC_PITEN, regs::RTC_PERIOD_CYC32768 | RTC_PITEN);
+        for (value, lands) in [(fast, false), (slow, false), (fast, true), (fast, false)] {
+            pit(&mut chip, value).unwrap();
+            assert_eq!(chip.pit_flag, lands, "{value:#04x}");
+            chip.pit_flag = false;
+        }
+    }
+
+    #[test]
     fn the_pit_is_never_stopped_or_set_to_a_period_shorter_than_a_frame() {
         let mut chip = Chip::new(Vec::new());
         pit(&mut chip, PIT_FRAME | RTC_PITEN).unwrap();
@@ -4173,7 +4142,6 @@ mod tests {
         assert_eq!(err, "never cleared RSTCTRL.RSTFR");
     }
 
-    /// r16 is set up beforehand so the PIT handler has nothing to give back.
     fn ticking() -> Sim {
         let [sts0, sts1] = sts(16, reg::RTC_PITINTFLAGS as u16);
         let mut words = handled_by(VECTOR_RTC_PIT, &[sts0, sts1, RETI]);
@@ -4288,7 +4256,6 @@ mod tests {
     fn a_failed_run_says_which_it_was_and_whether_overflows_were_landing() {
         let power_on = || Ok(ticking());
         let failed = "the library says power down, but the firmware idled";
-        // Ticks 0 and 1 read the cell, so tick 2's the first it rests.
         let err = run(&power_on, None, Landing::Watch).err().unwrap();
         assert_eq!(err, format!("random switching: tick 2: {failed}"));
         let err = run(&power_on, None, Landing::Until(5)).err().unwrap();

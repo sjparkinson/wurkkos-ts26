@@ -1,7 +1,3 @@
-//! Not firmware. Runs hw.rs's power-down guard in `prepare_sleep`, which the
-//! firmware never asks it to, for `cargo xtask hex` to check on the simulator.
-//! Never flashed.
-
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]

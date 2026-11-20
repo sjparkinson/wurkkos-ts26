@@ -1,10 +1,3 @@
-//! The MCU's temperature sensor, from four accumulated conversions and the
-//! `SIGROW.TEMPSENSE1`/`TEMPSENSE0` calibration (DS40002204A §30.3.2.6).
-//!
-//! `d * gain` runs to 21 bits and there's no runtime 32-bit multiply, so
-//! [`sixteenths`] splits `d` into bytes. The split is exact, since
-//! `hi * g * 256` has nothing in its low six bits.
-
 use crate::{u16_from, u32_from};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,8 +12,6 @@ impl Calibration {
     }
 }
 
-/// Keeps every step of [`sixteenths`] inside a `u16`, at over three times
-/// what the ADC can produce.
 const MAX_DIFFERENCE: u16 = 0x3FFF;
 
 const _: () = {

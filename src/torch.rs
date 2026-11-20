@@ -7,23 +7,19 @@ use crate::sensors::Convert;
 use crate::temp::Calibration;
 use crate::ui::{Aux, Mode, Ui};
 
-/// Short, so the aux can't drain a flat cell that has no protection of its
-/// own. Unmeasured.
+// All five are unmeasured on this torch.
 pub const SHOW_TICKS: u16 = 3 * TICKS_PER_SECOND;
-
-/// Steady bright red would flatten a full cell in about a month. Unmeasured.
 pub const LOCKED_TICKS: u16 = 5 * TICKS_PER_SECOND;
-
-/// The 32 kHz oscillator that times it can be 30 % out. Unmeasured.
 pub const CHECK_TICKS: u16 = 5 * 60 * TICKS_PER_SECOND;
-
-/// Centivolts, read with the light off. Unmeasured.
 pub const AUX_DARK_BELOW: u16 = 330;
-
-/// Centivolts. The gap over [`AUX_DARK_BELOW`] is the hysteresis. Unmeasured.
 pub const AUX_LIT_FROM: u16 = 340;
 
 const _: () = assert!(AUX_DARK_BELOW < AUX_LIT_FROM);
+const _: () = assert!(
+    *crate::battery::PLAUSIBLE.start() < AUX_DARK_BELOW
+        && AUX_LIT_FROM < *crate::battery::PLAUSIBLE.end(),
+    "both are centivolts, as the cell's readings are"
+);
 const _: () = assert!(crate::battery::FORGET_TICKS <= CHECK_TICKS);
 
 #[derive(Clone, Debug)]
@@ -32,11 +28,8 @@ pub struct Torch {
     clicks: Clicks,
     ui: Ui,
     limits: Limits,
-    /// Ticks left of [`SHOW_TICKS`] or [`LOCKED_TICKS`].
     showing: u16,
-    /// Ticks of rest left until the next check of the cell, `0` meaning due.
     check_in: u16,
-    /// Reading the cell with the switch up and the light off.
     checking: bool,
     cell_low: bool,
 }
@@ -55,8 +48,6 @@ impl Torch {
         }
     }
 
-    /// `ticks` is what this tick is worth in 64 Hz ones, more than one only at
-    /// rest (`watchdog::Pace::ticks`).
     pub fn tick(&mut self, pressed: bool, adc: Option<u16>, ticks: u16) -> Option<Event> {
         self.showing = self.showing.saturating_sub(1);
         let down = self.switch.sample(pressed);
@@ -74,8 +65,6 @@ impl Torch {
         }
         let before = self.limits.health();
         let lit = self.level() > 0;
-        // A conversion still running when it goes quiet is read before it
-        // rests.
         if !self.quiet() {
             self.checking = false;
         } else if self.limits.convert().is_some() || (self.check_in == 0 && before != Health::Fault)
@@ -96,13 +85,10 @@ impl Torch {
                 self.checking = false;
             }
         }
-        // Restarted on every lit tick, so it counts from the first dark one.
         let health = self.limits.health();
         if health != Health::Good && (before == Health::Good || lit) {
             self.showing = SHOW_TICKS;
         }
-        // Checked again, so a pass that turns the light off has already
-        // rested if the firmware powers down straight after it.
         if self.resting() {
             self.limits.rest(ticks);
             self.check_in = self.check_in.saturating_sub(ticks);
@@ -112,8 +98,7 @@ impl Torch {
         event
     }
 
-    /// Inlined, each caller in the firmware's loop gets a copy, about 230
-    /// bytes of flash.
+    /// Inlined, each caller in the firmware's loop gets a copy, about 230 bytes of flash.
     #[inline(never)]
     const fn quiet(&self) -> bool {
         self.switch.settled()
@@ -122,15 +107,10 @@ impl Torch {
             && self.limits.level() == 0
     }
 
-    /// The firmware powers down while this holds. A press ends it on the tick
-    /// that sees it, in time to read the cell before a click can light it.
     pub const fn resting(&self) -> bool {
         self.quiet() && !self.checking
     }
 
-    /// The firmware ticks once a second while this holds, so nothing may be
-    /// counting ticks but the rest's own counts, which [`Torch::tick`] takes
-    /// in one go.
     pub const fn slow(&self) -> bool {
         self.resting() && self.clicks.idle() && self.showing == 0
     }
@@ -143,9 +123,6 @@ impl Torch {
         self.limits.convert()
     }
 
-    /// Off, while the switch is on its way to lighting it, runs the PWM at the
-    /// level it would light with PB2 low, to charge the filter on PB0 before
-    /// the converter starts (unmeasured).
     pub fn output(&self) -> Output {
         let charge = match self.clicks.pending() {
             Some(event) if self.limits.health() == Health::Good && !self.limits.weak() => {
@@ -363,7 +340,6 @@ mod tests {
         assert_eq!(torch.aux(), Aux::Red);
     }
 
-    /// Stops on the tick `event` arrives.
     fn tap(torch: &mut Rig, n: u8, event: Event) {
         for _ in 0..n {
             run(torch, true, 4);
@@ -1215,7 +1191,6 @@ mod tests {
     fn still_turns_off_after_hours_on() {
         let mut torch = Rig::default();
         click(&mut torch);
-        // Past where button::Clicks' tick count saturates.
         for _ in 0..4 {
             run(&mut torch, false, u16::MAX);
         }
@@ -1231,7 +1206,6 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Pace {
         Quick,
-        /// Some rests long enough for checks of the cell.
         Slow,
     }
 
@@ -1300,7 +1274,6 @@ mod tests {
         }
     }
 
-    /// Written apart from `Ui` so the two can be compared.
     #[derive(Debug)]
     struct Model {
         mode: Mode,
@@ -1311,7 +1284,6 @@ mod tests {
         cell_low: bool,
         weak: bool,
         check_in: u16,
-        /// `0` for none yet.
         checked_at: u32,
     }
 
@@ -1365,8 +1337,6 @@ mod tests {
         }
     }
 
-    /// So a change that stops the noise reaching a state fails rather than
-    /// quietly checking less.
     #[derive(Debug, Default)]
     struct Seen {
         lit: u32,
@@ -1433,11 +1403,8 @@ mod tests {
         let start_up = pace == Pace::Slow && rng.next_u16().is_multiple_of(2);
         let (mut pressed, mut switch_left) = (start_up, 0);
         let (mut cell, mut head) = (Source::Steady(3516), Source::Steady(2124));
-        // One result in `lose` never arrives, and `0` is none of them.
         let (mut lose, mut world_left) = (0, 0);
         let (mut up, mut faulted_for) = (0_u32, 0_u32);
-        // Two voltage conversions in a row are a turn, whose second is the
-        // reading.
         let (mut converted, mut converted_before) = (None, None);
         let mut lit_before_last = false;
         let (mut asked_before, mut shown_before) = (0, Output::OFF);
@@ -1496,7 +1463,6 @@ mod tests {
                     ignored = true;
                 }
             }
-            // Unloaded only if the light was out for both conversions' ticks.
             let at_a_check = model.checked_at != 0 && t == model.checked_at + 2 && up >= 3;
             let voltage = Some(Channel::Voltage);
             if converted == voltage && converted_before == voltage {
@@ -1533,7 +1499,6 @@ mod tests {
             };
             check!(t, rig.torch.ui.output_level() == asked, "{model:?}");
 
-            // The level.
             check!(t, level <= CEILING, "level {level}");
             let shown = rig.output();
             let heat = level == rig.limits.ceilings().1 && asked == asked_before;
@@ -1584,7 +1549,6 @@ mod tests {
                 check!(t, moved <= 1, "{level_before} to {level}");
             }
 
-            // What's wrong.
             match (health_before, health) {
                 (Health::Good, Health::Good)
                 | (Health::Flat, Health::Flat)
@@ -1632,7 +1596,6 @@ mod tests {
                 }
             }
 
-            // The aux.
             let aux = rig.aux();
             check!(t, level == 0 || aux == Aux::Off, "{aux:?} at level {level}");
             let showing = t < model.dark_at;
@@ -1646,7 +1609,6 @@ mod tests {
             };
             check!(t, aux == expected, "{aux:?}, {health:?}, {model:?}");
 
-            // Resting.
             let resting = rig.resting();
             if resting {
                 check!(t, level == 0, "resting at level {level}");
@@ -1715,7 +1677,6 @@ mod tests {
             seen.white += u32::from(aux == Aux::White);
             seen.ignored_presses += u32::from(ignored);
 
-            // Nothing changes a fault, so there's no point running one long.
             faulted_for = if health == Health::Fault {
                 faulted_for + 1
             } else {

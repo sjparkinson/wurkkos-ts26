@@ -1,9 +1,3 @@
-//! Thermal regulation, with temperature readings in and a ceiling on the level
-//! out.
-//!
-//! None of the numbers has been measured on a TS26, and nothing else holds
-//! the light under the top of the ramp.
-
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
@@ -17,44 +11,25 @@ pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
 
-/// The stock firmware's figure for Wurkkos lights. Unmeasured, and nobody
-/// knows what the MCU reads with the head at 50 °C.
+// Every number from here down is unmeasured on this torch.
 pub const LIMIT: u16 = celsius(50);
-
-/// The stock firmware's level number, on this firmware's curve, so likely not
-/// the same brightness. Unmeasured.
 pub const FLOOR: u8 = 50;
 
 const _: () = assert!(FLOOR <= CEILING);
 
 const FRACTION: i16 = 16;
-/// The stock firmware's figure, unmeasured on this light.
 const HISTORY: usize = 8;
-/// The stock firmware's figure, unmeasured on this light.
 const LOOKAHEAD: i16 = 4;
-/// The stock firmware's figure, unmeasured on this light.
 const WINDOW: i16 = 2 * FRACTION;
-/// Unmeasured.
 const WARMING: i16 = FRACTION;
-/// Unmeasured.
 const MAX_TREND: i16 = 64 * FRACTION;
-/// Unmeasured.
 const DOWN_PRESSURE: i16 = 4 * FRACTION;
-/// Unmeasured.
 const UP_PRESSURE: i16 = 16 * FRACTION;
-/// Unmeasured.
 const MAX_STEP_DOWN: u8 = 8;
-/// Unmeasured.
 const DOWN_EVERY: u8 = 2;
-/// Above this level the same error steps down [`FAST_GAIN`] times as fast.
-/// The ramp's a cubic, so a level up here is more power than one lower down.
-/// At or below it nothing changes.
 const FAST_ABOVE: u8 = 120;
-/// The least that holds the thermal tests' head model inside their limits at
-/// level 150. Unmeasured.
 const FAST_GAIN: i16 = 2;
 const UP_EVERY: u8 = 4;
-/// -40 °C to 150 °C, for a part rated to 125 °C. Unmeasured.
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 233..=423;
 
 const LIMIT_SIXTEENTHS: i16 = LIMIT.cast_signed() * FRACTION;
@@ -68,8 +43,6 @@ pub fn plausible(sixteenths: u16) -> bool {
 const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
     *PLAUSIBLE.start() * FRACTION.cast_unsigned()..=*PLAUSIBLE.end() * FRACTION.cast_unsigned();
 
-/// The clamps to these never change a value. They're there so release builds,
-/// which check for overflow, can see the sums can't wrap.
 const NOW_LOW: i16 = PLAUSIBLE_SIXTEENTHS.start().cast_signed();
 const NOW_HIGH: i16 = PLAUSIBLE_SIXTEENTHS.end().cast_signed();
 
@@ -87,7 +60,6 @@ const _: () = {
     assert!(low - swing - LIMIT_SIXTEENTHS as i32 >= i16::MIN as i32);
 };
 
-/// Unmeasured.
 const JUMP: u16 = 6 * FRACTION.cast_unsigned();
 const GLITCHES: u8 = 3;
 
@@ -115,8 +87,7 @@ struct Smoothed {
 }
 
 impl Smoothed {
-    /// The history's filled in once it's in place, since building it whole
-    /// pulls in `memcpy`, which is bigger than the `memset`.
+    /// Building the history whole pulls in `memcpy`, which is bigger than this `memset`.
     fn start(slot: &mut Option<Self>, reading: u16) -> &mut Self {
         let now = reading.cast_signed();
         let smoothed = slot.insert(Self {
@@ -206,8 +177,6 @@ impl Thermal {
             }
             return;
         }
-        // Out of the match rather than read back, so release builds can see
-        // the range it's in.
         let (smoothed, smooth) = match &mut self.smoothed {
             Some(smoothed) if reading.abs_diff(smoothed.last) <= JUMP => {
                 let smooth = smoothed.follow(reading);
@@ -337,9 +306,7 @@ mod tests {
         kelvin.saturating_mul(FRACTION as u16)
     }
 
-    /// Unmeasured, with power taken as proportional to the delta-sigma value.
-    /// It only gives the controller some lag to fight. In thousandths of a
-    /// kelvin.
+    /// Unmeasured: a guess at a head, in thousandths of a kelvin.
     struct Head {
         head: i32,
         mcu: i32,
@@ -745,12 +712,8 @@ mod tests {
         readings
     }
 
-    /// The highest level that steps down at the plain rate, where the tests of
-    /// the pressure's arithmetic run.
     const PLAIN: u8 = FAST_ABOVE;
 
-    /// Where the ceiling's heading after `stepped` steps down from a light at
-    /// `level`. The first step pulls the ceiling down to the level.
     fn after(stepped: u8, level: u8) -> u8 {
         match stepped {
             0 => CEILING,
@@ -1035,8 +998,6 @@ mod tests {
         assert!(run.output < ui);
     }
 
-    /// At the plain rate the top warmed to 3 K over the limit, and dipped to
-    /// about level 50 before it settled.
     #[test]
     fn the_top_settles_near_the_limit_without_hunting() {
         let mut run = Run::new();

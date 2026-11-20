@@ -1,6 +1,3 @@
-//! `cargo xtask <command>` is the AVR build and the steps around it that cargo
-//! can't do.
-
 #[cfg(test)]
 mod atdf;
 mod avr;

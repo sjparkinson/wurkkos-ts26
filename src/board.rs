@@ -1,23 +1,12 @@
-//! The pin map, as bit numbers within each port.
-
 use crate::ui::Aux;
 
-/// PA0, never written.
 pub const UPDI: u8 = 0;
-/// PA1, the cell's divider, AIN1. Never a pull-up.
 pub const BATTERY: u8 = 1;
-/// PA5, active low against its pull-up.
 pub const SWITCH: u8 = 5;
-/// PB0, TCA0's WO0.
 pub const PWM: u8 = 0;
-/// PB2, the MP3432's enable, high on. Low whenever the light's off, and never
-/// a pull-up.
 pub const ENABLE: u8 = 2;
-/// PC1.
 pub const AUX_BLUE: u8 = 1;
-/// PC2.
 pub const AUX_GREEN: u8 = 2;
-/// PC3.
 pub const AUX_RED: u8 = 3;
 pub const AUX_PINS: u8 = 1 << AUX_BLUE | 1 << AUX_GREEN | 1 << AUX_RED;
 
@@ -37,7 +26,6 @@ pub const fn aux_pin(colour: Aux) -> u8 {
     }
 }
 
-/// The rest of [`aux_pin`]'s glow dimly.
 pub const fn aux_bright(colour: Aux) -> u8 {
     match colour {
         Aux::Red => 1 << AUX_RED,

@@ -1,18 +1,9 @@
-//! The cell's voltage, and what to do as it runs flat.
-//!
-//! The cell is unprotected, and the MP3432 runs on down to 0.8 V once it's
-//! started, so nothing but this module stops the cell being run flat.
-//!
-//! `reading × 473` needs 21 bits and there's no runtime 32-bit multiply, so
-//! [`centivolts`] splits the reading into bytes.
-
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::{CYCLE_TICKS, FULL_SCALE};
 use crate::{TICKS_PER_SECOND, u16_from, u32_from};
 
-/// The stock firmware's slope for this board, against a default of 1024,
-/// higher reading lower. Calibrated on one sample, unmeasured on this torch.
+/// The stock firmware's calibration for this board, unmeasured on this torch.
 pub const SLOPE: u16 = 1094;
 
 /// 1.1 V in centivolts times the 4.3 divider ratio a slope of 1024 stands for.
@@ -59,31 +50,15 @@ pub const SAMPLES_PER_SECOND: u16 = TICKS_PER_SECOND / u16_from(CYCLE_TICKS);
 
 const _: () = assert!(TICKS_PER_SECOND.is_multiple_of(u16_from(CYCLE_TICKS)));
 
-/// Unmeasured.
+// Centivolts, samples and ticks from here down are all unmeasured on this torch.
 pub const STEP_DOWN_BELOW: u16 = 300;
-
-/// The stock firmware's default. Unmeasured.
 pub const OFF_BELOW: u16 = 290;
-
-/// Unmeasured.
 pub const RECOVER_AT: u16 = 330;
-
-/// Judged on one sample, since a press only gets one before its click counts,
-/// so it sits well above where a flat cell rests. Unmeasured.
 pub const CHARGED_AT: u16 = 360;
-
-/// Likely, and unmeasured. 10 MHz wants VDD at 2.7 V or more (DS40002204A
-/// table 36-3) with no BOD, and whether this keeps VDD there depends on a
-/// regulator nobody has identified.
+/// 10 MHz wants VDD at 2.7 V or more (DS40002204A table 36-3).
 pub const CUT_BELOW: u16 = 280;
-
-/// Lit samples in a row, so a turn-on's inrush can only ever be the first.
 pub const CUT_SAMPLES: u8 = 2;
-
-/// Read with the light off, so it sits a sag above [`CUT_BELOW`]. Likely, and
-/// unmeasured.
 pub const LIGHT_FROM: u16 = 300;
-
 /// From the MP3432's datasheet.
 const BOOST_START: u16 = 270;
 
@@ -92,41 +67,24 @@ const _: () = assert!(CUT_BELOW < LIGHT_FROM && LIGHT_FROM < CHARGED_AT);
 const _: () = assert!(OFF_BELOW < STEP_DOWN_BELOW && STEP_DOWN_BELOW < RECOVER_AT);
 const _: () = assert!(RECOVER_AT < CHARGED_AT && CHARGED_AT < *PLAUSIBLE.end());
 
-/// Unmeasured.
 pub const HOLD_SAMPLES: u16 = SAMPLES_PER_SECOND;
-
-/// The stock firmware waits about six seconds between step-downs. Unmeasured.
 pub const STEP_SAMPLES: u16 = SAMPLES_PER_SECOND * 5;
-
-/// Unmeasured.
 pub const RECOVER_SAMPLES: u16 = SAMPLES_PER_SECOND * 4;
-
-/// Unmeasured.
 pub const STEP: u8 = 15;
-
-/// Unmeasured.
 pub const FLAT_STEP: u8 = 30;
-
-/// Any sooner and clicking off and on restarts the filter from the unloaded
-/// voltage, which keeps a nearly flat cell running. Unmeasured.
 pub const FORGET_TICKS: u16 = TICKS_PER_SECOND * 60 * 5;
-
-/// The bottom is low on purpose, since a dying cell under load can really
-/// read 1.5 V and that's no time to call it garbage. Unmeasured.
 pub const PLAUSIBLE: core::ops::RangeInclusive<u16> = 100..=440;
 
 pub fn plausible(centivolts: u16) -> bool {
     PLAUSIBLE.contains(&centivolts)
 }
 
-/// The filter holds 16 times a sample and adds twice another before taking
-/// an eighth off.
-const _: () = assert!(u32_from(*PLAUSIBLE.end()) * 18 <= u32_from(u16::MAX));
+const _: () = assert!(
+    u32_from(*PLAUSIBLE.end()) * 18 <= u32_from(u16::MAX),
+    "the filter holds 16 times a sample and adds twice another"
+);
 
-/// Unmeasured.
 pub const GLITCHES: u8 = 3;
-
-/// Unmeasured.
 const DOWN_EVERY: u8 = 1;
 const UP_EVERY: u8 = 4;
 
@@ -139,7 +97,6 @@ pub enum Verdict {
 
 #[derive(Clone, Debug)]
 pub struct Protection {
-    /// Sixteenths of a centivolt.
     filtered: u16,
     low_samples: u16,
     flat_samples: u16,
@@ -147,7 +104,6 @@ pub struct Protection {
     cut_samples: u8,
     implausible: u8,
     flat: bool,
-    /// The last reading with the light off was under [`LIGHT_FROM`].
     weak: bool,
     ceiling: Ceiling,
     rested: u16,
@@ -195,7 +151,6 @@ impl Protection {
         self.weak = centivolts < LIGHT_FROM;
     }
 
-    /// Flat rather than lit, on a cell the last unloaded reading found weak.
     pub const fn turn_on(&mut self) {
         self.flat |= self.weak;
     }
@@ -303,9 +258,6 @@ impl Protection {
         Verdict::Ceiling(from.saturating_sub(drop).max(1))
     }
 
-    /// Checked rather than saturating, since a saturated sum reads as a high
-    /// voltage and holds protection off. The assert on [`PLAUSIBLE`] makes
-    /// the overflow unreachable.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "an eighth of filtered is never more than filtered"

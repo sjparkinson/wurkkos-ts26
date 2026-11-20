@@ -1,10 +1,6 @@
-//! The firmware's loop. On the host it builds to a stub, so the workspace
-//! builds and tests there.
-
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
-// Only the AVR clippy sees these, so it's the only check on hw.rs and rt.rs.
 #![cfg_attr(
     target_arch = "avr",
     deny(
@@ -39,7 +35,6 @@ extern "C" fn main() -> ! {
     use ts26::torch::{Changes, Torch};
     use ts26::watchdog::{Pace, Step};
 
-    // First, since PB2 floats from reset until it's an output.
     hw::hold_enable_low();
 
     let faults = Faults {
@@ -62,8 +57,6 @@ extern "C" fn main() -> ! {
         } else if hw::wait_for_tick(torch.resting() && pace.powers_down()) {
             false
         } else {
-            // Most likely a stopped 32 kHz oscillator with the PWM running, which
-            // stops the watchdog too.
             hw::halt();
         };
 
@@ -97,8 +90,6 @@ extern "C" fn main() -> ! {
     }
 }
 
-// `halt` rather than a spin, which would drain the cell if the 32 kHz
-// oscillator, and so the watchdog, had stopped.
 #[cfg(target_arch = "avr")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

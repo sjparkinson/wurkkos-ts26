@@ -1,12 +1,3 @@
-//! The one ADC, shared between the cell's voltage, its own ground and the
-//! temperature. Ground reads as nearly nothing, so an ADC stuck on a
-//! plausible voltage fails it.
-//!
-//! The first conversion after a setup is thrown away. The datasheet doesn't
-//! ask for that, but gives the ADC settling time on a new channel and the
-//! reference about 25 µs to start (DS40002204A §30.3.2.4, §36.15), and PA1
-//! sits behind tens of kilohms of divider.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Voltage,
@@ -23,23 +14,17 @@ pub struct Convert {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reading {
     Voltage(u16),
-    /// No result at all reads as `u16::MAX`, since 0 would pass.
     Ground(u16),
     Temperature(u16),
 }
 
 pub const FULL_SCALE: u16 = 4 * 1023;
 
-/// Likely. 3 LSb a sample for each of the four, from table 36-27's typical
-/// absolute error at 1.1 V, which gives no maximum (DS40002204A §36.16).
+/// Likely: 3 LSb a sample, DS40002204A table 36-27's typical error, which gives no maximum.
 pub const GROUND_MAX: u16 = 4 * 3;
 
-/// Four readings a second of each channel, which `battery::Protection` and
-/// `thermal::Thermal` assume.
 pub const CYCLE_TICKS: u8 = 16;
-/// After the voltage rather than the temperature sensor's long sample, and
-/// late enough that a check of the cell at rest is over first. That ground
-/// settles from either in one thrown-away conversion is unconfirmed.
+/// Unconfirmed: that ground settles in one thrown-away conversion.
 const GROUND_AT: u8 = CYCLE_TICKS / 4;
 const TEMPERATURE_AT: u8 = CYCLE_TICKS / 2;
 

@@ -1,11 +1,6 @@
-//! The UI spec. A press becomes a hold after about 375 ms, and clicks count
-//! after about 220 ms up, or as the last click that could mean anything is
-//! let go (1C while on, 3C from off; lockout always waits).
-
 use super::{Action, parse};
 use Expect::{Level, Off};
 
-/// On the example's last tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expect {
     Off,
@@ -21,7 +16,6 @@ impl Expect {
     }
 }
 
-/// Played from a fresh cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Example {
     pub name: &'static str,
@@ -45,7 +39,6 @@ const fn ex(name: &'static str, script: &'static str, expect: Expect) -> Example
 }
 
 pub const EXAMPLES: &[Example] = &[
-    // Off. Nothing's remembered.
     ex("Off: 1C", "1C", Level(52)),
     ex("Off: 1C, after using it", "1C 1H 1C 1C", Level(52)),
     ex("Off: 3C", "3C 1C", Off),
@@ -58,7 +51,6 @@ pub const EXAMPLES: &[Example] = &[
     ex("Off: 1H, then 1C", "1H 1C", Off),
     ex("Off: 1C, after 1H", "1H 1C 1C", Level(52)),
     ex("Off: Anything else", "2C 2H:2s wait:1s", Off),
-    // At rest it ticks once a second, and a press wakes it to 64 Hz.
     ex("Rest: 1C", "wait:2s 1C", Level(52)),
     ex("Rest: 1C, on a rest tick", "wait:1984ms 1C", Level(52)),
     ex("Rest: 1H", "wait:2s 1H", Level(17)),
@@ -69,7 +61,6 @@ pub const EXAMPLES: &[Example] = &[
         "wait:400s 1C",
         Level(52),
     ),
-    // On. A level a tick. Each 1H reverses the last, and the first goes up.
     ex("On: 1C", "1C 1C", Off),
     ex("On: 1H", "1C 1H:3s", Level(150)),
     ex("On: 1H again", "1C 1H:3s 1H:3s", Level(17)),
@@ -83,8 +74,6 @@ pub const EXAMPLES: &[Example] = &[
         "1C 1H:3s 1C 1C 1H:3s",
         Level(150),
     ),
-    // The first click turns it off at once, and nothing counts until the
-    // switch has been left alone.
     ex(
         "On: More clicks, or a hold after clicks",
         "1C 1H:1s 2C",
@@ -94,13 +83,11 @@ pub const EXAMPLES: &[Example] = &[
     ex("On: 2C, then 1C", "1C 2C 1C", Level(52)),
     ex("On: 4C", "1C 4C 1C", Level(52)),
     ex("On: 2H", "1C 2H:2s", Off),
-    // Lockout. Any press lights the red for five seconds.
     ex("Lockout: 3C, from off", "3C", Off),
     ex("Lockout: 3C", "3C 3C 1C", Level(52)),
     ex("Lockout: Any other click, or a hold", "3C wait:10s 2C", Off),
     ex("Lockout: 1H", "3C 1H:2s", Off),
     ex("Lockout: Anything else", "3C 1C 2C 4C 2H:2s wait:1s", Off),
-    // Low and flat cells. Every threshold is unmeasured on this light.
     ex("Low cell", "1C cell:2.95V wait:12s", Level(37)),
     ex("Low cell, for long enough", "1C cell:2.95V wait:60s", Off),
     ex("Low cell, 1H", "1H cell:2.95V wait:3s", Level(17)),
@@ -127,14 +114,12 @@ pub const EXAMPLES: &[Example] = &[
         "1C cell:2.85V wait:10s cell:3.80V wait:301s",
         Off,
     ),
-    // Under 2.80 V lit, it's out in two readings rather than a fade.
     ex("Cell under 2.80V, lit", "1C cell:2.75V wait:750ms", Off),
     ex(
         "Cell under 2.80V, lit, 1C",
         "1C cell:2.75V wait:750ms 1C",
         Off,
     ),
-    // Under 3.00 V with the light off, a press reads it and it won't light.
     ex("Weak cell, 1C", "cell:2.95V 1C", Off),
     ex("Weak cell, 1H", "cell:2.95V 1H", Off),
     ex(
@@ -142,7 +127,6 @@ pub const EXAMPLES: &[Example] = &[
         "cell:2.95V 1C cell:3.80V 1C",
         Level(52),
     ),
-    // Off's blue on a low cell. Only the aux changes.
     ex("Low cell, at rest", "cell:3.20V wait:1s 1C", Level(52)),
     ex("Low cell, read by a press", "wait:1s cell:3.20V 2C", Off),
     ex(
@@ -150,8 +134,6 @@ pub const EXAMPLES: &[Example] = &[
         "cell:3.20V wait:1s cell:3.80V wait:301s",
         Off,
     ),
-    // A cell it can't read is a fault until the cell comes out, but not at
-    // rest until a press reads it.
     ex("A cell it can't read", "cell:0V 1C wait:5s", Off),
     ex(
         "A cell it can read again",
@@ -163,7 +145,6 @@ pub const EXAMPLES: &[Example] = &[
         "cell:0V wait:900s cell:3.80V 1C",
         Level(52),
     ),
-    // Heat.
     ex("Hot", "heat:80C 1C 1H:3s wait:120s", Level(50)),
     ex(
         "Hot, at a level under 50",
@@ -175,7 +156,6 @@ pub const EXAMPLES: &[Example] = &[
         "heat:80C 1C 1H:3s wait:120s heat:25C wait:120s",
         Level(150),
     ),
-    // Self-test faults.
     ex("A failed check at power-on", "fault 1C", Off),
     ex("A failed check at power-on, 1H", "fault 1H", Off),
     ex(
