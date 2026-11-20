@@ -427,8 +427,8 @@ fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
         20_000,
     );
     let end = in_step(&mut sim, samples, report)?;
-    if end != Some(0) {
-        return Err(format!("ends at level {end:?}, not off"));
+    if end != Some(ts26::ui::FLOOR) {
+        return Err(format!("ends at level {end:?}, not the floor"));
     }
     Ok(())
 }

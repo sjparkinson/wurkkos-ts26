@@ -44,9 +44,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** A press on the switch under pressure.
 
-**Cover.** 3C locks and unlocks. In lockout `ui::Ui` never lights, a hold does nothing, and four presses are a 4C, which does nothing. From off, a hold does nothing either.
+**Cover.** 3C locks and unlocks. In lockout `ui::Ui` never lights, a hold does nothing, and four presses are a 4C, which does nothing. Lockout is the only cover, since from off a hold lights `ui::FLOOR`.
 
-**Unproven.** Seen, for locking, unlocking and the red. Nothing limits how long a lit light stays lit, and a cell swap unlocks it. 3C is fewer presses than the 4C it replaced.
+**Unproven.** Seen, for locking, unlocking and the red. Nothing limits how long a lit light stays lit, and a cell swap unlocks it. 3C is fewer presses than the 4C it replaced. What the floor draws, and how warm it gets in a pocket, is unmeasured.
 
 ### H6. Corrupt or half-written flash
 
@@ -92,9 +92,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** Dirt, a pressed-in switch or a jammed button.
 
-**Cover.** `ui::Ui` bounds every hold. From off or locked, a hold does nothing. Lit, it ramps and stops at `ramp::CEILING` or `ui::FLOOR`, and the ceilings in H3 and H4 still apply.
+**Cover.** `ui::Ui` bounds every hold. Locked, a hold does nothing. Off, 1H lights `ui::FLOOR` and the rest of that hold moves nothing. Lit, it ramps and stops at `ramp::CEILING` or `ui::FLOOR`, and the ceilings in H3 and H4 still apply.
 
-**Unproven.** Seen, for ordinary holds while lit. A stuck switch from off is simulator only. A switch stuck while lit leaves the light at the level it reached, one that sticks within `button::RELEASE_TICKS` of a click that acted does nothing, and how this switch bounces is unmeasured.
+**Unproven.** Seen, for ordinary holds while lit. 1H from off and a stuck switch are simulator only. A stuck switch lights the floor from off or from power-on and stays there, does nothing if it sticks within `button::RELEASE_TICKS` of a click that acted, and leaves a lit light at the level it reached. What the floor draws and how this switch bounces are unmeasured.
 
 ### H12. A dead or garbage ADC
 

@@ -50,7 +50,14 @@ pub const EXAMPLES: &[Example] = &[
     ex("Off: 1C, after using it", "1C 1H 1C 1C", Level(52)),
     ex("Off: 3C", "3C 1C", Off),
     ex("Off: 4C or more", "5C 1C", Off),
-    ex("Off: Anything else", "2C 1H:2s 2H:2s wait:1s", Off),
+    ex("Off: 1H", "1H", Level(5)),
+    ex("Off: 1H, held for a minute", "1H:60s", Level(5)),
+    ex("Off: 1H, let go", "1H wait:10s", Level(5)),
+    ex("Off: 1H, then 1H", "1H 1H:1s", Level(44)),
+    ex("Off: 1H, then 1H twice", "1H 1H:1s 1H:500ms", Level(38)),
+    ex("Off: 1H, then 1C", "1H 1C", Off),
+    ex("Off: 1C, after 1H", "1H 1C 1C", Level(52)),
+    ex("Off: Anything else", "2C 2H:2s wait:1s", Off),
     // On. A level a tick. Each 1H reverses the last, and the first goes up.
     ex("On: 1C", "1C 1C", Off),
     ex("On: 1H", "1C 1H:3s", Level(120)),
@@ -85,8 +92,15 @@ pub const EXAMPLES: &[Example] = &[
     // Low and flat cells. Every threshold is unmeasured on this light.
     ex("Low cell", "cell:2.95V 1C wait:6s", Level(37)),
     ex("Low cell, for long enough", "cell:2.95V 1C wait:60s", Off),
+    ex("Low cell, 1H", "cell:2.95V 1H wait:3s", Level(5)),
+    ex(
+        "Low cell, 1H, for long enough",
+        "cell:2.95V 1H wait:60s",
+        Off,
+    ),
     ex("Flat cell", "cell:2.80V 1C wait:10s", Off),
     ex("Flat cell, 1C again", "cell:2.80V 1C wait:10s 1C", Off),
+    ex("Flat cell, 1H", "cell:2.80V 1C wait:10s 1H", Off),
     ex(
         "Flat cell, rested but not charged, 1C",
         "cell:2.80V 1C wait:10s cell:3.20V 1C",
@@ -137,6 +151,7 @@ pub const EXAMPLES: &[Example] = &[
     ),
     // Self-test faults.
     ex("A failed check at power-on", "fault 1C", Off),
+    ex("A failed check at power-on, 1H", "fault 1H", Off),
     ex(
         "Flash that doesn't match its checksum",
         "flash:corrupt 1C",
