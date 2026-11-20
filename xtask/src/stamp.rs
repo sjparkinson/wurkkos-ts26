@@ -130,36 +130,22 @@ mod tests {
 
     /// Its `.git` is a file that names no repository, so git won't look
     /// above it for one.
-    struct NotACheckout(std::path::PathBuf);
-
-    impl NotACheckout {
-        fn new() -> Self {
-            let name = format!("ts26-xtask-{}-not-a-checkout", std::process::id());
-            let dir = std::env::temp_dir().join(name);
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join(".git"), "not a repository\n").unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for NotACheckout {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+    fn not_a_checkout() -> crate::TempDir {
+        let dir = crate::TempDir::new("xtask-not-a-checkout").unwrap();
+        std::fs::write(dir.path().join(".git"), "not a repository\n").unwrap();
+        dir
     }
 
     #[test]
     fn a_build_outside_a_git_checkout_is_stamped_unknown() {
-        let dir = NotACheckout::new();
-        assert_eq!(text(&current(&dir.0)), "ts26 unknown");
-        assert_eq!(text(&current(&dir.0.join("missing"))), "ts26 unknown");
+        let dir = not_a_checkout();
+        assert_eq!(text(&current(dir.path())), "ts26 unknown");
+        assert_eq!(text(&current(&dir.path().join("missing"))), "ts26 unknown");
     }
 
     #[test]
     fn the_stamp_for_this_checkout_is_a_hash_or_unknown() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let stamp = text(&current(root));
+        let stamp = text(&current(&crate::root()));
         let name = stamp.strip_prefix("ts26 ").expect("the prefix");
         if name != "unknown" {
             let hash = name.strip_suffix('+').unwrap_or(name);
