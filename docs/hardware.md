@@ -46,7 +46,7 @@ The TS26 code only ever writes `TCA0.SINGLE.CMP0BUF`, never DAC0. Confirmed from
 
 The stock firmware runs TCA0 dual-slope off 10 MHz with TOP 255, about 19.6 kHz, with seven bits of delta-sigma on top stepped once a PWM cycle, so levels are 15-bit (0 to 32640). Its floor is 20 of 32640 ("It won't light up below DSM 10/32640"), and its default smooth floor is level 5, which is 36 in those units, "by request". Confirmed from source. Reviewers saw flicker at the lowest levels, likely the driver at very small currents. Unmeasured.
 
-This firmware's ramp is its own curve over the same range, with the UI between levels 11 and 150. Level 11 is 30 in those units, clear of the stock floor and under the stock smooth floor. Level 5 (24) flickered with `2e32708` and not on earlier builds, cause unconfirmed, and whether level 11 flickers is unmeasured.
+This firmware's ramp is its own curve over the same range, with the UI between levels 11 and 150. Level 11 is 30 in those units, clear of the stock floor and under the stock smooth floor. Level 5 (24) flickered slightly when steady and bounced as 1H lit it from off, on two builds. Earlier builds had a floor of level 13 (32) with no flicker reported. Whether level 11 flickers is unmeasured.
 
 1Lumen measured 11.30 A at the tail at turbo start, about 40 W from the cell, and turbo falling to about 600 lm after ten minutes. The stock TS26 build has no timed step-down, so that's likely thermal.
 
