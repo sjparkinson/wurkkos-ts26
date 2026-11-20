@@ -34,14 +34,12 @@ use std::process::{self, Command};
 use std::time::Instant;
 
 /// What gets copied, from the workspace root. It's what `cargo xtask hex`
-/// needs to build xtask and the firmware, and nothing else. docs/ui.md is
-/// there because the simulator runs its examples.
-const COPIED: [&str; 11] = [
+/// needs to build xtask and the firmware, and nothing else.
+const COPIED: [&str; 10] = [
     ".cargo",
     "Cargo.lock",
     "Cargo.toml",
     "build.rs",
-    "docs/ui.md",
     "examples",
     "link.x",
     "rust-toolchain.toml",
