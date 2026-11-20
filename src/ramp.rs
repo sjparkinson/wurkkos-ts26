@@ -2,9 +2,10 @@
 
 pub const LEVELS: u8 = 150;
 
-/// Held below [`LEVELS`] until thermal regulation has been checked on a real
-/// light, since turbo pulls about 11 A. Unconfirmed.
-pub const CEILING: u8 = 120;
+/// The top of the ramp, where turbo pulls about 11 A. Nothing but thermal
+/// regulation holds the light under it, and nothing above level 120 has run on
+/// this torch.
+pub const CEILING: u8 = LEVELS;
 
 /// Dual-slope at 10 MHz, so about 19.6 kHz.
 pub const PWM_TOP: u16 = 255;
@@ -103,8 +104,11 @@ mod tests {
 
     #[test]
     fn nothing_runs_above_the_ceiling() {
-        assert_eq!(output(LEVELS), output(CEILING));
         assert_eq!(output(u8::MAX), output(CEILING));
-        assert!(output(CEILING).dsm < DSM_TOP);
+    }
+
+    #[test]
+    fn the_ceiling_is_the_top_of_the_table() {
+        assert_eq!(output(CEILING).dsm, DSM_TOP);
     }
 }

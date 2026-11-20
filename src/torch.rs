@@ -876,7 +876,7 @@ mod tests {
         run(&mut torch, false, TICKS_PER_SECOND);
         assert!(torch.level() > 0 && torch.level() < CEILING);
         assert_eq!(torch.aux(), Aux::Off, "out while the main LED's lit");
-        run(&mut torch, false, 2 * TICKS_PER_SECOND);
+        run(&mut torch, false, 3 * TICKS_PER_SECOND);
         assert_eq!(torch.level(), 0);
         assert_eq!(torch.aux(), Aux::White);
         run(&mut torch, false, SHOW_TICKS);

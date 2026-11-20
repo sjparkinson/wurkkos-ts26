@@ -60,7 +60,7 @@ pub const EXAMPLES: &[Example] = &[
     ex("Off: Anything else", "2C 2H:2s wait:1s", Off),
     // On. A level a tick. Each 1H reverses the last, and the first goes up.
     ex("On: 1C", "1C 1C", Off),
-    ex("On: 1H", "1C 1H:3s", Level(120)),
+    ex("On: 1H", "1C 1H:3s", Level(150)),
     ex("On: 1H again", "1C 1H:3s 1H:3s", Level(5)),
     ex(
         "On: 1H, after one that stopped partway",
@@ -70,7 +70,7 @@ pub const EXAMPLES: &[Example] = &[
     ex(
         "On: 1H, after turning it off and on",
         "1C 1H:3s 1C 1C 1H:3s",
-        Level(120),
+        Level(150),
     ),
     // The first click turns it off at once, and nothing counts until the
     // switch has been left alone.
@@ -147,7 +147,7 @@ pub const EXAMPLES: &[Example] = &[
     ex(
         "Hot, then cool",
         "heat:80C 1C 1H:3s wait:120s heat:25C wait:120s",
-        Level(120),
+        Level(150),
     ),
     // Self-test faults.
     ex("A failed check at power-on", "fault 1C", Off),
