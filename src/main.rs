@@ -1,16 +1,10 @@
-//! The firmware. Sample the switch, step the UI, set the output, 64 times a
-//! second.
-//!
-//! On the host this builds to a stub, so `cargo test` and `cargo clippy`
-//! work across the workspace. `cargo xtask hex` builds the real thing.
+//! The firmware's loop. On the host it builds to a stub, so the workspace
+//! builds and tests there.
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
-// The same restrictions as the library's, for the loop, the hardware layer
-// and the startup code. Only the AVR clippy sees them. The xtask test
-// `lints::restriction_lint_lists_match` keeps this list in step with the
-// library's.
+// Only the AVR clippy sees these, so it's the only check on hw.rs and rt.rs.
 #![cfg_attr(
     target_arch = "avr",
     deny(
@@ -27,7 +21,6 @@
     )
 )]
 
-// The hardware layer and the startup code, which only the AVR build has.
 #[cfg(target_arch = "avr")]
 mod avr {
     pub mod hw;
@@ -35,12 +28,9 @@ mod avr {
 }
 #[cfg(target_arch = "avr")]
 use avr::hw;
-// The library owns src/regs.rs, since its self-tests check fuse fields with
-// the same masks; hw.rs and rt.rs reach it as `crate::regs`.
 #[cfg(target_arch = "avr")]
 use ts26::regs;
 
-// src/avr/rt.rs calls `main` by name once memory is set up.
 #[cfg(target_arch = "avr")]
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
@@ -49,7 +39,7 @@ extern "C" fn main() -> ! {
     use ts26::torch::{Changes, Torch};
     use ts26::watchdog::Feeder;
 
-    // PB2 floats from reset until it's an output.
+    // First, since PB2 floats from reset until it's an output.
     hw::hold_enable_low();
 
     let faults = Faults {
@@ -67,11 +57,8 @@ extern "C" fn main() -> ! {
     let mut feeder = Feeder::new();
 
     loop {
-        // Power-down or idle, by `Feeder::power_down`'s rule, which the
-        // simulator holds this loop to. False means the light's on and no
-        // tick came in about 104 ms, so the 32 kHz oscillator has most likely
-        // stopped, and the watchdog with it. The light goes off and stays off
-        // until a reset.
+        // Most likely a stopped 32 kHz oscillator with the light on, which
+        // stops the watchdog too.
         if !hw::wait_for_tick(feeder.power_down(torch.resting())) {
             hw::halt();
         }
@@ -90,24 +77,15 @@ extern "C" fn main() -> ! {
             hw::set_aux(aux);
         }
 
-        // The only place the running torch feeds the watchdog.
+        // The only feed.
         if feeder.tick() {
             hw::feed_watchdog();
         }
     }
 }
 
-// Turns the light off and powers down for good (`hw::halt`). The watchdog
-// isn't fed there, so it resets the chip within 64 WDT clocks of the last
-// feed, about 63 ms, and the next boot comes up as a fault, dark until the
-// cell comes out.
-//
-// Spinning here would end the same way while the watchdog runs. `halt` is for
-// when it doesn't, with the 32 kHz oscillator dead. No reset comes then, and
-// a spin would keep the CPU running off the cell for good where `halt`
-// sleeps. It's here because Rust requires a handler. `cargo xtask hex`
-// refuses any image that could reach it (xtask/src/layout.rs), so nothing
-// should ever run this.
+// `halt` rather than a spin, which would drain the cell if the 32 kHz
+// oscillator, and so the watchdog, had stopped.
 #[cfg(target_arch = "avr")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
