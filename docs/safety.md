@@ -94,7 +94,7 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Cover.** `ui::Ui` bounds every hold. From off or locked, a hold does nothing. Lit, it ramps and stops at `ramp::CEILING` or `ui::FLOOR`, and the ceilings in H3 and H4 still apply.
 
-**Unproven.** Seen, for ordinary holds while lit. A stuck switch from off is simulator only. A switch stuck while lit leaves the light at the level it reached, and how this switch bounces is unmeasured.
+**Unproven.** Seen, for ordinary holds while lit. A stuck switch from off is simulator only. A switch stuck while lit leaves the light at the level it reached, one that sticks within `button::RELEASE_TICKS` of a click that acted does nothing, and how this switch bounces is unmeasured.
 
 ### H12. A dead or garbage ADC
 
@@ -112,6 +112,14 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Unproven.** Simulator, which only shows the firmware asks for the clock it models. On the breakout the clock read about 0.9 % fast. A power-on clock check was left out, since the oscillators' tolerances (tables 36-12, 36-13) leave a window that only catches a doubled or halved clock.
 
+### H14. A press read as more than one
+
+**Hazard.** A switch that chatters, or that actuates twice on one press. Lit, a 1C then reads as off and on again, at `ui::ON_LEVEL` whatever the level was.
+
+**Cover.** `button::Debounce` counts a change of the switch once two samples in a row show it. After a click that acts as it's let go, `button::Clicks` ignores the switch until it has been up for `button::RELEASE_TICKS`.
+
+**Unproven.** Simulator only, and not seen on this torch with or without the cover. How long this switch bounces is unmeasured, and chatter longer than a sample can still end a hold or split a click from off into two.
+
 ## What's left
 
 - Nobody knows what holds PB2 low through reset and in programming mode (H1, H8).
@@ -120,3 +128,4 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 - `restore` has never run on this torch (H8).
 - Nothing limits how long a lit light stays lit (H5, H11).
 - Frozen but plausible readings get past both plausibility checks (H12).
+- The switch's bounce is unmeasured (H11, H14).

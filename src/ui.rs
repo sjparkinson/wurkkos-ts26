@@ -62,7 +62,7 @@ impl Ui {
     }
 
     /// Locked, it waits the full time, so a fourth press in a pocket is a 4C
-    /// rather than 3C to unlock and 1C to light.
+    /// rather than a 3C that unlocks it.
     pub const fn most_clicks(&self) -> Option<u8> {
         match self.mode {
             Mode::On => Some(1),

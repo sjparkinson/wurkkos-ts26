@@ -111,9 +111,12 @@ impl Torch {
         event
     }
 
+    /// Inlined, each caller in the firmware's loop gets a copy, about 230
+    /// bytes of flash.
+    #[inline(never)]
     const fn quiet(&self) -> bool {
         self.switch.settled()
-            && self.clicks.idle()
+            && !self.clicks.counting()
             && self.ui.output_level() == 0
             && self.limits.level() == 0
     }
@@ -287,11 +290,28 @@ mod tests {
         torch.tick(false);
         assert_eq!(torch.tick(false), Some(Event::Click(1)), "off, from on");
         assert_eq!(torch.level(), 0);
+        run(&mut torch, false, RELEASE_TICKS + 1);
         clicks(&mut torch, 2);
         run(&mut torch, true, 4);
         torch.tick(false);
         assert_eq!(torch.tick(false), Some(Event::Click(3)), "3C, from off");
         assert_eq!(torch.torch.ui.mode(), Mode::Lockout);
+    }
+
+    #[test]
+    fn a_click_read_twice_turns_it_off_and_leaves_it_off() {
+        for up in 2..=RELEASE_TICKS {
+            for again in 1..=HOLD_TICKS + 8 {
+                let mut torch = Rig::default();
+                click(&mut torch);
+                run(&mut torch, true, 4);
+                run(&mut torch, false, up);
+                run(&mut torch, true, again);
+                run(&mut torch, false, TICKS_PER_SECOND);
+                assert_eq!(torch.level(), 0, "{up} up, then {again} down");
+                assert_eq!(torch.torch.ui.mode(), Mode::Off);
+            }
+        }
     }
 
     fn until_resting(torch: &mut Rig) {
