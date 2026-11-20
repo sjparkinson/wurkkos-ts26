@@ -1,9 +1,9 @@
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// The first level at 36 delta-sigma units, the stock firmware's smooth
-/// floor, below which reviewers saw flicker. Unmeasured on this curve.
-pub const FLOOR: u8 = 13;
+/// 24 delta-sigma units, under the stock firmware's smooth floor of 36,
+/// below which reviewers saw flicker. Unmeasured for flicker on this torch.
+pub const FLOOR: u8 = 5;
 
 pub const ON_LEVEL: u8 = 52;
 
@@ -134,12 +134,6 @@ mod tests {
         let ui = Ui::new();
         assert_eq!(ui.mode(), Mode::Off);
         assert_eq!(ui.output_level(), 0);
-    }
-
-    #[test]
-    fn the_floor_is_the_first_level_at_the_stock_smooth_floor() {
-        assert!(output(FLOOR).dsm >= 36);
-        assert!(output(FLOOR - 1).dsm < 36);
     }
 
     #[test]

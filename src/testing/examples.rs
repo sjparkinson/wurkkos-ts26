@@ -54,7 +54,7 @@ pub const EXAMPLES: &[Example] = &[
     // On. A level a tick. Each 1H reverses the last, and the first goes up.
     ex("On: 1C", "1C 1C", Off),
     ex("On: 1H", "1C 1H:3s", Level(120)),
-    ex("On: 1H again", "1C 1H:3s 1H:3s", Level(13)),
+    ex("On: 1H again", "1C 1H:3s 1H:3s", Level(5)),
     ex(
         "On: 1H, after one that stopped partway",
         "1C 1H:1s 1H:500ms",
@@ -128,7 +128,7 @@ pub const EXAMPLES: &[Example] = &[
     ex(
         "Hot, at a level under 50",
         "heat:80C 1C 1H:500ms 1H:3s wait:120s",
-        Level(13),
+        Level(5),
     ),
     ex(
         "Hot, then cool",
