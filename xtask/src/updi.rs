@@ -56,6 +56,17 @@ pub trait Wire {
 
 pub type Result<T> = std::result::Result<T, String>;
 
+pub fn fits_flash(data: &[u8]) -> Result<()> {
+    if data.len() > map::FLASH_SIZE {
+        return Err(format!(
+            "the image is {} bytes; the ATtiny1616 has {}",
+            data.len(),
+            map::FLASH_SIZE
+        ));
+    }
+    Ok(())
+}
+
 const SYNC: u8 = 0x55;
 const ACK: u8 = 0x40;
 
