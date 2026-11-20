@@ -669,11 +669,9 @@ pub(crate) mod tests {
         tiny
     }
 
-    fn assert_let_go(tiny: &Tiny) {
+    fn assert_refused(tiny: &Tiny) {
         assert_eq!(tiny.resets, 2, "one reset to enter and one to leave");
-        assert!(!tiny.in_reset, "the chip was left in reset");
-        assert!(!tiny.progmode, "the chip was left in programming mode");
-        assert!(tiny.updi_disabled, "UPDI was left on");
+        tiny.assert_let_go();
         assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
         assert!(tiny.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
     }
@@ -683,7 +681,7 @@ pub(crate) mod tests {
         let Err(error) = Programmer::connect_for_programming(&mut tiny) else {
             panic!("connected for programming");
         };
-        assert_let_go(&tiny);
+        assert_refused(&tiny);
         error
     }
 
@@ -693,7 +691,7 @@ pub(crate) mod tests {
         else {
             panic!("connected for a restore");
         };
-        assert_let_go(&tiny);
+        assert_refused(&tiny);
         error
     }
 
@@ -818,7 +816,7 @@ pub(crate) mod tests {
 
     #[test]
     fn writes_and_verifies_flash_then_starts_the_firmware() {
-        let image: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
+        let (image, _) = images();
         let mut tiny = Tiny::new();
         tiny.flash.fill(0x42);
 
@@ -838,7 +836,8 @@ pub(crate) mod tests {
 
     #[test]
     fn verify_catches_flash_that_did_not_erase() {
-        let image: Vec<u8> = (0..200u32).map(|i| (i * 7 + 3) as u8).collect();
+        let (mut image, _) = images();
+        image.truncate(200);
         let mut tiny = Tiny::new();
         tiny.flash.fill(0x42);
         tiny.ignores_chip_erase = true;
@@ -878,7 +877,7 @@ pub(crate) mod tests {
 
     #[test]
     fn writes_blank_eeprom_pages_over_eesave_contents() {
-        let mut eeprom: Vec<u8> = (0..=255).collect();
+        let (_, mut eeprom) = images();
         eeprom[3 * map::EEPROM_PAGE..4 * map::EEPROM_PAGE].fill(0xFF);
         let mut tiny = Tiny::new();
         tiny.eesave = true;
@@ -909,7 +908,7 @@ pub(crate) mod tests {
 
     #[test]
     fn writes_eeprom_over_eesave_contents_and_reads_fuses() {
-        let eeprom: Vec<u8> = (0..=255).collect();
+        let (_, eeprom) = images();
         let mut tiny = Tiny::new();
         tiny.eesave = true;
         tiny.eeprom.fill(0x42);
@@ -1073,9 +1072,7 @@ pub(crate) mod tests {
         };
         assert_eq!(err, "the chip didn't accept the NVM programming key");
         assert_eq!(tiny.resets, 1, "only the reset that leaves");
-        assert!(!tiny.in_reset, "the chip was left in reset");
-        assert!(!tiny.progmode, "the chip was left in programming mode");
-        assert!(tiny.updi_disabled, "UPDI was left on");
+        tiny.assert_let_go();
         assert!(tiny.flash.iter().all(|&b| b == 0x42), "flash changed");
         assert!(tiny.eeprom.iter().all(|&b| b == 0x24), "EEPROM changed");
     }
@@ -1126,7 +1123,7 @@ pub(crate) mod tests {
         assert_eq!(p.wire.resets, 1, "never sent the key and reset");
     }
 
-    fn images() -> (Vec<u8>, Vec<u8>) {
+    pub fn images() -> (Vec<u8>, Vec<u8>) {
         let flash = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
         let eeprom = (0..=255).collect();
         (flash, eeprom)
@@ -1379,6 +1376,12 @@ pub(crate) mod tests {
                     page_loaded: vec![false; map::FLASH_PAGE],
                     page_addr: None,
                 }
+            }
+
+            pub fn assert_let_go(&self) {
+                assert!(!self.in_reset, "the chip was left in reset");
+                assert!(!self.progmode, "the chip was left in programming mode");
+                assert!(self.updi_disabled, "UPDI was left on");
             }
 
             fn byte(&mut self, b: u8) {
