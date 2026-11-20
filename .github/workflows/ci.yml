@@ -30,7 +30,7 @@ jobs:
       - run: echo "::add-matcher::.github/rust-matchers.json"
 
       # rustup reads rust-toolchain.toml and installs the pinned nightly,
-      # with rust-src, rustfmt and clippy, the first time cargo runs.
+      # with every component it lists, the first time cargo runs.
       - run: rustup show active-toolchain || rustup toolchain install
 
       - uses: actions/cache@v6.1.0

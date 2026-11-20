@@ -63,11 +63,7 @@ Up to nightly-2026-09-23 an AVR build needed `--cfg no_fp_fmt_parse` in `.cargo/
 
 ## Looking inside the ELF
 
-For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. It's optional, since nothing in the build needs it, so it isn't in `rust-toolchain.toml`. Add it once to the pinned nightly.
-
-```sh
-rustup component add llvm-tools --toolchain nightly-2026-11-11
-```
+For reading the generated code, rustup's `llvm-tools` component has an `llvm-objdump`, `llvm-nm` and `llvm-size` built from rustc's own LLVM, AVR backend included. Nothing in the build needs it, but it's in `rust-toolchain.toml` (alongside `rust-analyzer`, for editors), so rustup installs it with the pinned nightly.
 
 The binaries aren't on your `PATH`. They live in the toolchain's sysroot, under the host triple. Run this from the repo so rustup picks the pinned nightly.
 

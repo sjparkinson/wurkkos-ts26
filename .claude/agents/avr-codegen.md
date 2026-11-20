@@ -16,7 +16,7 @@ LLVM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/
 ELF=target/avr-none/release/ts26.elf
 ```
 
-If they're missing, give the user the `rustup component add llvm-tools --toolchain <pinned nightly>` command from that doc rather than installing it yourself.
+`rust-toolchain.toml` lists `llvm-tools`, so rustup installs them with the pinned nightly. If they're still missing, say so and give the user `rustup toolchain install` to run from the repo, rather than installing it yourself.
 
 Check these, in this order.
 
