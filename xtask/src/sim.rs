@@ -751,29 +751,29 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
     Ok(())
 }
 
+/// (register, byte) for each `ldi`, in src/avr/rt.rs's order.
+fn loads(l: &Layout) -> Vec<(u8, u8)> {
+    [
+        (26, l.data.start),
+        (30, l.load),
+        (24, l.data.end),
+        (26, l.bss.start),
+        (24, l.bss.end),
+    ]
+    .into_iter()
+    .flat_map(|(r, v)| {
+        let [lo, hi] = v.to_le_bytes();
+        [(r, lo), (r + 1, hi)]
+    })
+    .collect()
+}
+
 fn patch_startup(
     image: &mut [u8],
     reset: usize,
     linked: &Layout,
     moved: &Layout,
 ) -> Result<(), String> {
-    // In src/avr/rt.rs's order.
-    let loads = |l: &Layout| -> Vec<(u8, u8)> {
-        [
-            (26, l.data.start),
-            (30, l.load),
-            (24, l.data.end),
-            (26, l.bss.start),
-            (24, l.bss.end),
-        ]
-        .into_iter()
-        .flat_map(|(r, v)| {
-            let [lo, hi] = v.to_le_bytes();
-            [(r, lo), (r + 1, hi)]
-        })
-        .collect()
-    };
-
     let mut found = Vec::new();
     let mut at = reset;
     loop {
@@ -2464,11 +2464,9 @@ mod tests {
 
     fn convert(chip: &mut Chip) -> u16 {
         chip.write(reg::ADC0_COMMAND as u16, ADC_STCONV).unwrap();
-        chip.advance_to(chip.now + CONVERSION_INSTRUCTIONS).unwrap();
-        assert_eq!(chip.read(reg::ADC0_INTFLAGS as u16), Ok(ADC_RESRDY));
-        let lo = chip.read(reg::ADC0_RES as u16).unwrap();
-        let hi = chip.read(reg::ADC0_RES as u16 + 1).unwrap();
-        u16::from_le_bytes([lo, hi])
+        wait(chip, CONVERSION_INSTRUCTIONS);
+        assert_eq!(peek(chip, reg::ADC0_INTFLAGS), Ok(ADC_RESRDY));
+        peek16(chip, reg::ADC0_RES)
     }
 
     #[test]
@@ -2503,9 +2501,9 @@ mod tests {
     fn a_result_isnt_there_until_the_conversion_ends() {
         let mut chip = adc_ready(ADC_MUXPOS_AIN1);
         chip.write(reg::ADC0_COMMAND as u16, ADC_STCONV).unwrap();
-        assert_eq!(chip.read(reg::ADC0_INTFLAGS as u16), Ok(0));
+        assert_eq!(peek(&mut chip, reg::ADC0_INTFLAGS), Ok(0));
         assert!(
-            chip.read(reg::ADC0_RES as u16)
+            peek(&mut chip, reg::ADC0_RES)
                 .unwrap_err()
                 .contains("no result")
         );
@@ -2577,12 +2575,11 @@ mod tests {
             let mut chip = Chip::new(image);
             chip.write(reg::CRCSCAN_CTRLA as u16, CRCSCAN_ENABLE)
                 .unwrap();
-            assert_eq!(chip.read(reg::CRCSCAN_STATUS as u16), Ok(CRCSCAN_OK));
-            chip.advance_to(chip.now + CRC_START_INSTRUCTIONS + 1)
-                .unwrap();
-            assert_eq!(chip.read(reg::CRCSCAN_STATUS as u16), Ok(CRCSCAN_BUSY));
-            assert_eq!(chip.read(reg::CRCSCAN_STATUS as u16), Ok(CRCSCAN_BUSY));
-            assert_eq!(chip.read(reg::CRCSCAN_STATUS as u16), Ok(want));
+            assert_eq!(peek(&mut chip, reg::CRCSCAN_STATUS), Ok(CRCSCAN_OK));
+            wait(&mut chip, CRC_START_INSTRUCTIONS + 1);
+            assert_eq!(peek(&mut chip, reg::CRCSCAN_STATUS), Ok(CRCSCAN_BUSY));
+            assert_eq!(peek(&mut chip, reg::CRCSCAN_STATUS), Ok(CRCSCAN_BUSY));
+            assert_eq!(peek(&mut chip, reg::CRCSCAN_STATUS), Ok(want));
         }
     }
 
@@ -2601,9 +2598,9 @@ mod tests {
     #[test]
     fn the_reset_flags_clear_by_writing_a_one() {
         let mut chip = Chip::new(Vec::new());
-        assert_eq!(chip.read(reg::RSTCTRL_RSTFR as u16), Ok(RSTCTRL_PORF));
-        chip.write(reg::RSTCTRL_RSTFR as u16, RSTCTRL_PORF).unwrap();
-        assert_eq!(chip.read(reg::RSTCTRL_RSTFR as u16), Ok(0));
+        assert_eq!(peek(&mut chip, reg::RSTCTRL_RSTFR), Ok(RSTCTRL_PORF));
+        poke(&mut chip, reg::RSTCTRL_RSTFR, RSTCTRL_PORF).unwrap();
+        assert_eq!(peek(&mut chip, reg::RSTCTRL_RSTFR), Ok(0));
     }
 
     fn running() -> Chip {
@@ -2982,7 +2979,7 @@ mod tests {
         chip.tick_cycles = SLOWEST_TICK_CYCLES;
         ticks(&mut chip, 1).unwrap();
         assert_eq!(chip.ticks, 1);
-        chip.advance_to(chip.now + SLOWEST_TICK_CYCLES - 1).unwrap();
+        wait(&mut chip, SLOWEST_TICK_CYCLES - 1);
         assert_eq!(chip.ticks, 1);
         chip.elapse().unwrap();
         assert_eq!(chip.ticks, 2);
@@ -3020,7 +3017,7 @@ mod tests {
     fn pa5_reads_through_its_pull_up_and_a_press_raises_nothing() {
         let mut chip = Chip::new(Vec::new());
         let ctrl = (reg::PORTA_PIN0CTRL + SWITCH_PIN) as u16;
-        let read = |chip: &mut Chip| chip.read(reg::VPORTA_IN as u16);
+        let read = |chip: &mut Chip| peek(chip, reg::VPORTA_IN);
         assert!(read(&mut chip).unwrap_err().contains("battery divider"));
         chip.write(PA1_CTRL as u16, ISC_INPUT_DISABLE).unwrap();
         assert!(read(&mut chip).unwrap_err().contains("pull-up"));
@@ -3131,6 +3128,20 @@ mod tests {
         poke(chip, a, value).expect_err("the write went through")
     }
 
+    fn peek(chip: &mut Chip, a: usize) -> Result<u8, String> {
+        chip.read(a as u16)
+    }
+
+    fn peek16(chip: &mut Chip, low: usize) -> u16 {
+        let lo = peek(chip, low).unwrap();
+        let hi = peek(chip, low + 1).unwrap();
+        u16::from_le_bytes([lo, hi])
+    }
+
+    fn wait(chip: &mut Chip, cycles: u64) {
+        chip.advance_to(chip.now + cycles).unwrap();
+    }
+
     fn unlocked(chip: &mut Chip, a: usize, value: u8) -> Result<(), String> {
         poke(chip, reg::CPU_CCP, CCP_IOREG)?;
         poke(chip, a, value)
@@ -3204,8 +3215,7 @@ mod tests {
     fn a_conversion_doesnt_start_while_one_runs() {
         let mut chip = adc_ready(ADC_MUXPOS_AIN1);
         start(&mut chip).unwrap();
-        chip.advance_to(chip.now + CONVERSION_INSTRUCTIONS - 1)
-            .unwrap();
+        wait(&mut chip, CONVERSION_INSTRUCTIONS - 1);
         let err = start(&mut chip).unwrap_err();
         assert!(err.contains("still running"), "{err}");
         chip.elapse().unwrap();
@@ -3216,12 +3226,11 @@ mod tests {
     fn the_results_high_byte_needs_its_low_byte_first() {
         let mut chip = adc_ready(ADC_MUXPOS_AIN1);
         start(&mut chip).unwrap();
-        chip.advance_to(chip.now + CONVERSION_INSTRUCTIONS).unwrap();
-        let err = chip.read(reg::ADC0_RES as u16 + 1).unwrap_err();
+        wait(&mut chip, CONVERSION_INSTRUCTIONS);
+        let err = peek(&mut chip, reg::ADC0_RES + 1).unwrap_err();
         assert!(err.contains("without its low byte"), "{err}");
-        chip.read(reg::ADC0_RES as u16).unwrap();
-        chip.read(reg::ADC0_RES as u16 + 1).unwrap();
-        assert!(chip.read(reg::ADC0_RES as u16 + 1).is_err());
+        peek16(&mut chip, reg::ADC0_RES);
+        assert!(peek(&mut chip, reg::ADC0_RES + 1).is_err());
     }
 
     #[test]
@@ -3261,7 +3270,7 @@ mod tests {
         let mut chip = Chip::new(Vec::new());
         poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
         assert!(chip.holds_interrupts());
-        chip.advance_to(chip.now + 4).unwrap();
+        wait(&mut chip, 4);
         assert!(chip.holds_interrupts());
         poke(&mut chip, a, CLOCK_10MHZ).unwrap();
         assert!(!chip.holds_interrupts(), "the write ends the hold");
@@ -3269,7 +3278,7 @@ mod tests {
         assert!(err.contains("without the CCP key"), "spent: {err}");
 
         poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
-        chip.advance_to(chip.now + 5).unwrap();
+        wait(&mut chip, 5);
         assert!(!chip.holds_interrupts());
         let err = refused(&mut chip, a, CLOCK_10MHZ);
         assert!(err.contains("MCLKCTRLB without the CCP key"), "{err}");
@@ -3382,7 +3391,7 @@ mod tests {
         let mut chip = Chip::new(Vec::new());
         let err = refused(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN);
         assert!(err.contains("CTRLBUSY is set"), "{err}");
-        while chip.read(reg::RTC_PITSTATUS as u16).unwrap() != 0 {}
+        while peek(&mut chip, reg::RTC_PITSTATUS).unwrap() != 0 {}
         poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).unwrap();
         assert!(poke(&mut chip, reg::RTC_PITCTRLA, RTC_PITEN).is_err());
     }
@@ -3440,93 +3449,37 @@ mod tests {
         watchdog_on: Some(6),
     };
 
+    fn out_of_order(change: fn(&mut Boot)) -> String {
+        let mut boot = IN_ORDER;
+        change(&mut boot);
+        boot.in_order().unwrap_err()
+    }
+
     #[test]
     fn start_up_has_to_do_every_step() {
         IN_ORDER.in_order().unwrap();
-        let missing = |boot: Boot| boot.in_order().unwrap_err();
-        for (boot, what) in [
-            (
-                Boot {
-                    flags_cleared: None,
-                    ..IN_ORDER
-                },
-                "never cleared RSTCTRL.RSTFR",
-            ),
-            (
-                Boot {
-                    flash_checked: None,
-                    ..IN_ORDER
-                },
-                "never started a CRC scan",
-            ),
-            (
-                Boot {
-                    fuses_read: None,
-                    ..IN_ORDER
-                },
-                "never read the fuses",
-            ),
-            (
-                Boot {
-                    set_up: None,
-                    ..IN_ORDER
-                },
-                "never set anything up",
-            ),
-            (
-                Boot {
-                    pit_on: None,
-                    ..IN_ORDER
-                },
-                "never turned the PIT on",
-            ),
-            (
-                Boot {
-                    watchdog_on: None,
-                    ..IN_ORDER
-                },
-                "never turned the watchdog on",
-            ),
-        ] {
-            assert_eq!(missing(boot), what);
-        }
+        let missing = |change, what: &str| assert_eq!(out_of_order(change), what);
+        missing(|b| b.flags_cleared = None, "never cleared RSTCTRL.RSTFR");
+        missing(|b| b.flash_checked = None, "never started a CRC scan");
+        missing(|b| b.fuses_read = None, "never read the fuses");
+        missing(|b| b.set_up = None, "never set anything up");
+        missing(|b| b.pit_on = None, "never turned the PIT on");
+        missing(|b| b.watchdog_on = None, "never turned the watchdog on");
     }
 
     #[test]
     fn start_up_has_to_be_in_order() {
-        for (boot, why) in [
-            (
-                Boot {
-                    flags_cleared: Some(7),
-                    ..IN_ORDER
-                },
-                "before clearing the reset flags",
-            ),
-            (
-                Boot {
-                    flash_checked: Some(5),
-                    ..IN_ORDER
-                },
-                "before the CRC scan",
-            ),
-            (
-                Boot {
-                    fuses_read: Some(5),
-                    ..IN_ORDER
-                },
-                "before reading the fuses",
-            ),
-            (
-                Boot {
-                    pit_on: Some(7),
-                    ..IN_ORDER
-                },
-                "before the PIT",
-            ),
-        ] {
-            let err = boot.in_order().unwrap_err();
+        let late = |change, why: &str| {
+            let err = out_of_order(change);
             assert!(err.contains(why), "{err}");
-        }
+        };
+        late(
+            |b| b.flags_cleared = Some(7),
+            "before clearing the reset flags",
+        );
+        late(|b| b.flash_checked = Some(5), "before the CRC scan");
+        late(|b| b.fuses_read = Some(5), "before reading the fuses");
+        late(|b| b.pit_on = Some(7), "before the PIT");
     }
 
     #[test]
@@ -3544,7 +3497,7 @@ mod tests {
         poke(&mut chip, reg::CRCSCAN_CTRLB, CRCSCAN_FLASH_PRIORITY).unwrap();
         poke(&mut chip, reg::CRCSCAN_CTRLA, CRCSCAN_ENABLE).unwrap();
         let fuses = step(&mut chip);
-        chip.read(regs::addr::FUSE_OSCCFG as u16).unwrap();
+        peek(&mut chip, regs::addr::FUSE_OSCCFG).unwrap();
         assert_eq!(chip.boot.set_up, None);
         let set_up = step(&mut chip);
         poke(&mut chip, reg::CPU_CCP, CCP_IOREG).unwrap();
@@ -3600,19 +3553,8 @@ mod tests {
     const CALL: [u16; 2] = [0x940E, 0];
 
     fn loads(layout: &Layout) -> Vec<u16> {
-        [
-            (26, layout.data.start),
-            (30, layout.load),
-            (24, layout.data.end),
-            (26, layout.bss.start),
-            (24, layout.bss.end),
-        ]
-        .into_iter()
-        .flat_map(|(r, value)| {
-            let [lo, hi] = value.to_le_bytes();
-            [ldi(r, lo), ldi(r + 1, hi)]
-        })
-        .collect()
+        let loads = super::loads(layout).into_iter();
+        loads.map(|(r, k)| ldi(r, k)).collect()
     }
 
     #[test]
