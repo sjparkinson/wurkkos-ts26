@@ -38,6 +38,7 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
             .step_by(2)
             .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
             .collect::<Option<Vec<u8>>>()
+            .filter(|_| hex.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or_else(|| at("not hex"))?;
 
         let len = usize::from(bytes[0]);
@@ -147,6 +148,7 @@ mod tests {
             ("00000001FF", "doesn't start with ':'"),
             (":0000000zFF", "not hex"),
             (":0000000é0FF", "not hex"),
+            (":+0000001FF", "not hex"),
             (":0200000012EC", "length doesn't match"),
             (":00000001FE", "bad checksum"),
             (":00000006FA", "unsupported record type 06"),
