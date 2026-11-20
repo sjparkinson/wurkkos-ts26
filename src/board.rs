@@ -1,30 +1,17 @@
-//! The TS26 driver's pin map, as bit numbers within each port. docs/hardware.md
-//! has where each one comes from.
-//!
-//! These are board facts, not registers. `src/avr/hw.rs` drives the pins
-//! through `src/regs.rs`, and xtask's simulator wires its fake chip up the
-//! same way from here.
-//!
-//! | Pin     | Job                                          |
-//! |---------|----------------------------------------------|
-//! | PA0     | UPDI, left alone                             |
-//! | PA1     | Battery divider (AIN1)                       |
-//! | PA5     | Side switch, active low, pulled up           |
-//! | PB0     | Main LED PWM, TCA0 WO0                       |
-//! | PB2     | Boost converter (MP3432) enable, high is on  |
-//! | PC1-PC3 | Aux LEDs, blue, green, red                   |
+//! The pin map, as bit numbers within each port.
 
 use crate::ui::Aux;
 
-/// PA0.
+/// PA0, never written.
 pub const UPDI: u8 = 0;
-/// PA1.
+/// PA1, the cell's divider, AIN1. Never a pull-up.
 pub const BATTERY: u8 = 1;
-/// PA5.
+/// PA5, active low against its pull-up.
 pub const SWITCH: u8 = 5;
-/// PB0.
+/// PB0, TCA0's WO0.
 pub const PWM: u8 = 0;
-/// PB2, the dangerous one, which is low whenever the light's off.
+/// PB2, the MP3432's enable, high on. Low whenever the light's off, and never
+/// a pull-up.
 pub const ENABLE: u8 = 2;
 /// PC1.
 pub const AUX_BLUE: u8 = 1;
@@ -32,18 +19,14 @@ pub const AUX_BLUE: u8 = 1;
 pub const AUX_GREEN: u8 = 2;
 /// PC3.
 pub const AUX_RED: u8 = 3;
-/// All three aux pins, as a PORTC mask.
 pub const AUX_PINS: u8 = 1 << AUX_BLUE | 1 << AUX_GREEN | 1 << AUX_RED;
 
-/// Each aux pin as its PORTC bit number and mask, in blue, green, red order.
-/// `PINnCTRL` is indexed by the bit number, and `DIR` and `OUT` by the mask.
 pub const AUX: [(u8, u8); 3] = [
     (AUX_BLUE, 1 << AUX_BLUE),
     (AUX_GREEN, 1 << AUX_GREEN),
     (AUX_RED, 1 << AUX_RED),
 ];
 
-/// The PORTC pins that light `colour`, as a mask, or 0 for none.
 pub const fn aux_pin(colour: Aux) -> u8 {
     match colour {
         Aux::Off => 0,
@@ -54,8 +37,7 @@ pub const fn aux_pin(colour: Aux) -> u8 {
     }
 }
 
-/// The pins of [`aux_pin`] that `colour` lights brightly, as a mask. The rest
-/// of them glow dimly.
+/// The rest of [`aux_pin`]'s glow dimly.
 pub const fn aux_bright(colour: Aux) -> u8 {
     match colour {
         Aux::Red => 1 << AUX_RED,

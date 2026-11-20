@@ -1,31 +1,17 @@
-//! Not firmware, but a program with one static of each kind, for `cargo xtask`
-//! to check link.x and src/avr/rt.rs against. The torch firmware has no
-//! statics yet, so as linked its .rodata, .data and .bss are all empty and
-//! nothing real reads through the mapped-flash window or relies on the
-//! startup copy.
-//!
-//! `main` copies a const table (.rodata, read through the mapped-flash
-//! window) and a static with non-zero starting values (.data, which the
-//! startup code copies from flash) into a static that starts at zero (.bss),
-//! then stops in `link_probe_done`. xtask checks where the linker put each
-//! section (`layout::memory`) and that none of them came out empty
-//! (`probe_sections` in xtask/src/main.rs), then runs it on the simulator from
-//! reset, with SRAM full of junk, and reads back what it copied (`sim::probe`).
-//! `cargo xtask hex` builds this alongside the firmware; it's never flashed.
+//! Not firmware. One static of each kind, for `cargo xtask hex` to check link.x
+//! and src/avr/rt.rs against, since the firmware has none. Never flashed.
 
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
 
-// rt.rs reaches the library's registers as `crate::regs`.
 #[cfg(target_arch = "avr")]
 use ts26::regs;
 #[cfg(target_arch = "avr")]
 #[path = "../src/avr/rt.rs"]
 mod rt;
 
-/// rt.rs's vector table jumps to these by name, and `__unhandled_interrupt`
-/// to `halt`. The probe never enables an interrupt, so they do nothing.
+/// rt.rs's vector table jumps to these by name. Nothing enables an interrupt.
 #[cfg(target_arch = "avr")]
 #[expect(
     clippy::missing_const_for_fn,
@@ -47,15 +33,12 @@ mod probe {
     use core::hint::black_box;
     use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
 
-    // The statics are `no_mangle` so they keep their names in the ELF. Odd
-    // lengths, so .data and .bss need link.x's ALIGN(2) padding.
+    // Odd lengths, so .data and .bss need link.x's ALIGN(2) padding.
 
-    /// Immutable, so .rodata.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     static LINK_PROBE_TABLE: [u8; 3] = [0x12, 0x34, 0x56];
 
-    /// Interior mutability with non-zero starting values, so .data.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     static LINK_PROBE_DATA: [AtomicU8; 3] = [
@@ -64,17 +47,14 @@ mod probe {
         AtomicU8::new(0xDE),
     ];
 
-    /// Starts at zero, so .bss.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     static LINK_PROBE_COPY: [AtomicU8; 7] = [const { AtomicU8::new(0) }; 7];
 
-    // src/avr/rt.rs calls `main` by name once memory is set up.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     extern "C" fn main() -> ! {
-        // `black_box` stops the compiler folding the reads into constants,
-        // so they really go through the addresses link.x gave the statics.
+        // So the reads go through the addresses link.x gave the statics.
         let table = black_box(&LINK_PROBE_TABLE);
         let data = black_box(&LINK_PROBE_DATA);
         let copy = black_box(&LINK_PROBE_COPY);
@@ -88,8 +68,6 @@ mod probe {
         link_probe_done()
     }
 
-    /// Where the probe stops. Nothing runs it on a real chip, so spinning
-    /// costs nothing.
     #[allow(unsafe_code, clippy::empty_loop)]
     #[unsafe(no_mangle)]
     #[inline(never)]
