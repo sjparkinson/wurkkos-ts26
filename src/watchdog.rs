@@ -11,8 +11,8 @@
 //! torch went dark straight after a verified flash of a stack that did, and a
 //! firmware hang wasn't ruled out. Unconfirmed on a real chip.
 
-use crate::TICKS_PER_SECOND;
 use crate::ramp::PWM_TOP;
+use crate::{TICKS_PER_SECOND, u16_from, u32_from};
 
 pub const CLOCKS_PER_TICK: u16 = 1024 / TICKS_PER_SECOND;
 /// `hw::start_watchdog` sets `WDT.CTRLA.WINDOW` to match.
@@ -23,12 +23,8 @@ pub const FEED_TICKS: u8 = 3;
 
 // The first tick arrives within a tick of `hw::start_watchdog`. `wdr` takes
 // two to three WDT clocks to sync (§19.3.6), the same for every feed.
-#[expect(
-    clippy::as_conversions,
-    reason = "widening u8 to u16 in a const, where From can't be called"
-)]
 const _: () = {
-    let gap = FEED_TICKS as u16 * CLOCKS_PER_TICK;
+    let gap = u16_from(FEED_TICKS) * CLOCKS_PER_TICK;
     assert!(gap > CLOSED_CLOCKS && gap < CLOSED_CLOCKS + OPEN_CLOCKS);
     assert!(CLOCKS_PER_TICK < OPEN_CLOCKS);
 };
@@ -47,20 +43,16 @@ pub const CLOCK_HZ: u32 = 10_000_000;
 /// chip.
 pub const TICK_DEADLINE_CYCLES: u16 = 2048;
 
-#[expect(
-    clippy::as_conversions,
-    reason = "widening to u32 in a const, where From can't be called"
-)]
 const _: () = {
-    let cycle = 2 * PWM_TOP as u32;
-    let tick = CLOCK_HZ / TICKS_PER_SECOND as u32;
-    let deadline = TICK_DEADLINE_CYCLES as u32 * cycle;
+    let cycle = 2 * u32_from(PWM_TOP);
+    let tick = CLOCK_HZ / u32_from(TICKS_PER_SECOND);
+    let deadline = u32_from(TICK_DEADLINE_CYCLES) * cycle;
     assert!(deadline > 6 * tick && deadline < 7 * tick);
     let slowest = tick * 105 / 70;
     // Three to sync the `wdr`, then both windows. The deadline counts from
     // the wait after a tick, which is never before the last feed.
-    let bite = (3 + CLOSED_CLOCKS + OPEN_CLOCKS) as u32;
-    assert!(deadline * CLOCKS_PER_TICK as u32 > bite * slowest);
+    let bite = u32_from(3 + CLOSED_CLOCKS + OPEN_CLOCKS);
+    assert!(deadline * u32_from(CLOCKS_PER_TICK) > bite * slowest);
 };
 
 #[derive(Clone, Copy, Debug, Default)]

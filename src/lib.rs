@@ -47,3 +47,19 @@ pub mod watchdog;
 
 /// 32.768 kHz over the PIT's 512.
 pub const TICKS_PER_SECOND: u16 = 64;
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub(crate) const fn u16_from(value: u8) -> u16 {
+    value as u16
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub(crate) const fn u32_from(value: u16) -> u32 {
+    value as u32
+}

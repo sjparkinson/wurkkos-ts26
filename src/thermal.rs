@@ -7,6 +7,7 @@
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
+use crate::u16_from;
 
 #[expect(
     clippy::as_conversions,
@@ -83,11 +84,7 @@ const _: () = {
 const JUMP: u16 = 6 * FRACTION.cast_unsigned();
 const GLITCHES: u8 = 3;
 
-#[expect(
-    clippy::as_conversions,
-    reason = "widening u8 to u16 in a const, where From can't be called"
-)]
-const _: () = assert!(MAX_STEP_DOWN as u16 * DOWN_EVERY as u16 <= CYCLE_TICKS as u16);
+const _: () = assert!(u16_from(MAX_STEP_DOWN) * u16_from(DOWN_EVERY) <= u16_from(CYCLE_TICKS));
 
 #[expect(
     clippy::cast_possible_truncation,

@@ -5,6 +5,8 @@
 //! [`sixteenths`] splits `d` into bytes. The split is exact, since
 //! `hi * g * 256` has nothing in its low six bits.
 
+use crate::{u16_from, u32_from};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Calibration {
     pub offset: i8,
@@ -21,14 +23,14 @@ impl Calibration {
 /// what the ADC can produce.
 const MAX_DIFFERENCE: u16 = 0x3FFF;
 
-#[expect(
-    clippy::as_conversions,
-    reason = "widening to u32 in a const, where From can't be called"
-)]
 const _: () = {
-    let (hi, lo, g) = ((MAX_DIFFERENCE >> 8) as u32, 0xFF, u8::MAX as u32);
-    assert!(lo * g + 0x20 <= u16::MAX as u32);
-    assert!(hi * g * 4 + ((lo * g + 0x20) >> 6) <= u16::MAX as u32);
+    let (hi, lo, g) = (
+        u32_from(MAX_DIFFERENCE >> 8),
+        0xFF,
+        u32_from(u16_from(u8::MAX)),
+    );
+    assert!(lo * g + 0x20 <= u32_from(u16::MAX));
+    assert!(hi * g * 4 + ((lo * g + 0x20) >> 6) <= u32_from(u16::MAX));
 };
 
 #[expect(
