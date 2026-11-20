@@ -39,6 +39,13 @@ mod guards {
                 hw::halt();
             }
         }
+        hw::set_output(Output {
+            enable: false,
+            dsm: 1000,
+        });
+        if !hw::wait_for_tick(true) {
+            hw::halt();
+        }
         hw::set_output(Output::OFF);
         if !hw::wait_for_tick(true) {
             hw::halt();

@@ -104,9 +104,10 @@ fn protected_write(addr: usize, value: u8) {
 
 /// First in `main`, since PB2 floats from reset until it's an output, and
 /// [`flash_ok`] stalls the CPU for about 7 ms before [`init`]. OUT before DIR,
-/// since a start that wasn't a reset could find PB2 still set. Nothing else
-/// such a start leaves stale can raise PB2, so there's no software reset at
-/// boot (reasoning only, unconfirmed on a chip).
+/// since a start that wasn't a reset could find PB2 still set. Past
+/// TCA0.INTCTRL, which [`init`] clears, nothing else such a start leaves stale
+/// can raise PB2, so there's no software reset at boot (reasoning only,
+/// unconfirmed on a chip).
 pub fn hold_enable_low() {
     write(reg::VPORTB_OUT, 0);
     write(reg::VPORTB_DIR, PORTB_OUTPUTS);
@@ -154,6 +155,9 @@ pub fn init() {
     write16(reg::TCA0_PER, PWM_TOP);
     write16(reg::TCA0_CMP0BUF, 0);
     write(reg::TCA0_CTRLB, CTRLB_OFF);
+    // `set_output` reads INTCTRL as "running", and a start that wasn't a
+    // reset could find it still set.
+    write(reg::TCA0_INTCTRL, 0);
     write(reg::TCA0_CTRLA, regs::TCA_CLKSEL_DIV1 | regs::TCA_ENABLE);
 
     // The ATDF says CALIB resets to 50% duty and the datasheet 25%, which it
@@ -198,12 +202,14 @@ const DSM_FRACTION: usize = reg::GPIO_GPIOR2;
 const DSM_SUM: usize = reg::GPIO_GPIOR3;
 const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 
-/// Power-down stops TCA0, so with PB2 high this idles instead. The ADC and its
+/// Power-down stops TCA0, so with the PWM running, lit or charging the filter
+/// on PB0, this idles instead. The ADC and its
 /// forced reference go off first, since the datasheet gives no current for
 /// either left on in power-down. Standby would stop TCA0, which has no
 /// RUNSTDBY (section 11.3.2.1). SEN has to stay set.
 fn prepare_sleep(rest: bool) {
-    let mode = if rest && read(reg::VPORTB_OUT) & 1 << ENABLE == 0 {
+    let pb2 = read(reg::VPORTB_OUT) & 1 << ENABLE;
+    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {
         write(reg::ADC0_CTRLA, 0);
         write(reg::VREF_CTRLB, 0);
         regs::SLPCTRL_SMODE_PDOWN
@@ -219,11 +225,13 @@ fn prepare_sleep(rest: bool) {
 /// `sei` and `sleep` stay back to back, since the instruction after `sei` runs
 /// before a pending interrupt, so a late tick still wakes the `sleep`.
 ///
-/// `false` means the light's on and no tick came in `TICK_DEADLINE_CYCLES` PWM
-/// cycles, about 104 ms, since the tick and the watchdog share the 32 kHz
-/// oscillator. With PB2 low there's no deadline on purpose, so a dead
-/// oscillator leaves the chip asleep with the boost converter off. Unconfirmed
-/// on a real chip.
+/// `false` means the PWM runs, lit or charging the filter on PB0, and no tick
+/// came in `TICK_DEADLINE_CYCLES` PWM cycles, about 104 ms, since the tick and
+/// the watchdog share the 32 kHz oscillator. The overflow interrupt that
+/// counts them only runs with the PWM, and the light only comes on with it.
+/// With the PWM stopped there's no deadline on purpose, so a dead oscillator
+/// leaves the chip asleep with the boost converter off. Unconfirmed on a real
+/// chip.
 pub fn wait_for_tick(rest: bool) -> bool {
     prepare_sleep(rest);
     let mut cycles = TICK_DEADLINE_CYCLES;
@@ -235,7 +243,7 @@ pub fn wait_for_tick(rest: bool) -> bool {
             write(reg::GPIO_GPIOR0, 0);
             break true;
         }
-        if read(reg::VPORTB_OUT) & 1 << ENABLE != 0 {
+        if read(reg::TCA0_INTCTRL) != 0 {
             let Some(left) = cycles.checked_sub(1) else {
                 break false;
             };
@@ -491,15 +499,18 @@ pub extern "avr-interrupt" fn tca0_ovf() {
 
 /// On sets the duty, then raises the enable. Off drops the enable, then zeroes
 /// the duty. CMP0BUF lands up to 51 µs later, inside the 180 µs the boost
-/// converter takes to start switching.
+/// converter takes to start switching. A duty with the enable clear runs the
+/// PWM with PB2 low, and the MP3432 is shut down with EN under 0.4 V.
 ///
 /// Off hands PB0 back to PORT, since what a stopped TCA0 leaves on WO0 isn't
 /// in the datasheet, and writes CMP0 directly so power-down can follow on this
 /// pass. Whether that clears WO0 before BOTTOM is unconfirmed, which could
-/// give PB0 one high cycle at the next turn-on.
+/// give PB0 one high cycle at the next start.
 pub fn set_output(output: Output) {
     if !output.enable {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
+    }
+    if !output.enable && output.dsm == 0 {
         without_interrupts(|| {
             write(reg::TCA0_INTCTRL, 0);
             write(reg::TCA0_CTRLB, CTRLB_OFF);
@@ -519,16 +530,18 @@ pub fn set_output(output: Output) {
     let duty = u8::try_from(dsm >> DSM_BITS).unwrap_or(0);
     let [low, _] = dsm.to_le_bytes();
     let fraction = low & FRACTION_MASK;
-    let was_off = read(reg::VPORTB_OUT) & 1 << ENABLE == 0;
+    let stopped = read(reg::TCA0_INTCTRL) == 0;
     without_interrupts(|| {
         write(DSM_DUTY, duty);
         write(DSM_FRACTION, fraction);
-        if was_off {
+        if stopped {
             write16(reg::TCA0_CMP0BUF, u16::from(duty));
             write(reg::TCA0_CTRLB, CTRLB_ON);
             write(reg::TCA0_INTFLAGS, regs::TCA_OVF);
             write(reg::TCA0_INTCTRL, regs::TCA_OVF);
         }
     });
-    write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);
+    if output.enable {
+        write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) | 1 << ENABLE);
+    }
 }

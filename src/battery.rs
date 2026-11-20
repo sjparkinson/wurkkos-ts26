@@ -187,6 +187,10 @@ impl Protection {
         self.ceiling.set(1, level);
     }
 
+    pub const fn weak(&self) -> bool {
+        self.weak
+    }
+
     pub const fn unloaded(&mut self, centivolts: u16) {
         self.weak = centivolts < LIGHT_FROM;
     }

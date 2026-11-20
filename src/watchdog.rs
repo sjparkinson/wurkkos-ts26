@@ -76,7 +76,7 @@ const _: () = {
 /// `hw::init` sets this clock, and the simulator holds the firmware to it.
 pub const CLOCK_HZ: u32 = 10_000_000;
 
-/// For a stopped 32 kHz oscillator with the light on, which stops the tick and
+/// For a stopped 32 kHz oscillator with the PWM running, which stops the tick and
 /// the watchdog together. TCA0 runs off the 20 MHz oscillator, so the wait
 /// counts its cycles instead.
 ///

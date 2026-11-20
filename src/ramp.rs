@@ -23,6 +23,7 @@ const _: () = assert!(CEILING > 0 && CEILING <= LEVELS);
 pub struct Output {
     /// PB2.
     pub enable: bool,
+    /// With `enable` clear, the PWM still runs if this isn't 0.
     pub dsm: u16,
 }
 
