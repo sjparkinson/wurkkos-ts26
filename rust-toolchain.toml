@@ -1,8 +1,10 @@
 # AVR needs nightly, because core is rebuilt with -Zbuild-std and inline
 # assembly on AVR is still behind asm_experimental_arch. Bump the date
 # deliberately, then run every check in CONTRIBUTING.md, because AVR is a
-# tier 3 target and nightlies do break it.
+# tier 3 target and nightlies do break it. llvm-tools and rust-analyzer
+# aren't needed to build; they're here so the objdump in docs/toolchain.md
+# and the editor's language server match the pinned nightly.
 [toolchain]
 channel = "nightly-2026-11-12"
-components = ["rust-src", "rustfmt", "clippy"]
+components = ["rust-src", "rustfmt", "clippy", "llvm-tools", "rust-analyzer"]
 profile = "minimal"
