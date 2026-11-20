@@ -58,7 +58,7 @@ pub const EXAMPLES: &[Example] = &[
     ex(
         "On: 1H, after one that stopped partway",
         "1C 1H:1s 1H:500ms",
-        Level(84),
+        Level(85),
     ),
     ex(
         "On: 1H, after turning it off and on",

@@ -1,5 +1,4 @@
-//! No debounce beyond the 64 Hz sampling, on the assumption that bounce is
-//! over within 15.6 ms. Unmeasured.
+//! How long this switch bounces is unmeasured.
 
 use crate::TICKS_PER_SECOND;
 
@@ -15,6 +14,33 @@ pub enum Event {
     Hold { clicks: u8, ticks: u16 },
     /// The end of a hold.
     Release { clicks: u8 },
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Debounce {
+    pressed: bool,
+    last: bool,
+}
+
+impl Debounce {
+    pub const fn new() -> Self {
+        Self {
+            pressed: false,
+            last: false,
+        }
+    }
+
+    pub const fn settled(&self) -> bool {
+        !self.pressed && !self.last
+    }
+
+    pub const fn sample(&mut self, pressed: bool) -> bool {
+        if pressed == self.last {
+            self.pressed = pressed;
+        }
+        self.last = pressed;
+        self.pressed
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -99,6 +125,34 @@ mod tests {
             }
         }
         (events, n)
+    }
+
+    #[test]
+    fn a_change_of_the_switch_counts_on_the_second_sample_that_shows_it() {
+        let mut switch = Debounce::new();
+        assert!(switch.settled());
+        assert!(!switch.sample(true));
+        assert!(!switch.settled(), "a press that may count");
+        assert!(switch.sample(true));
+        assert!(switch.sample(false), "one sample up");
+        assert!(!switch.sample(false));
+        assert!(switch.settled());
+    }
+
+    #[test]
+    fn the_switch_only_follows_two_samples_that_agree_for_every_pattern_of_sixteen() {
+        for pattern in 0..=u16::MAX {
+            let mut switch = Debounce::new();
+            let (mut last, mut was) = (false, false);
+            for bit in 0..16 {
+                let sample = pattern >> bit & 1 == 1;
+                let now = switch.sample(sample);
+                let expected = if sample == last { sample } else { was };
+                assert_eq!(now, expected, "sample {bit} of {pattern:#018b}");
+                assert_eq!(switch.settled(), !now && !sample);
+                (last, was) = (sample, now);
+            }
+        }
     }
 
     #[test]
