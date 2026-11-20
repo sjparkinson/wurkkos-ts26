@@ -365,23 +365,16 @@ fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 
 fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
     let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
-    let levels = std::cell::RefCell::new(Vec::new());
-    let mut shadow = Rig::default();
-    let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| {
-        let sample = Sample {
-            scene: Scene {
-                adc_dead: true,
-                ..sample.scene
-            },
-            ..sample
-        };
-        shadow.tick_in(sample.pressed, &sample.scene);
-        levels.borrow_mut().push(shadow.level());
-        sample
+    let mut levels = Vec::new();
+    let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| Sample {
+        scene: Scene {
+            adc_dead: true,
+            ..sample.scene
+        },
+        ..sample
     });
     let mut sim = sim;
-    let end = in_step(&mut sim, samples, report)?;
-    let levels = levels.into_inner();
+    let end = in_step_with(&mut sim, samples, report, |rig| levels.push(rig.level()))?;
     if end != Some(0) {
         return Err(format!("ends at level {end:?}, not off"));
     }
@@ -563,6 +556,15 @@ fn in_step(
     samples: impl IntoIterator<Item = Sample>,
     report: &mut Report,
 ) -> Result<Option<u8>, String> {
+    in_step_with(sim, samples, report, |_| {})
+}
+
+fn in_step_with(
+    sim: &mut Sim,
+    samples: impl IntoIterator<Item = Sample>,
+    report: &mut Report,
+    mut each: impl FnMut(&Rig),
+) -> Result<Option<u8>, String> {
     // The firmware reads the fuses before its first tick.
     let mut samples = samples.into_iter().peekable();
     let power_on = World::from(samples.peek().map_or(Scene::NORMAL, |s| s.scene));
@@ -625,6 +627,7 @@ fn in_step(
                 rig.torch.aux()
             )));
         }
+        each(&rig);
         was_resting = rig.torch.resting();
         // The sleep that ended this pass answers the state the pass left, so
         // the feeder ticks after it, as in `main`.
