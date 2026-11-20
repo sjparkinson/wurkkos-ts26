@@ -1129,6 +1129,7 @@ mod tests {
         dark_at: u32,
         red_until: u32,
         cell_low: bool,
+        weak: bool,
         check_in: u16,
         /// `0` for none yet.
         checked_at: u32,
@@ -1145,6 +1146,7 @@ mod tests {
             } else if volts >= 340 {
                 self.cell_low = false;
             }
+            self.weak = volts < battery::LIGHT_FROM;
         }
     }
 
@@ -1206,6 +1208,8 @@ mod tests {
         turned_on: u32,
         lit_by_a_hold: u32,
         went_flat: u32,
+        refused: u32,
+        cut: u32,
         charged: u32,
         went_blind: u32,
         clicked_off_mid_fade: u32,
@@ -1241,6 +1245,7 @@ mod tests {
             dark_at: if failed { SHOW_TICKS.into() } else { 0 },
             red_until: 0,
             cell_low: false,
+            weak: false,
             check_in: 0,
             checked_at: 0,
         };
@@ -1383,7 +1388,20 @@ mod tests {
                 | (Health::Flat, Health::Flat)
                 | (Health::Fault, Health::Fault) => {}
                 (Health::Good, Health::Flat) => {
-                    check!(t, level_before == 1, "flat from level {level_before}");
+                    let volts = result.map(battery::centivolts);
+                    match level_before {
+                        0 => {
+                            check!(t, click || held, "refused without a press: {event:?}");
+                            check!(t, model.weak, "refused a cell it never read as weak");
+                            seen.refused += 1;
+                        }
+                        1 => {}
+                        _ => {
+                            let cut = volts.is_some_and(|v| v < battery::CUT_BELOW);
+                            check!(t, cut, "flat from level {level_before} at {volts:?}");
+                            seen.cut += 1;
+                        }
+                    }
                     seen.went_flat += 1;
                 }
                 (Health::Flat, Health::Good) => {
@@ -1580,6 +1598,8 @@ mod tests {
             ("turned on", seen.turned_on),
             ("lit by a hold", seen.lit_by_a_hold),
             ("gone flat", seen.went_flat),
+            ("refused to light a weak cell", seen.refused),
+            ("cut while lit", seen.cut),
             ("charged", seen.charged),
             ("unable to read the cell", seen.went_blind),
             ("clicked off mid-fade", seen.clicked_off_mid_fade),

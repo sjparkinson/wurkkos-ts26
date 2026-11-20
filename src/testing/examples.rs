@@ -90,31 +90,46 @@ pub const EXAMPLES: &[Example] = &[
     ex("Lockout: 1H", "3C 1H:2s", Off),
     ex("Lockout: Anything else", "3C 1C 2C 4C 2H:2s wait:1s", Off),
     // Low and flat cells. Every threshold is unmeasured on this light.
-    ex("Low cell", "cell:2.95V 1C wait:6s", Level(37)),
-    ex("Low cell, for long enough", "cell:2.95V 1C wait:60s", Off),
-    ex("Low cell, 1H", "cell:2.95V 1H wait:3s", Level(5)),
+    ex("Low cell", "1C cell:2.95V wait:12s", Level(37)),
+    ex("Low cell, for long enough", "1C cell:2.95V wait:60s", Off),
+    ex("Low cell, 1H", "1H cell:2.95V wait:3s", Level(5)),
     ex(
         "Low cell, 1H, for long enough",
-        "cell:2.95V 1H wait:60s",
+        "1H cell:2.95V wait:60s",
         Off,
     ),
-    ex("Flat cell", "cell:2.80V 1C wait:10s", Off),
-    ex("Flat cell, 1C again", "cell:2.80V 1C wait:10s 1C", Off),
-    ex("Flat cell, 1H", "cell:2.80V 1C wait:10s 1H", Off),
+    ex("Flat cell", "1C cell:2.85V wait:10s", Off),
+    ex("Flat cell, 1C again", "1C cell:2.85V wait:10s 1C", Off),
+    ex("Flat cell, 1H", "1C cell:2.85V wait:10s 1H", Off),
     ex(
         "Flat cell, rested but not charged, 1C",
-        "cell:2.80V 1C wait:10s cell:3.20V 1C",
+        "1C cell:2.85V wait:10s cell:3.20V 1C",
         Off,
     ),
     ex(
         "Flat cell, charged, 1C",
-        "cell:2.80V 1C wait:10s cell:3.80V 1C",
+        "1C cell:2.85V wait:10s cell:3.80V 1C",
         Level(52),
     ),
     ex(
         "Flat cell, charged, left alone",
-        "cell:2.80V 1C wait:10s cell:3.80V wait:301s",
+        "1C cell:2.85V wait:10s cell:3.80V wait:301s",
         Off,
+    ),
+    // Under 2.80 V lit, it's out in two readings rather than a fade.
+    ex("Cell under 2.80V, lit", "1C cell:2.75V wait:750ms", Off),
+    ex(
+        "Cell under 2.80V, lit, 1C",
+        "1C cell:2.75V wait:750ms 1C",
+        Off,
+    ),
+    // Under 3.00 V with the light off, a press reads it and it won't light.
+    ex("Weak cell, 1C", "cell:2.95V 1C", Off),
+    ex("Weak cell, 1H", "cell:2.95V 1H", Off),
+    ex(
+        "Weak cell, charged, 1C",
+        "cell:2.95V 1C cell:3.80V 1C",
+        Level(52),
     ),
     // Off's blue on a low cell. Only the aux changes.
     ex("Low cell, at rest", "cell:3.20V wait:1s 1C", Level(52)),
