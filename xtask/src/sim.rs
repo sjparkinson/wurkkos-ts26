@@ -38,7 +38,7 @@ use ts26::sensors::Channel;
 use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
 use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, Feeder, TICK_DEADLINE_CYCLES};
 
-use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_two_words, ldi};
+use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
 use crate::layout::{self, jmp_target, word};
@@ -774,12 +774,11 @@ fn patch_startup(
     let mut at = reset;
     loop {
         let w = word(image, at).ok_or("no call to main after __reset")?;
-        if w & 0xFE0E == 0x940E {
+        if is_call(w) {
             break; // call main
         }
-        if w >> 12 == 0xE {
-            let k = ((w >> 4) & 0xF0 | w & 0x0F) as u8;
-            found.push((at, (16 + ((w >> 4) & 0x0F)) as u8, k));
+        if let Some((r, k)) = ldi_operands(w) {
+            found.push((at, r, k));
         }
         at += if is_two_words(w) { 4 } else { 2 };
     }
@@ -2435,6 +2434,7 @@ impl Bus for Chip {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::avr::asm::{CLI, NOP, RETI, SEI, SLEEP, bytes as image, jmp, out, sts};
     use ts26::ui::Aux;
 
     const PA1_CTRL: usize = reg::PORTA_PIN0CTRL + BATTERY_PIN;
@@ -2812,24 +2812,15 @@ mod tests {
         assert!(err.contains("skew"), "{err}");
     }
 
-    /// `out a, r`, for an I/O address.
-    fn out(a: usize, r: u8) -> u16 {
-        0xB800 | (a as u16 & 0x30) << 5 | u16::from(r) << 4 | a as u16 & 0x0F
-    }
-
     #[test]
     fn found_lit_wants_out_cleared_by_the_first_register_write() {
         // r16 has PB0 and PB2, for DIR, and r17 is 0, for OUT.
-        let run = |writes: [u16; 2]| {
-            let image = [ldi(16, ENABLE | PWM), ldi(17, 0)]
-                .into_iter()
-                .chain(writes)
-                .flat_map(u16::to_le_bytes)
-                .collect();
+        let run = |[first, second]: [u16; 2]| {
+            let image = image([ldi(16, ENABLE | PWM), ldi(17, 0), first, second]);
             found_lit(Sim::new(image, SRAM.start, Ends::default())?)
         };
-        let dir = out(reg::VPORTB_DIR, 16);
-        let clear = out(reg::VPORTB_OUT, 17);
+        let dir = out(reg::VPORTB_DIR as u16, 16);
+        let clear = out(reg::VPORTB_OUT as u16, 17);
         assert_eq!(run([clear, dir]), Ok(()));
         let err = run([dir, clear]).unwrap_err();
         assert!(err.contains("leaves PB2 set"), "{err}");
@@ -2948,18 +2939,14 @@ mod tests {
     }
 
     fn stop_for_good(first: u16) -> Result<u64, String> {
-        let image = [first, 0x9588]
-            .into_iter()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        let mut sim = Sim::new(image, SRAM.start, Ends::default()).unwrap();
+        let mut sim = Sim::new(image([first, SLEEP]), SRAM.start, Ends::default()).unwrap();
         sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
         sim.tick(false)
     }
 
     #[test]
     fn a_pass_that_stops_for_good_fails() {
-        let err = stop_for_good(0x94F8).unwrap_err();
+        let err = stop_for_good(CLI).unwrap_err();
         assert!(err.contains("stopped for good"), "{err}");
     }
 
@@ -3624,10 +3611,6 @@ mod tests {
         .collect()
     }
 
-    fn image(words: impl IntoIterator<Item = u16>) -> Vec<u8> {
-        words.into_iter().flat_map(u16::to_le_bytes).collect()
-    }
-
     #[test]
     fn patching_startup_wants_the_loads_it_knows_then_the_call() {
         let linked = statics();
@@ -3653,25 +3636,11 @@ mod tests {
         assert!(err.contains("no call to main"), "{err}");
     }
 
-    const NOP: u16 = 0x0000;
-    const SEI: u16 = 0x9478;
     const SEC: u16 = 0x9408;
-    const SLEEP: u16 = 0x9588;
-    const RETI: u16 = 0x9518;
     /// `push r0`.
     const PUSH_R0: u16 = 0x920F;
     /// `rjmp` to itself.
     const SPIN: u16 = 0xCFFF;
-
-    /// `jmp`, to a byte address in the first 128 KB.
-    fn jmp(to: u32) -> [u16; 2] {
-        [0x940C, (to / 2) as u16]
-    }
-
-    /// `sts a, r16`.
-    fn sts_r16(a: usize) -> [u16; 2] {
-        [0x9300, a as u16]
-    }
 
     fn sim(words: impl IntoIterator<Item = u16>) -> Sim {
         let ends = Ends {
@@ -3804,8 +3773,8 @@ mod tests {
 
     /// r16 is set up beforehand so the PIT handler has nothing to give back.
     fn ticking() -> Sim {
-        let handler = sts_r16(reg::RTC_PITINTFLAGS).into_iter().chain([RETI]);
-        let mut words = handled_by(VECTOR_RTC_PIT, &handler.collect::<Vec<_>>());
+        let [sts0, sts1] = sts(16, reg::RTC_PITINTFLAGS as u16);
+        let mut words = handled_by(VECTOR_RTC_PIT, &[sts0, sts1, RETI]);
         words[1] = SLEEP;
         words[2] = SPIN - 1;
         let mut sim = sim(words);
