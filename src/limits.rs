@@ -86,6 +86,7 @@ impl Limits {
         self.level = 0;
     }
 
+    #[inline(never)]
     pub fn tick(&mut self, ui: u8, result: Option<u16>) -> Step {
         let on = ui != 0;
         if on && !self.on {
