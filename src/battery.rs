@@ -73,10 +73,23 @@ pub const RECOVER_AT: u16 = 330;
 /// so it sits well above where a flat cell rests. Unmeasured.
 pub const CHARGED_AT: u16 = 360;
 
+/// Likely, and unmeasured. 10 MHz wants VDD at 2.7 V or more (DS40002204A
+/// table 36-3) with no BOD, and whether this keeps VDD there depends on a
+/// regulator nobody has identified.
+pub const CUT_BELOW: u16 = 280;
+
+/// Lit samples in a row, so a turn-on's inrush can only ever be the first.
+pub const CUT_SAMPLES: u8 = 2;
+
+/// Read with the light off, so it sits a sag above [`CUT_BELOW`]. Likely, and
+/// unmeasured.
+pub const LIGHT_FROM: u16 = 300;
+
 /// From the MP3432's datasheet.
 const BOOST_START: u16 = 270;
 
-const _: () = assert!(BOOST_START < OFF_BELOW);
+const _: () = assert!(BOOST_START < CUT_BELOW && CUT_BELOW < OFF_BELOW);
+const _: () = assert!(CUT_BELOW < LIGHT_FROM && LIGHT_FROM < CHARGED_AT);
 const _: () = assert!(OFF_BELOW < STEP_DOWN_BELOW && STEP_DOWN_BELOW < RECOVER_AT);
 const _: () = assert!(RECOVER_AT < CHARGED_AT && CHARGED_AT < *PLAUSIBLE.end());
 
@@ -132,8 +145,11 @@ pub struct Protection {
     low_samples: u16,
     flat_samples: u16,
     high_samples: u16,
+    cut_samples: u8,
     implausible: u8,
     flat: bool,
+    /// The last reading with the light off was under [`LIGHT_FROM`].
+    weak: bool,
     ceiling: Ceiling,
     rested: u16,
 }
@@ -151,8 +167,10 @@ impl Protection {
             low_samples: 0,
             flat_samples: 0,
             high_samples: 0,
+            cut_samples: 0,
             implausible: 0,
             flat: false,
+            weak: false,
             ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
             rested: 0,
         }
@@ -168,6 +186,15 @@ impl Protection {
 
     pub fn fail(&mut self, level: u8) {
         self.ceiling.set(1, level);
+    }
+
+    pub const fn unloaded(&mut self, centivolts: u16) {
+        self.weak = centivolts < LIGHT_FROM;
+    }
+
+    /// Flat rather than lit, on a cell the last unloaded reading found weak.
+    pub const fn turn_on(&mut self) {
+        self.flat |= self.weak;
     }
 
     pub const fn tick(&mut self) -> u8 {
@@ -234,7 +261,18 @@ impl Protection {
 
         if level == 0 {
             (self.low_samples, self.flat_samples) = (0, 0);
+            self.cut_samples = 0;
             return Verdict::Ceiling(ceiling);
+        }
+        self.cut_samples = match centivolts < CUT_BELOW {
+            true => self.cut_samples.saturating_add(1),
+            false => 0,
+        };
+        if self.cut_samples >= CUT_SAMPLES {
+            (self.low_samples, self.flat_samples) = (0, 0);
+            self.cut_samples = 0;
+            self.flat = true;
+            return Verdict::Flat;
         }
         self.low_samples = match voltage < STEP_DOWN_BELOW {
             true => self.low_samples.saturating_add(1),
@@ -427,6 +465,56 @@ mod tests {
     }
 
     #[test]
+    fn two_lit_samples_below_2_8_volts_cut_it_at_any_level() {
+        for level in [1, 50, CEILING] {
+            let mut lvp = Protection::new();
+            run(&mut lvp, 380, level, secs(10));
+            assert_eq!(lvp.sample(CUT_BELOW - 1, level), NONE, "{level}");
+            assert_eq!(lvp.sample(CUT_BELOW - 1, level), Verdict::Flat, "{level}");
+            assert!(lvp.flat());
+        }
+    }
+
+    #[test]
+    fn one_sample_below_2_8_volts_is_no_cut() {
+        let mut lvp = Protection::new();
+        for _ in 0..secs(60) {
+            assert_eq!(lvp.sample(CUT_BELOW - 1, 50), NONE);
+            assert_eq!(lvp.sample(380, 50), NONE);
+        }
+        assert!(all(&run(&mut lvp, CUT_BELOW, 50, 2), NONE));
+    }
+
+    #[test]
+    fn a_sample_with_the_light_off_breaks_the_run_to_a_cut() {
+        let mut lvp = Protection::new();
+        assert_eq!(lvp.sample(CUT_BELOW - 1, 50), NONE);
+        lvp.sample(CUT_BELOW - 1, 0);
+        assert_eq!(lvp.sample(CUT_BELOW - 1, 50), NONE);
+        assert_eq!(lvp.sample(CUT_BELOW - 1, 50), Verdict::Flat);
+    }
+
+    #[test]
+    fn turning_on_after_a_weak_unloaded_reading_is_flat() {
+        let mut lvp = Protection::new();
+        lvp.turn_on();
+        assert!(!lvp.flat(), "nothing read yet");
+        lvp.unloaded(LIGHT_FROM);
+        lvp.turn_on();
+        assert!(!lvp.flat());
+        lvp.unloaded(LIGHT_FROM - 1);
+        assert!(!lvp.flat(), "only once it turns on");
+        lvp.turn_on();
+        assert!(lvp.flat());
+        assert_eq!(lvp.sample(LIGHT_FROM, 0), Verdict::Ceiling(CEILING));
+        assert!(lvp.flat(), "until charged");
+        lvp.unloaded(CHARGED_AT);
+        lvp.sample(CHARGED_AT, 0);
+        lvp.turn_on();
+        assert!(!lvp.flat());
+    }
+
+    #[test]
     fn a_flat_cell_goes_down_the_ramp_in_big_steps_before_turning_off() {
         let mut lvp = Protection::new();
         let mut verdicts = follow(&mut lvp, 280, CEILING, secs(10));
@@ -457,10 +545,10 @@ mod tests {
     #[test]
     fn waits_for_the_light_to_reach_the_ceiling_before_judging_it() {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 250, CEILING, secs(1)), Verdict::Ceiling(120));
+        assert_eq!(last(&mut lvp, 285, CEILING, secs(1)), Verdict::Ceiling(120));
         let held = Verdict::Ceiling(120);
-        assert!(all(&run(&mut lvp, 250, 121, secs(4)), held));
-        let verdicts = run(&mut lvp, 250, 120, secs(1));
+        assert!(all(&run(&mut lvp, 285, 121, secs(4)), held));
+        let verdicts = run(&mut lvp, 285, 120, secs(1));
         let (before, after) = verdicts.split_at(usize::from(secs(1)) - 1);
         assert!(all(before, held));
         assert_eq!(after, [Verdict::Ceiling(90)]);
@@ -496,10 +584,10 @@ mod tests {
     fn the_filter_takes_a_couple_of_seconds_to_follow_a_drop() {
         let mut lvp = Protection::new();
         run(&mut lvp, 360, 50, secs(10));
-        let verdicts = run(&mut lvp, 250, 50, secs(10));
+        let verdicts = run(&mut lvp, CUT_BELOW, 50, secs(10));
         let dropped = verdicts.iter().position(|&v| v != NONE).unwrap();
         let dropped = u16::try_from(dropped).unwrap();
-        assert!(dropped > secs(2) && dropped < secs(3), "{dropped}");
+        assert!(dropped > secs(4) && dropped < secs(6), "{dropped}");
     }
 
     #[test]
@@ -515,8 +603,8 @@ mod tests {
     fn does_nothing_while_the_torch_is_off() {
         let mut lvp = Protection::new();
         assert!(all(&run(&mut lvp, 250, 0, secs(600)), NONE));
-        assert_eq!(last(&mut lvp, 250, 1, secs(1) - 1), NONE);
-        assert_eq!(lvp.sample(250, 1), Verdict::Flat);
+        assert_eq!(last(&mut lvp, 285, 1, secs(1) - 1), NONE);
+        assert_eq!(lvp.sample(285, 1), Verdict::Flat);
     }
 
     #[test]
@@ -571,10 +659,10 @@ mod tests {
     #[test]
     fn a_rest_starts_the_hold_afresh() {
         let mut lvp = Protection::new();
-        run(&mut lvp, 250, 1, secs(1) - 1);
+        run(&mut lvp, 285, 1, secs(1) - 1);
         lvp.rest();
-        assert_eq!(last(&mut lvp, 250, 1, secs(1) - 1), NONE);
-        assert_eq!(lvp.sample(250, 1), Verdict::Flat);
+        assert_eq!(last(&mut lvp, 285, 1, secs(1) - 1), NONE);
+        assert_eq!(lvp.sample(285, 1), Verdict::Flat);
     }
 
     #[test]
@@ -689,7 +777,7 @@ mod tests {
 
     fn flat() -> Protection {
         let mut lvp = Protection::new();
-        assert_eq!(last(&mut lvp, 250, 1, secs(1)), Verdict::Flat);
+        assert_eq!(last(&mut lvp, 285, 1, secs(1)), Verdict::Flat);
         assert!(lvp.flat());
         lvp
     }
@@ -765,12 +853,15 @@ mod tests {
     enum Held {
         Fine,
         Flat,
+        Cut,
         Unreadable,
     }
 
     fn held(cv: u16) -> Held {
         if !PLAUSIBLE.contains(&cv) {
             Held::Unreadable
+        } else if cv < CUT_BELOW {
+            Held::Cut
         } else if cv < STEP_DOWN_BELOW {
             Held::Flat
         } else {
@@ -780,7 +871,7 @@ mod tests {
 
     #[test]
     fn every_reading_held_ends_where_the_thresholds_say() {
-        let mut ends = [0_u32; 3];
+        let mut ends = [0_u32; 4];
         for raw in 0..=FULL_SCALE {
             let cv = centivolts(raw);
             let expected = held(cv);
@@ -801,6 +892,8 @@ mod tests {
                     Held::Fine => Some(NONE),
                     Held::Unreadable if n <= u16::from(GLITCHES) => Some(NONE),
                     Held::Unreadable => Some(Verdict::Blind),
+                    Held::Cut if n < u16::from(CUT_SAMPLES) => Some(NONE),
+                    Held::Cut => Some(Verdict::Flat),
                     Held::Flat => None,
                 };
                 if let Some(want) = want {
@@ -822,11 +915,16 @@ mod tests {
                     let blind = u16::from(GLITCHES) + 1;
                     assert_eq!(off_at, Some(blind), "raw {raw} ({cv} cV)");
                 }
+                Held::Cut => {
+                    let cut = u16::from(CUT_SAMPLES);
+                    assert_eq!(off_at, Some(cut), "raw {raw} ({cv} cV)");
+                }
             }
             ends[match expected {
                 Held::Fine => 0,
                 Held::Flat => 1,
-                Held::Unreadable => 2,
+                Held::Cut => 2,
+                Held::Unreadable => 3,
             }] += 1;
         }
         assert!(ends.iter().all(|&count| count > 0), "{ends:?}");

@@ -96,6 +96,7 @@ impl Limits {
         let on = ui != 0;
         if on && !self.on {
             self.thermal.reset();
+            self.protection.turn_on();
         }
         self.on = on;
         let ui = ui.min(CEILING);
@@ -119,6 +120,7 @@ impl Limits {
                     && battery::plausible(centivolts)
                 {
                     unloaded = Some(centivolts);
+                    self.protection.unloaded(centivolts);
                 }
                 if self.protection.sample(centivolts, level) == Verdict::Blind {
                     self.fault = true;
@@ -348,14 +350,15 @@ mod tests {
     fn a_voltage_reading_on_the_tick_it_turns_on_counts() {
         let sample = usize::from(CYCLE_TICKS);
         let mut run = Run::new();
-        run.adc.voltage = voltage_reading(280);
         let on_at = 4 * sample + 2;
-        run.ticks(on_at as u32);
+        run.ticks(on_at as u32 - 2);
+        run.adc.voltage = voltage_reading(battery::CUT_BELOW - 1);
+        run.ticks(2);
         run.ui = 1;
         run.ticks(1);
         assert_eq!(run.levels[on_at], 1);
         run.secs(2);
-        let off_at = on_at + (usize::from(battery::HOLD_SAMPLES) - 1) * sample;
+        let off_at = on_at + (usize::from(battery::CUT_SAMPLES) - 1) * sample;
         assert!(run.levels[on_at..off_at].iter().all(|&l| l == 1));
         assert_eq!(run.levels[off_at], 0);
         assert_eq!(run.offs, 1);
