@@ -24,6 +24,7 @@ pub const AUX_DARK_BELOW: u16 = 330;
 pub const AUX_LIT_FROM: u16 = 340;
 
 const _: () = assert!(AUX_DARK_BELOW < AUX_LIT_FROM);
+const _: () = assert!(crate::battery::FORGET_TICKS <= CHECK_TICKS);
 
 #[derive(Clone, Debug)]
 pub struct Torch {

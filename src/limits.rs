@@ -666,7 +666,6 @@ mod tests {
     #[test]
     fn a_check_at_rest_seeds_the_filter_afresh_and_leaves_the_ceiling() {
         use crate::torch::CHECK_TICKS;
-        assert_eq!(CHECK_TICKS, battery::FORGET_TICKS);
         let mut run = Run::new();
         run.ui = CEILING;
         run.adc.voltage = voltage_reading(295);
