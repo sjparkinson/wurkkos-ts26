@@ -443,12 +443,16 @@ impl Rng {
         Self(if seed == 0 { 1 } else { seed })
     }
 
-    /// The top of the state is the better end.
-    pub const fn next_u16(&mut self) -> u16 {
+    pub const fn next_u32(&mut self) -> u32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;
-        (self.0 >> 16) as u16
+        self.0
+    }
+
+    /// The top of the state is the better end.
+    pub const fn next_u16(&mut self) -> u16 {
+        (self.next_u32() >> 16) as u16
     }
 }
 

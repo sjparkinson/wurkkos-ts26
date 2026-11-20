@@ -1,9 +1,10 @@
 use ts26::button::{HOLD_TICKS, RELEASE_TICKS};
+use ts26::testing::Rng;
 
 /// (pressed, ticks) spans that alternate, starting released.
 #[derive(Clone, Debug)]
 pub struct RandomSwitching {
-    state: u32,
+    rng: Rng,
     pressed: bool,
 }
 
@@ -22,18 +23,10 @@ impl RandomSwitching {
     ];
 
     pub const fn new(seed: u32) -> Self {
-        // Xorshift never leaves zero.
         Self {
-            state: if seed == 0 { 1 } else { seed },
+            rng: Rng::new(seed),
             pressed: true,
         }
-    }
-
-    const fn random(&mut self) -> u32 {
-        self.state ^= self.state << 13;
-        self.state ^= self.state >> 17;
-        self.state ^= self.state << 5;
-        self.state
     }
 }
 
@@ -42,9 +35,9 @@ impl Iterator for RandomSwitching {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.pressed = !self.pressed;
-        let ticks = match self.random() % 3 {
-            0 => 1 + (self.random() % 100) as u16,
-            _ => Self::EDGES[self.random() as usize % Self::EDGES.len()],
+        let ticks = match self.rng.next_u32() % 3 {
+            0 => 1 + (self.rng.next_u32() % 100) as u16,
+            _ => Self::EDGES[self.rng.next_u32() as usize % Self::EDGES.len()],
         };
         Some((self.pressed, ticks))
     }
