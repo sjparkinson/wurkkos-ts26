@@ -112,14 +112,9 @@ mod tests {
     #[test]
     fn refuses_an_image_that_reaches_the_stamp() {
         assert!(sign(&vec![0; STAMP_AT], &stamp::TEST).is_ok());
-        let err = sign(&vec![0; STAMP_AT + 1], &stamp::TEST).unwrap_err();
-        assert!(err.contains("no room for the stamp and CRC"), "{err}");
-    }
-
-    #[test]
-    fn refuses_an_image_that_reaches_the_checksum() {
-        let err = sign(&vec![0; CHECKSUM_AT], &stamp::TEST).unwrap_err();
-        assert!(err.contains("no room for the stamp and CRC"), "{err}");
-        assert!(sign(&vec![0; CHECKSUM_AT + 1], &stamp::TEST).is_err());
+        for len in [STAMP_AT + 1, CHECKSUM_AT, CHECKSUM_AT + 1] {
+            let err = sign(&vec![0; len], &stamp::TEST).unwrap_err();
+            assert!(err.contains("no room for the stamp and CRC"), "{err}");
+        }
     }
 }

@@ -261,9 +261,13 @@ mod tests {
     const RESET: u32 = 0x82;
     const HALT_AT: u32 = 0x84;
 
-    fn clear_r1_and_halt() -> [u16; 3] {
-        let [w0, w1] = jmp(HALT_AT);
+    fn clear_r1_and_jump(to: u32) -> [u16; 3] {
+        let [w0, w1] = jmp(to);
         [EOR_R1_R1, w0, w1]
+    }
+
+    fn clear_r1_and_halt() -> [u16; 3] {
+        clear_r1_and_jump(HALT_AT)
     }
 
     /// `unhandled` at 0x7C, reset at 0x82 and `hw::halt` at 0x84.
@@ -330,34 +334,19 @@ mod tests {
 
     #[test]
     fn rejects_a_halt_that_is_not_in_the_code_after_the_table() {
-        let to = |addr| {
-            let [w0, w1] = jmp(addr);
-            [EOR_R1_R1, w0, w1]
-        };
         for bad in [0x10, 0x78, 0x86, 0x1000] {
-            let img = image_with(standard, to(bad));
+            let img = image_with(standard, clear_r1_and_jump(bad));
             let err = vectors(&img, RESET, UNHANDLED, bad).unwrap_err();
             assert!(err.contains("hw::halt is at"), "{bad:#x}: {err}");
         }
-        let img = image_with(standard, to(0x7C));
+        let img = image_with(standard, clear_r1_and_jump(0x7C));
         assert_eq!(vectors(&img, RESET, UNHANDLED, 0x7C), Ok(()));
-    }
-
-    #[test]
-    fn accepts_an_unhandled_interrupt_that_clears_r1_and_jumps_to_halt() {
-        let img = image_with(standard, clear_r1_and_halt());
-        assert_eq!(word(&img, UNHANDLED as usize), Some(EOR_R1_R1));
-        assert_eq!(jmp_target(&img, UNHANDLED as usize + 2), Some(HALT_AT));
-        assert_eq!(vectors(&img, RESET, UNHANDLED, HALT_AT), Ok(()));
     }
 
     #[test]
     fn rejects_an_unhandled_interrupt_that_doesnt_clear_r1_and_jump() {
         let [_, w0, w1] = clear_r1_and_halt();
-        let to = |addr| {
-            let [w0, w1] = jmp(addr);
-            [EOR_R1_R1, w0, w1]
-        };
+        let to = clear_r1_and_jump;
         let cases = [
             ([RETI, NOP, NOP], "eor r1, r1"),
             ([NOP, w0, w1], "eor r1, r1"),
