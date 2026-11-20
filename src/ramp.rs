@@ -1,43 +1,27 @@
-//! The 150 levels, and what each one asks of the boost converter.
-//!
-//! Levels are in delta-sigma units, the same 15-bit scale the stock firmware
-//! uses on this board. That's 0 to 32640, a PWM duty of 0 to 255 with seven
-//! more bits below it. docs/hardware.md has why. The curve here is this
-//! firmware's own cubic, not the stock firmware's table, and nobody's measured what it comes
-//! out as in lumens.
+//! The curve is unmeasured in lumens.
 
-/// How many levels the ramp has. Level 0 is off.
 pub const LEVELS: u8 = 150;
 
-/// The highest level the firmware will run at, until thermal regulation has
-/// been checked on a real light.
-///
-/// Turbo pulls about 11 A from the cell, and the thermal constants have never
-/// met this torch. Raise it to [`LEVELS`] then.
+/// Held below [`LEVELS`] until thermal regulation has been checked on a real
+/// light, since turbo pulls about 11 A. Unconfirmed.
 pub const CEILING: u8 = 120;
 
-/// TCA0's period. Dual-slope PWM at 10 MHz with a TOP of 255 runs at
-/// 10 MHz / (2 × 255) ≈ 19.6 kHz, well above anything you'd hear or see.
+/// Dual-slope at 10 MHz, so about 19.6 kHz.
 pub const PWM_TOP: u16 = 255;
 
-/// How many delta-sigma bits sit below the PWM duty.
 pub const DSM_BITS: u8 = 7;
 
-/// Level 1. ToyKeeper's sample wouldn't light steadily below this
-/// (docs/hardware.md).
+/// One sample wouldn't light steadily below this. Unconfirmed on this torch.
 pub const DSM_FLOOR: u16 = 20;
 
-/// Level 150, which is a duty of 255 with the delta-sigma bits clear.
 pub const DSM_TOP: u16 = PWM_TOP << DSM_BITS;
 
 const _: () = assert!(CEILING > 0 && CEILING <= LEVELS);
 
-/// What the main LED's driver should be doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Output {
-    /// The boost converter's enable pin (PB2).
+    /// PB2.
     pub enable: bool,
-    /// The brightness on PB0, from 0 to [`DSM_TOP`].
     pub dsm: u16,
 }
 
@@ -54,8 +38,6 @@ impl Output {
 )]
 static TABLE: [u16; LEVELS as usize] = table();
 
-/// The output for `level`. Level 0 is off, and anything over [`CEILING`] runs
-/// at the ceiling.
 pub fn output(level: u8) -> Output {
     let Some(index) = level.min(CEILING).checked_sub(1) else {
         return Output::OFF;
@@ -66,9 +48,7 @@ pub fn output(level: u8) -> Output {
     }
 }
 
-/// Worked out at compile time, so the wide maths never reaches the chip. A
-/// cubic this flat at the bottom would repeat itself there, so each level is
-/// held at least one step over the last.
+/// `const fn`, since the u64 maths would need `__mulsi3` and up at runtime.
 #[expect(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,

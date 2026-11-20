@@ -1,12 +1,3 @@
-//! A level that follows a target one step at a time, so a step-down fades
-//! rather than jumps.
-//!
-//! It moves at most one level per tick, and you pick how many ticks each step
-//! waits for, separately going down and going up. A [`Ceiling`] is one with
-//! somewhere to head for, and thermal regulation (`src/thermal.rs`) and
-//! low-voltage protection (`src/battery.rs`) keep one each. UI changes (on,
-//! off, ramping) shouldn't go through it, because they want to be instant.
-
 use crate::ramp::CEILING;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,8 +9,6 @@ pub struct Gradual {
 }
 
 impl Gradual {
-    /// Starts at `level`, stepping down once every `down_every` ticks and up
-    /// once every `up_every`. A rate of `0` counts as `1`, one level a tick.
     pub const fn new(level: u8, down_every: u8, up_every: u8) -> Self {
         Self {
             level,
@@ -33,13 +22,8 @@ impl Gradual {
         self.level
     }
 
-    /// One tick towards `target`. Returns the new level, which is never more
-    /// than one away from the last.
-    ///
-    /// Each step is worked out under the comparison that bounds it, so
-    /// release builds, which check for overflow, can see that neither wraps.
-    /// Comparing with `cmp`, or comparing twice, hides that and links a
-    /// panic.
+    /// Each step sits under the comparison that bounds it. Comparing with
+    /// `cmp`, or twice, hides that from the optimiser and links a panic.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "level is over target going down, so at least 1, and under it going up, \
@@ -63,9 +47,7 @@ impl Gradual {
         self.level
     }
 
-    /// Drops the level to `max` straight away if it's above it. Only do this
-    /// when nothing can see the difference, such as pulling a ceiling down to
-    /// the level the light is already at.
+    /// Only where nothing can see the jump.
     pub const fn cap(&mut self, max: u8) {
         if self.level > max {
             self.level = max;
@@ -74,17 +56,13 @@ impl Gradual {
     }
 }
 
-/// A limit on the level that fades to wherever it's sent, starting at
-/// [`CEILING`], which is no limit at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ceiling {
-    /// Where it's heading.
     target: u8,
     level: Gradual,
 }
 
 impl Ceiling {
-    /// Fading down a level every `down_every` ticks and up every `up_every`.
     pub const fn new(down_every: u8, up_every: u8) -> Self {
         Self {
             target: CEILING,
@@ -92,26 +70,18 @@ impl Ceiling {
         }
     }
 
-    /// The ceiling right now.
     pub const fn level(&self) -> u8 {
         self.level.level()
     }
 
-    /// Where it's heading.
     pub const fn target(&self) -> u8 {
         self.target
     }
 
-    /// One tick. Moves a step towards the target and returns the ceiling.
     pub const fn tick(&mut self) -> u8 {
         self.level.tick(self.target)
     }
 
-    /// Heads for `target`, with the light at `level` (`0` for off). A
-    /// ceiling above the light's level does nothing, so one that's coming
-    /// down is first pulled down to the level, or to `target` if that's
-    /// higher. Nothing visible changes, and the fade shows from its first
-    /// step.
     pub fn set(&mut self, target: u8, level: u8) {
         if target < self.level.level() {
             self.level.cap(level.max(target));
@@ -119,7 +89,6 @@ impl Ceiling {
         self.target = target;
     }
 
-    /// Heads a level higher, up to [`CEILING`].
     pub fn raise(&mut self) {
         self.target = self.target.saturating_add(1).min(CEILING);
     }
@@ -208,7 +177,6 @@ mod tests {
         run(&mut gradual, 0, 3);
         gradual.cap(100);
         assert_eq!(gradual.tick(0), 99, "the fourth tick still steps");
-        // A cap that does lower it starts the wait again.
         run(&mut gradual, 0, 3);
         gradual.cap(98);
         assert_eq!(run(&mut gradual, 0, 3), 98);
@@ -229,10 +197,8 @@ mod tests {
         let mut ceiling = Ceiling::new(1, 1);
         ceiling.set(40, 60);
         assert_eq!(ceiling.level(), 60);
-        // Not below the target, though.
         ceiling.set(30, 10);
         assert_eq!(ceiling.level(), 30);
-        // And going up, it stays where it is.
         ceiling.set(80, 10);
         assert_eq!(ceiling.level(), 30);
     }
