@@ -67,6 +67,16 @@ pub fn fits_flash(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub fn fits_eeprom(data: &[u8]) -> Result<()> {
+    if data.len() > map::EEPROM_SIZE {
+        return Err(format!(
+            "the EEPROM image is bigger than {} bytes",
+            map::EEPROM_SIZE
+        ));
+    }
+    Ok(())
+}
+
 const SYNC: u8 = 0x55;
 const ACK: u8 = 0x40;
 
@@ -319,13 +329,7 @@ impl<W: Wire> Programmer<W> {
     /// One call, because a page write can only clear bits, so over flash that
     /// isn't blank it ANDs the new data into the old.
     pub fn erase_and_write_flash(&mut self, data: &[u8]) -> Result<()> {
-        if data.len() > map::FLASH_SIZE {
-            return Err(format!(
-                "the image is {} bytes; the ATtiny1616 has {}",
-                data.len(),
-                map::FLASH_SIZE
-            ));
-        }
+        fits_flash(data)?;
         self.chip_erase()?;
         self.write_pages(map::FLASH, map::FLASH_PAGE, data, NVM_PAGE_WRITE, true)
     }
