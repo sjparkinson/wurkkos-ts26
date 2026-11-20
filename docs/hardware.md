@@ -46,7 +46,9 @@ The TS26 code only ever writes `TCA0.SINGLE.CMP0BUF`, never DAC0. Confirmed from
 
 The stock firmware runs TCA0 dual-slope off 10 MHz with TOP 255, about 19.6 kHz, with seven bits of delta-sigma on top stepped once a PWM cycle, so levels are 15-bit (0 to 32640). Its floor is 20 of 32640 ("It won't light up below DSM 10/32640"), and its default smooth floor is level 5, which is 36 in those units, "by request". Confirmed from source. Reviewers saw flicker at the lowest levels, likely the driver at very small currents. Unmeasured.
 
-This firmware's ramp is its own curve over the same range, with the UI between levels 13 and 150. Level 13 is 37 in those units, just over the stock smooth floor. Levels 5 (24), 11 (30) and 13 (37) all flickered slightly when steady, reached by ramping down or by 1H from off, and bounced as 1H lit them from off. Likely the driver at very small currents, as on the stock firmware, and unmeasured.
+This firmware's ramp is its own curve over the same range, with the UI between levels 17 and 150. Level 17 is 60 in those units. Levels 5 (24), 11 (30) and 13 (37) all flickered slightly when steady, reached by ramping down or by 1H from off. Likely the driver at very small currents, as on the stock firmware, and unmeasured. Whether level 17 flickers is unmeasured.
+
+Every turn-on, at the floor and at a brighter level, filmed at 30 fps in the dark, showed a flash in the first frame, then a drop to about 15 to 30 % of the final brightness, then a smooth rise over several hundred milliseconds. The firmware commands one clean step. Likely the converter's loop overshooting at start-up, then the filter between PB0 and the driver charging from zero, and unmeasured. A TCA0 restart at turn-on didn't change it.
 
 1Lumen measured 11.30 A at the tail at turbo start, about 40 W from the cell, and turbo falling to about 600 lm after ten minutes. The stock TS26 build has no timed step-down, so that's likely thermal.
 
