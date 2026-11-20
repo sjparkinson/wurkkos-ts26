@@ -36,9 +36,9 @@ Each way found so far that this torch could hurt someone or itself, what covers 
 
 **Hazard.** A lit light in still air, or with the head covered.
 
-**Cover.** `thermal::Thermal` steps the ceiling down towards `thermal::FLOOR` (level 50) past `thermal::LIMIT` (50 °C at the sensor). Nothing else holds the light back from level 150, the top of the ramp, where a reviewer's torch drew about 11.3 A.
+**Cover.** `thermal::Thermal` steps the ceiling down towards `thermal::FLOOR` (level 50) past `thermal::LIMIT` (50 °C at the sensor), twice as fast above level 120 (`thermal::FAST_ABOVE`), where a level is more power. Nothing else holds the light back from level 150, the top of the ramp, where a reviewer's torch drew about 11.3 A.
 
-**Unproven.** Simulator, with the readings scripted. The sensor reads the die, and how it tracks the head is unknown. Nothing above level 120 has run on this torch, and what the top draws here, and how hot it gets, is unmeasured. In the thermal tests' head model, itself a guess, a cold start at level 150 warms to about 3 K over the limit and dips to about level 50 before it settles, where level 120 stays within about 1.3 K.
+**Unproven.** Simulator, with the readings scripted. The sensor reads the die, and how it tracks the head is unknown. Nothing above level 120 has run on this torch, and what the top draws here, and how hot it gets, is unmeasured. In the thermal tests' head model, itself a guess, a cold start at level 150 warms to about 2 K over the limit, the most those tests allow, where level 120 stays within about 1.3 K. The faster steps were tuned against that same model.
 
 ### H5. Lit in a pocket or a bag
 
