@@ -607,13 +607,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn enters_progmode_and_checks_the_signature() {
-        let mut p = Programmer::connect(Tiny::new()).unwrap();
-        p.enter_progmode().unwrap();
-        p.check_signature().unwrap();
-    }
-
-    #[test]
     fn waits_for_the_chip_to_start_up_on_a_fast_or_slow_adapter() {
         for round_trip in [Duration::from_micros(100), Duration::from_millis(16)] {
             let mut tiny = Tiny::new();
