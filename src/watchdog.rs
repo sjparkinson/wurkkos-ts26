@@ -58,19 +58,15 @@ const _: () = {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Feeder {
     wait: u8,
-    fed: bool,
 }
 
 impl Feeder {
     pub const fn new() -> Self {
-        Self {
-            wait: 0,
-            fed: false,
-        }
+        Self { wait: 0 }
     }
 
     pub const fn tick(&mut self) -> bool {
-        self.fed = match self.wait.checked_sub(1) {
+        match self.wait.checked_sub(1) {
             None => {
                 self.wait = FEED_TICKS - 1;
                 true
@@ -79,18 +75,7 @@ impl Feeder {
                 self.wait = wait;
                 false
             }
-        };
-        self.fed
-    }
-
-    pub const fn fed(&self) -> bool {
-        self.fed
-    }
-
-    /// Not straight after a feed, since the datasheet doesn't say a `wdr`
-    /// finishes syncing (§19.3.6) with the peripheral clock stopped.
-    pub const fn power_down(&self, resting: bool) -> bool {
-        resting && !self.fed
+        }
     }
 }
 
@@ -125,37 +110,6 @@ mod tests {
         let feeds: [bool; 10] = core::array::from_fn(|_| feeder.tick());
         let (t, f) = (true, false);
         assert_eq!(feeds, [t, f, f, t, f, f, t, f, f, t]);
-    }
-
-    #[test]
-    fn remembers_whether_the_last_tick_fed_it() {
-        let mut feeder = Feeder::new();
-        assert!(!feeder.fed(), "nothing's fed it before the first tick");
-        for _ in 0..10 {
-            let fed = feeder.tick();
-            assert_eq!(feeder.fed(), fed);
-        }
-    }
-
-    #[test]
-    fn never_powers_down_straight_after_a_feed() {
-        let mut feeder = Feeder::new();
-        assert!(feeder.power_down(true), "before the first feed");
-        let after: [bool; 6] = core::array::from_fn(|_| {
-            feeder.tick();
-            feeder.power_down(true)
-        });
-        let (t, f) = (true, false);
-        assert_eq!(after, [f, t, t, f, t, t]);
-    }
-
-    #[test]
-    fn never_powers_down_with_something_to_do() {
-        let mut feeder = Feeder::new();
-        for _ in 0..FEED_TICKS * 2 {
-            assert!(!feeder.power_down(false));
-            feeder.tick();
-        }
     }
 
     #[test]

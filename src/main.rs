@@ -59,7 +59,7 @@ extern "C" fn main() -> ! {
     loop {
         // Most likely a stopped 32 kHz oscillator with the light on, which
         // stops the watchdog too.
-        if !hw::wait_for_tick(feeder.power_down(torch.resting())) {
+        if !hw::wait_for_tick(torch.resting()) {
             hw::halt();
         }
 
