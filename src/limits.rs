@@ -129,7 +129,8 @@ impl Limits {
         let thermal = self.thermal.tick();
         let battery = self.protection.tick();
         let fault = self.fault && self.level <= 1;
-        let off = on && (fault || self.protection.flat());
+        let flat = !self.fault && self.protection.flat();
+        let off = on && (fault || flat);
         self.lit_before = self.level > 0;
         self.level = if on && !off {
             ui.min(thermal).min(battery)
@@ -387,6 +388,26 @@ mod tests {
             assert_eq!(run.offs, 2, "{garbage}");
             assert_eq!(run.limits.health(), Health::Fault, "{garbage}");
         }
+    }
+
+    #[test]
+    fn a_low_cell_during_a_faults_fade_still_fades_a_level_a_tick() {
+        let mut run = Run::new();
+        run.ui = CEILING;
+        run.adc.voltage = voltage_reading(295);
+        run.secs(4);
+        run.adc.voltage = 0;
+        while run.limits.health() == Health::Good {
+            run.tick();
+        }
+        run.adc.voltage = voltage_reading(295);
+        run.secs(5);
+        assert_eq!(run.offs, 1);
+        let lit: Vec<u8> = run.levels.iter().copied().filter(|&l| l > 0).collect();
+        for level in 1..CEILING {
+            assert!(lit.contains(&level), "faded through {level}");
+        }
+        assert_eq!(lit.last(), Some(&1));
     }
 
     #[test]
