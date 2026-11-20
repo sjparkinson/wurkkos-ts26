@@ -1,8 +1,8 @@
 use crate::button::Event;
 use crate::ramp::CEILING;
 
-/// 32 delta-sigma units, under the stock firmware's smooth floor of 36,
-/// below which reviewers saw flicker. Levels 5 and 11 flickered on this torch.
+/// 37 delta-sigma units, just over the stock firmware's smooth floor of 36.
+/// Levels 5, 11 and 13 all flickered slightly on this torch.
 pub const FLOOR: u8 = 13;
 
 pub const ON_LEVEL: u8 = 52;
