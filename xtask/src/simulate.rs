@@ -1,19 +1,4 @@
-//! `cargo xtask simulate` runs the UI in `src/ui.rs` on your machine.
-//!
-//! It drives `ts26::torch::Torch`, the same loop body the firmware runs, one
-//! switch sample per 64 Hz tick. Give it a script in Anduril's notation and
-//! it prints what each click and hold did, like this.
-//!
-//! ```text
-//! cargo xtask simulate 1C 2H:1.5s wait:1s 3C
-//! ```
-//!
-//! `ts26::testing` reads the script, the same reader `testing::EXAMPLES`
-//! uses, and says what each word means. On the simulated chip,
-//! `fault` is a fuse that fails the read-back.
-//!
-//! With no script it runs live in the terminal, in real time, with the keys
-//! in `HELP`. Terminals don't say when a key goes up, which a hold needs, so
+//! Terminals don't say when a key goes up, which a hold needs, so live mode's
 //! `h` holds the switch down until pressed again.
 
 use std::collections::VecDeque;
@@ -30,23 +15,18 @@ pub use ts26::testing::Action;
 
 use crate::terminal::{CTRL_C, Terminal};
 
-/// Reads a script, word by word.
 pub fn parse(words: &[&str]) -> Result<Vec<Action>, String> {
     testing::parse(words.iter().copied())
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())
 }
 
-/// What a script did to a fresh torch.
 pub struct Run {
-    /// One line per click and hold.
     pub lines: Vec<String>,
     pub ticks: u32,
-    /// Where the light was left.
     pub level: u8,
 }
 
-/// Runs a script on a fresh torch.
 pub fn run(actions: &[Action]) -> Run {
     let mut log = Log::default();
     let mut lines = Vec::new();
@@ -63,7 +43,6 @@ pub fn run(actions: &[Action]) -> Run {
     }
 }
 
-/// Runs a script and prints what happened.
 pub fn script(words: &[&str]) -> Result<(), String> {
     let run = run(&parse(words)?);
     for line in &run.lines {
@@ -73,21 +52,13 @@ pub fn script(words: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// Turns ticks into log lines, with one per click, one per hold (when it ends,
-/// not every tick it's held), and one for any change of level that no click
-/// or hold explains. A run of one-level steps a tick apart, all the same
-/// way, is a fade, and gets one line when it stops.
 #[derive(Default)]
 struct Log {
     level: u8,
-    /// The tick the press that's being held started on, and the level
-    /// before it.
     hold: Option<(u32, u8)>,
     fade: Option<Fade>,
 }
 
-/// A fade in progress, with the tick of its first and latest steps, and the
-/// level before it and now.
 struct Fade {
     start: u32,
     last: u32,
@@ -96,16 +67,12 @@ struct Fade {
 }
 
 impl Fade {
-    /// Whether a step from `before` to `level` on tick `now` carries on.
     const fn continues(&self, now: u32, before: u8, level: u8) -> bool {
         self.last + 1 == now && self.to == before && (level > before) == (self.to > self.from)
     }
 }
 
 impl Log {
-    /// The lines this tick ends up with. Usually there are none, but
-    /// sometimes there's a fade that just stopped and the thing that stopped
-    /// it.
     fn note(&mut self, now: u32, event: Option<Event>, level: u8) -> Vec<String> {
         let before = std::mem::replace(&mut self.level, level);
         let quiet = event.is_none() && self.hold.is_none();
@@ -131,8 +98,6 @@ impl Log {
         lines
     }
 
-    /// The line for a fade that's stopped or been interrupted, if there was
-    /// one. A single step shows as a plain change of level.
     fn settle(&mut self) -> Option<String> {
         let Fade {
             start,
@@ -158,7 +123,6 @@ impl Log {
         let (what, before) = match event {
             Some(Event::Click(n)) => (format!("{n}C"), before),
             Some(Event::Hold { ticks, .. }) => {
-                // The first Hold comes HOLD_TICKS into the press.
                 let start = now - u32::from(HOLD_TICKS) - u32::from(ticks);
                 self.hold.get_or_insert((start, before));
                 return None;
@@ -183,7 +147,6 @@ impl Log {
     }
 }
 
-/// Ticks shown as seconds, so 96 ticks is `  1.50 s`.
 struct Seconds(u32);
 
 impl fmt::Display for Seconds {
@@ -193,8 +156,6 @@ impl fmt::Display for Seconds {
     }
 }
 
-/// A level as people read it, which is `off` or `level 50/150`, or with
-/// `{:#}` the shorter `50/150`.
 struct Level(u8);
 
 impl fmt::Display for Level {
@@ -216,10 +177,8 @@ r      start again from off
 ?      these keys
 q      quit";
 
-/// Width of the brightness bar on the status line, in characters.
 const BAR: usize = 20;
 
-/// Runs the UI live in the terminal until `q` or Ctrl-C.
 pub fn interactive() -> Result<(), String> {
     let mut terminal = Terminal::open()?;
     let mut live = Live::default();
@@ -268,19 +227,13 @@ enum Command {
     Quit,
 }
 
-/// A live session, minus the terminal. Keys go in, and ticks and a status
-/// line come out.
 #[derive(Default)]
 struct Live {
-    /// The torch, with a 3.8 V cell at 25 °C.
     torch: Rig,
     log: Log,
     now: u32,
-    /// Scripted samples from clicks, played before `held` counts.
     queue: VecDeque<bool>,
-    /// Where the switch rests once `queue` runs out.
     held: bool,
-    /// The last sample the torch saw.
     pressed: bool,
 }
 
@@ -306,7 +259,6 @@ impl Live {
         self.queue.extend(clicks(n));
     }
 
-    /// One 64 Hz tick, and a log line if it did something.
     fn tick(&mut self) -> Option<String> {
         self.pressed = self.queue.pop_front().unwrap_or(self.held);
         let event = self.torch.tick_in(self.pressed, &Scene::NORMAL);
@@ -315,8 +267,6 @@ impl Live {
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
-    /// A brightness bar, the level and its delta-sigma value, the switch and
-    /// the aux colour, cut to fit in `width` columns.
     fn status(&self, width: usize) -> String {
         let level = self.torch.level();
         let output = ramp::output(level);
@@ -341,8 +291,6 @@ impl Live {
     }
 }
 
-/// How much of the bar a level fills. None when off, at least one block when
-/// on, and all of it at the top.
 fn lit(level: u8) -> usize {
     (usize::from(level) * BAR).div_ceil(usize::from(LEVELS))
 }
@@ -391,8 +339,6 @@ mod tests {
     fn a_cell_it_cant_read_fades_it_out_for_good() {
         let run = script("cell:0V 1C wait:5s");
         assert_eq!(run.level, 0);
-        // The log says so, as one fade all the way out, level 1 included,
-        // with nothing clicked to explain it.
         let [.., fade] = &run.lines[..] else {
             panic!("{:#?}", run.lines)
         };
@@ -448,7 +394,6 @@ mod tests {
         let mut log = Log::default();
         assert!(log.note(0, None, 30)[0].ends_with("level 30/150"));
         assert!(log.note(1, None, 30).is_empty());
-        // A lone one-level step shows once the next tick says it's alone.
         assert!(log.note(2, None, 31).is_empty());
         let lines = log.note(3, None, 31);
         assert_eq!(lines.len(), 1, "{lines:?}");
@@ -480,7 +425,6 @@ mod tests {
         log.note(0, None, 10);
         log.note(1, None, 9);
         log.note(2, None, 8);
-        // Turning round starts a new fade.
         let lines = log.note(3, None, 9);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(
@@ -501,7 +445,6 @@ mod tests {
         assert_eq!(log.settle(), None);
     }
 
-    /// Ticks a live session `n` times and keeps the log.
     fn ticks_of(live: &mut Live, n: u16) -> Vec<String> {
         (0..n).filter_map(|_| live.tick()).collect()
     }
