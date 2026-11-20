@@ -178,7 +178,7 @@ mod tests {
     use crate::battery;
     use crate::button::{HOLD_TICKS, RELEASE_TICKS};
     use crate::ramp::CEILING;
-    use crate::sensors::Channel;
+    use crate::sensors::{Channel, FULL_SCALE};
     use crate::testing::{EXAMPLES, Rig, Rng, example, temperature_reading, voltage_reading};
     use crate::thermal;
     use crate::ui::{self, Mode, ON_LEVEL};
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn garbage_at_rest_leaves_the_aux_alone_and_is_no_fault() {
-        for garbage in [0, voltage_reading(60), 4 * 1023] {
+        for garbage in [0, voltage_reading(60), FULL_SCALE] {
             let mut torch = Rig::default();
             torch.adc.voltage = voltage_reading(320);
             next_check(&mut torch);
@@ -1116,7 +1116,7 @@ mod tests {
                 Self::Glitchy(raw) if rng.next_u16() % 4 != 0 => raw,
                 Self::Glitchy(_) | Self::Garbage => match rng.next_u16() % 2 {
                     0 => rng.next_u16(),
-                    _ => rng.next_u16() % (4 * 1023 + 1),
+                    _ => rng.next_u16() % (FULL_SCALE + 1),
                 },
             }
         }
@@ -1130,7 +1130,7 @@ mod tests {
                 12 => Self::Steady(match rng.next_u16() % 3 {
                     0 => 0,
                     1 => voltage_reading(60),
-                    _ => 4 * 1023,
+                    _ => FULL_SCALE,
                 }),
                 13..=14 => Self::Glitchy(voltage_reading(between(rng, 300, 420))),
                 _ => Self::Garbage,

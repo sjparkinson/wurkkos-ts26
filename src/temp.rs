@@ -48,6 +48,7 @@ pub fn sixteenths(sum: u16, offset: i8, gain: u8) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sensors::FULL_SCALE;
 
     fn reference(sum: u16, offset: i8, gain: u8) -> u16 {
         let d = (i32::from(sum) - 4 * i32::from(offset)).clamp(0, i32::from(MAX_DIFFERENCE));
@@ -56,7 +57,7 @@ mod tests {
 
     #[test]
     fn matches_the_sum_for_every_accumulated_reading_and_calibration() {
-        for sum in 0..=4 * 1023 {
+        for sum in 0..=FULL_SCALE {
             for offset in i8::MIN..=i8::MAX {
                 for gain in (u8::MIN..=u8::MAX).step_by(5) {
                     assert_eq!(

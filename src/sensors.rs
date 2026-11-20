@@ -23,6 +23,8 @@ pub enum Reading {
     Temperature(u16),
 }
 
+pub const FULL_SCALE: u16 = 4 * 1023;
+
 /// Four readings a second of each channel, which `battery::Protection` and
 /// `thermal::Thermal` assume.
 pub const CYCLE_TICKS: u8 = 16;

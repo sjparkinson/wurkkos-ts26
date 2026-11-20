@@ -262,6 +262,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::ramp::{self, DSM_TOP};
+    use crate::sensors::FULL_SCALE;
 
     struct Run {
         thermal: Thermal,
@@ -1034,7 +1035,7 @@ mod tests {
         let limit = LIMIT * FRACTION as u16;
         let mut hot = 0;
         let mut cool = 0;
-        for sum in 0..=4 * 1023 {
+        for sum in 0..=FULL_SCALE {
             let reading = crate::testing::CALIBRATION.sixteenths(sum);
             let too_hot = !plausible(reading) || reading > limit;
             let mut thermal = Thermal::new();
