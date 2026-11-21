@@ -7,6 +7,8 @@ mod ihex;
 mod layout;
 #[cfg(test)]
 mod lints;
+#[cfg(test)]
+mod mistakes;
 mod serial;
 mod sim;
 mod simulate;
@@ -101,7 +103,13 @@ fn cargo() -> String {
 }
 
 fn build() -> Result<(elf::Elf, sim::Report), String> {
-    run(Command::new(cargo()).current_dir(root()).args([
+    run(&mut firmware_build(&root()))?;
+    checked(&root())
+}
+
+fn firmware_build(root: &Path) -> Command {
+    let mut build = Command::new(cargo());
+    build.current_dir(root).args([
         "build",
         "--package",
         "ts26",
@@ -114,19 +122,23 @@ fn build() -> Result<(elf::Elf, sim::Report), String> {
         "--target",
         "avr-none",
         "-Zbuild-std=core",
-    ]))?;
-    let path = root().join(ELF);
+    ]);
+    build
+}
+
+fn checked(root: &Path) -> Result<(elf::Elf, sim::Report), String> {
+    let path = root.join(ELF);
     let elf = load(&path)?;
     layout::check(&elf).map_err(at(&path))?;
     let report = sim::check(&elf).map_err(|e| format!("{}: simulator: {e}", path.display()))?;
 
-    let probe = root().join(PROBE);
+    let probe = root.join(PROBE);
     let probe_elf = load(&probe)?;
     probe_sections(&probe_elf).map_err(at(&probe))?;
     layout::memory(&probe_elf).map_err(at(&probe))?;
     sim::probe(&probe_elf).map_err(|e| format!("{}: simulator: {e}", probe.display()))?;
 
-    let guards = root().join(GUARDS);
+    let guards = root.join(GUARDS);
     let guards_elf = load(&guards)?;
     layout::check(&guards_elf).map_err(at(&guards))?;
     sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))?;
