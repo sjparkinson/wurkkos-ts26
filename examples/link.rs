@@ -20,7 +20,8 @@ mod hw {
     pub extern "avr-interrupt" fn rtc_pit() {}
     pub extern "avr-interrupt" fn tca0_ovf() {}
 
-    #[allow(clippy::empty_loop)]
+    #[allow(unsafe_code, clippy::empty_loop)]
+    #[unsafe(export_name = "__halt")]
     pub fn halt() -> ! {
         loop {}
     }
