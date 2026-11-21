@@ -225,7 +225,6 @@ pub fn speed_up() {
     write(reg::GPIO_GPIOR0, 0);
 }
 
-#[unsafe(no_mangle)]
 pub extern "avr-interrupt" fn porta_port() {
     write(SWITCH_CTRL, SENSE_OFF);
     write(reg::PORTA_INTFLAGS, 1 << SWITCH);
@@ -245,7 +244,6 @@ pub fn halt() -> ! {
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "avr-interrupt" fn rtc_pit() {
     write(reg::RTC_PITINTFLAGS, regs::RTC_PI);
     write(reg::GPIO_GPIOR0, TICK);
@@ -372,7 +370,6 @@ fn without_interrupts(f: impl FnOnce()) {
     write(reg::CPU_SREG, sreg);
 }
 
-#[unsafe(no_mangle)]
 pub extern "avr-interrupt" fn tca0_ovf() {
     write(reg::TCA0_INTFLAGS, regs::TCA_OVF);
     let sum = read(DSM_SUM).wrapping_add(read(DSM_FRACTION));
