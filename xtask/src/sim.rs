@@ -13,6 +13,8 @@
 
 use std::iter;
 use std::ops::Range;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use ts26::TICKS_PER_SECOND;
@@ -165,6 +167,10 @@ impl Report {
         if self.landed == 0 {
             return Err("no overflow ever landed mid-pass, so this checked nothing".into());
         }
+        self.in_budget()
+    }
+
+    fn in_budget(&self) -> Result<(), String> {
         let longest = self
             .loop_instructions
             .max(self.off_instructions)
@@ -257,12 +263,13 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
         ),
     ];
     let power_on = &power_on;
-    let reports: Vec<Result<Report, String>> = thread::scope(|scope| {
+    let soonest = &Arc::new(AtomicU64::new(u64::MAX));
+    let runs: Vec<Result<Report, Failed>> = thread::scope(|scope| {
         let faults = faults.map(|(check, name)| {
             scope.spawn(move || {
-                let mut report = Report::default();
-                check(power_on()?, &mut report).map_err(|e| format!("{name}: {e}"))?;
-                Ok(report)
+                raced(power_on, soonest, Landing::Off, |sim, report| {
+                    check(sim, report).map_err(|e| format!("{name}: {e}"))
+                })
             })
         });
         // Spawning every run before joining any is what runs them in parallel.
@@ -270,65 +277,114 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
             .iter()
             .map(Some)
             .chain([None])
-            .map(|example| scope.spawn(move || both_ways(power_on, example)))
+            .map(|example| scope.spawn(move || both_ways(power_on, soonest, example)))
             .collect();
         faults
             .into_iter()
             .chain(runs)
-            .map(|run| run.join().unwrap_or_else(|_| Err("a run panicked".into())))
+            .map(|run| {
+                run.join().unwrap_or_else(|_| {
+                    Err(Failed {
+                        after: 0,
+                        why: "a run panicked".into(),
+                    })
+                })
+            })
             .collect()
     });
 
-    let mut report = Report::default();
-    for run in reports {
-        report.merge(&run?);
-    }
+    let report = settle(runs)?;
     report.exercised()?;
     Ok(report)
 }
 
 const PASS_BUDGET: u64 = PASS_CLOCKS as u64 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64 / 4;
 
-type FaultCheck = fn(Sim, &mut Report) -> Result<(), String>;
+type FaultCheck = fn(&mut Sim, &mut Report) -> Result<(), String>;
+
+/// A run's failure, and how many instructions the run had executed by then.
+struct Failed {
+    after: u64,
+    why: String,
+}
+
+/// A failed run stops every run that's executed more than it had, and the one
+/// that had executed the least is reported, whichever thread got there first.
+fn raced(
+    power_on: &impl Fn() -> Result<Sim, String>,
+    soonest: &Arc<AtomicU64>,
+    landing: Landing,
+    scenario: impl FnOnce(&mut Sim, &mut Report) -> Result<(), String>,
+) -> Result<Report, Failed> {
+    let mut sim = power_on().map_err(|why| Failed { after: 0, why })?;
+    sim.landing = landing;
+    sim.stop_after = Arc::clone(soonest);
+    let mut report = Report::default();
+    match scenario(&mut sim, &mut report) {
+        Ok(()) => Ok(report),
+        Err(why) => {
+            soonest.fetch_min(sim.executed, Ordering::Relaxed);
+            Err(Failed {
+                after: sim.executed,
+                why,
+            })
+        }
+    }
+}
+
+fn settle(runs: Vec<Result<Report, Failed>>) -> Result<Report, String> {
+    let mut report = Report::default();
+    let mut failed = Vec::new();
+    for run in runs {
+        match run {
+            Ok(run) => report.merge(&run),
+            Err(run) => failed.push(run),
+        }
+    }
+    match failed.into_iter().min_by_key(|run| run.after) {
+        Some(soonest) => Err(soonest.why),
+        None => Ok(report),
+    }
+}
 
 const LANDING_MARGIN: u32 = 2 * TICKS_PER_SECOND as u32;
 
 fn both_ways(
     power_on: &impl Fn() -> Result<Sim, String>,
+    soonest: &Arc<AtomicU64>,
     example: Option<&Example>,
-) -> Result<Report, String> {
-    let mut report = run(power_on, example, Landing::Watch)?;
+) -> Result<Report, Failed> {
+    let mut report = run(power_on, soonest, example, Landing::Watch)?;
     let until = report.last_new + LANDING_MARGIN;
-    report.merge(&run(power_on, example, Landing::Until(until))?);
+    report.merge(&run(power_on, soonest, example, Landing::Until(until))?);
     Ok(report)
 }
 
 fn run(
     power_on: &impl Fn() -> Result<Sim, String>,
+    soonest: &Arc<AtomicU64>,
     example: Option<&Example>,
     landing: Landing,
-) -> Result<Report, String> {
-    let mut sim = power_on()?;
-    sim.landing = landing;
-    let landing = matches!(landing, Landing::Until(_));
-    let mut report = Report::default();
-    let result = match example {
-        Some(example) => {
-            ui_example(sim, example, &mut report).map_err(|e| format!("{}: {e}", example.name))
+) -> Result<Report, Failed> {
+    let landed = matches!(landing, Landing::Until(_));
+    raced(power_on, soonest, landing, |sim, report| {
+        let result = match example {
+            Some(example) => {
+                ui_example(sim, example, report).map_err(|e| format!("{}: {e}", example.name))
+            }
+            None => against_the_library(sim, report).map_err(|e| format!("random switching: {e}")),
+        };
+        match (result, landed) {
+            (Err(e), true) => Err(format!("with overflows mid-pass: {e}")),
+            (result, _) => result,
         }
-        None => against_the_library(sim, &mut report).map_err(|e| format!("random switching: {e}")),
-    };
-    match (result, landing) {
-        (Ok(()), _) => Ok(report),
-        (Err(e), true) => Err(format!("with overflows mid-pass: {e}")),
-        (Err(e), false) => Err(e),
-    }
+    })
 }
 
 const RANDOM_TICKS: usize = 20_000;
 
-fn ui_example(mut sim: Sim, example: &Example, report: &mut Report) -> Result<(), String> {
-    let Some(level) = in_step(&mut sim, testing::samples(example.actions()), report)? else {
+fn ui_example(sim: &mut Sim, example: &Example, report: &mut Report) -> Result<(), String> {
+    let Some(level) = in_step(sim, testing::samples(example.actions()), report)? else {
         return Ok(());
     };
     if example.expect.holds(level) {
@@ -341,7 +397,7 @@ fn ui_example(mut sim: Sim, example: &Example, report: &mut Report) -> Result<()
     }
 }
 
-fn against_the_library(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn against_the_library(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     let samples = RandomSwitching::new(0x5EED)
         .flat_map(|(pressed, ticks)| iter::repeat_n(pressed, ticks.into()))
         .take(RANDOM_TICKS)
@@ -349,7 +405,7 @@ fn against_the_library(mut sim: Sim, report: &mut Report) -> Result<(), String> 
             pressed,
             scene: Scene::NORMAL,
         });
-    in_step(&mut sim, samples, report).map(drop)
+    in_step(sim, samples, report).map(drop)
 }
 
 fn lit(sim: &mut Sim, ticks: u16, report: &mut Report) -> Result<(), String> {
@@ -376,20 +432,20 @@ const _: () = assert!(
     "only a stopped oscillator may trip the deadline, since it stops the chip for good"
 );
 
-fn slow_ticks(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn slow_ticks(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.tick_cycles = SLOWEST_TICK_CYCLES;
-    lit(&mut sim, 2 * TICKS_PER_SECOND, report)
+    lit(sim, 2 * TICKS_PER_SECOND, report)
 }
 
-fn adc_never_answers(sim: Sim, report: &mut Report) -> Result<(), String> {
+fn adc_never_answers(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     adc_broken(sim, report, true)
 }
 
-fn adc_stuck(sim: Sim, report: &mut Report) -> Result<(), String> {
+fn adc_stuck(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     adc_broken(sim, report, false)
 }
 
-fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
+fn adc_broken(sim: &mut Sim, report: &mut Report, dead: bool) -> Result<(), String> {
     let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
     let mut levels = Vec::new();
     let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| Sample {
@@ -400,8 +456,7 @@ fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
         },
         ..sample
     });
-    let mut sim = sim;
-    let end = in_step_with(&mut sim, samples, report, |rig| levels.push(rig.level()))?;
+    let end = in_step_with(sim, samples, report, |rig| levels.push(rig.level()))?;
     if end != Some(0) {
         return Err(format!("ends at level {end:?}, not off"));
     }
@@ -420,19 +475,19 @@ fn adc_broken(sim: Sim, report: &mut Report, dead: bool) -> Result<(), String> {
 }
 
 /// Table 16-3's note 1.
-fn flagless_wakes(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn flagless_wakes(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.flagless_wakes = true;
     wakes_from_rest(sim, report)
 }
 
-fn tick_lands_on_a_press(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn tick_lands_on_a_press(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.tick_on_speed_up = true;
     wakes_from_rest(sim, report)
 }
 
-fn wakes_from_rest(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn wakes_from_rest(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     let samples = script("wait:2s 1C wait:2s 1C wait:3s 3C wait:7s 3C wait:2s 1H")?;
-    let end = in_step(&mut sim, samples, report)?;
+    let end = in_step(sim, samples, report)?;
     if end != Some(ts26::ui::FLOOR) {
         return Err(format!("ends at level {end:?}, not the floor"));
     }
@@ -445,7 +500,7 @@ fn wakes_from_rest(mut sim: Sim, report: &mut Report) -> Result<(), String> {
     Ok(())
 }
 
-fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn switch_stuck(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     let samples = iter::repeat_n(
         Sample {
             pressed: true,
@@ -453,7 +508,7 @@ fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
         },
         20_000,
     );
-    let end = in_step(&mut sim, samples, report)?;
+    let end = in_step(sim, samples, report)?;
     if end != Some(ts26::ui::FLOOR) {
         return Err(format!("ends at level {end:?}, not the floor"));
     }
@@ -463,12 +518,12 @@ fn switch_stuck(mut sim: Sim, report: &mut Report) -> Result<(), String> {
 const HALT_BUDGET: u64 = 100;
 const DOWN_PERIODS: u64 = 4 * TICKS_PER_SECOND as u64;
 
-fn oscillator_stops(mut sim: Sim, report: &mut Report) -> Result<(), String> {
-    lit(&mut sim, 0, report)?;
+fn oscillator_stops(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
+    lit(sim, 0, report)?;
     stops_at_the_deadline(sim, report)
 }
 
-fn oscillator_stops_mid_press(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn oscillator_stops_mid_press(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     let held = iter::repeat_n(
         Sample {
             pressed: true,
@@ -476,14 +531,14 @@ fn oscillator_stops_mid_press(mut sim: Sim, report: &mut Report) -> Result<(), S
         },
         4,
     );
-    in_step(&mut sim, script("wait:2s")?.chain(held), report)?;
+    in_step(sim, script("wait:2s")?.chain(held), report)?;
     if !sim.chip.pwm_running() || sim.chip.enabled_high() {
         return Err("a press from off isn't charging the filter, so this checks nothing".into());
     }
     stops_at_the_deadline(sim, report)
 }
 
-fn stops_at_the_deadline(mut sim: Sim, report: &mut Report) -> Result<(), String> {
+fn stops_at_the_deadline(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     sim.chip.osc32k_stopped = true;
     let stopped = sim.chip.now;
     while sim.chip.pwm_running() {
@@ -689,6 +744,7 @@ fn in_step_with(
         } else if rig.ticked && powered_down && was_resting {
             report.off_instructions = report.off_instructions.max(took);
         }
+        report.in_budget().map_err(at)?;
         report.woken += u32::from(woken);
         sim.chip.shows(rig.torch.output()).map_err(at)?;
         if sim.chip.aux() != board::aux_pin(rig.torch.aux()) {
@@ -965,6 +1021,7 @@ struct Sim {
     stack_floor: u16,
     lowest_sp: u16,
     executed: u64,
+    stop_after: Arc<AtomicU64>,
     /// Word address.
     unhandled: u32,
     /// Word address.
@@ -1005,6 +1062,7 @@ impl Sim {
             chip,
             stack_floor: bss_end - 1,
             executed: 0,
+            stop_after: Arc::new(AtomicU64::new(u64::MAX)),
             unhandled,
             halt: ends.halt / 2,
             forced: None,
@@ -1047,6 +1105,9 @@ impl Sim {
     }
 
     fn step(&mut self) -> Result<(), String> {
+        if self.executed > self.stop_after.load(Ordering::Relaxed) {
+            return Err("stopped, since another run failed after fewer instructions".into());
+        }
         let pc = self.cpu.pc;
         let awake = !self.cpu.asleep;
         let handling = self.cpu.handling;
@@ -4255,20 +4316,91 @@ mod tests {
     fn a_failed_run_says_which_it_was_and_whether_overflows_were_landing() {
         let power_on = || Ok(ticking());
         let failed = "the library says power down, but the firmware idled";
-        let err = run(&power_on, None, Landing::Watch).err().unwrap();
+        let why = |example, landing| {
+            run(&power_on, &never(), example, landing)
+                .err()
+                .unwrap()
+                .why
+        };
+        let err = why(None, Landing::Watch);
         assert_eq!(err, format!("random switching: tick 2: {failed}"));
-        let err = run(&power_on, None, Landing::Until(5)).err().unwrap();
+        let err = why(None, Landing::Until(5));
         assert_eq!(
             err,
             format!("with overflows mid-pass: random switching: tick 2: {failed}")
         );
 
         let example = &EXAMPLES[0];
-        let err = run(&power_on, Some(example), Landing::Watch).err().unwrap();
+        let err = why(Some(example), Landing::Watch);
         assert!(
             err.starts_with(&format!("{}: tick ", example.name)),
             "{err}"
         );
+    }
+
+    fn never() -> Arc<AtomicU64> {
+        Arc::new(AtomicU64::new(u64::MAX))
+    }
+
+    #[test]
+    fn a_failed_run_stops_the_runs_that_have_executed_more_and_no_others() {
+        let power_on = || Ok(ticking());
+        let soonest = never();
+        let first = run(&power_on, &soonest, None, Landing::Watch)
+            .err()
+            .unwrap();
+        assert_eq!(soonest.load(Ordering::Relaxed), first.after);
+
+        let again = run(&power_on, &soonest, None, Landing::Watch)
+            .err()
+            .unwrap();
+        assert_eq!((again.after, &again.why), (first.after, &first.why));
+
+        soonest.store(first.after - 1, Ordering::Relaxed);
+        let stopped = run(&power_on, &soonest, None, Landing::Watch)
+            .err()
+            .unwrap();
+        assert!(
+            stopped.why.contains("another run failed"),
+            "{}",
+            stopped.why
+        );
+        assert!(stopped.after > first.after - 1);
+        assert_eq!(soonest.load(Ordering::Relaxed), first.after - 1);
+    }
+
+    #[test]
+    fn the_failure_reported_is_the_soonest_and_the_first_of_two_as_soon() {
+        let failed = |after, why: &str| {
+            Err(Failed {
+                after,
+                why: why.into(),
+            })
+        };
+        let passed = || Ok(EXERCISED);
+        assert_eq!(settle(vec![passed(), passed()]).unwrap().woken, 2);
+        let err = settle(vec![
+            failed(9, "late"),
+            passed(),
+            failed(3, "soonest"),
+            failed(3, "as soon"),
+        ])
+        .err()
+        .unwrap();
+        assert_eq!(err, "soonest");
+    }
+
+    #[test]
+    fn in_step_refuses_a_pass_too_long_for_the_watchdogs_sums_at_its_tick() {
+        let mut sim = ticking();
+        let [low, high] = (PASS_BUDGET as u16 / 2 + 1).to_le_bytes();
+        // `sbiw r24, 1`, `brne` back to it, then `rjmp` back to the `sleep`.
+        let busy = [NOP, ldi(24, low), ldi(25, high), 0x9701, 0xF7F1, 0xCFF9];
+        for (at, word) in (2..).zip(busy) {
+            sim.chip.flash[at * 2..at * 2 + 2].copy_from_slice(&word.to_le_bytes());
+        }
+        let err = in_step_fails(&mut sim, 8);
+        assert!(err.starts_with("tick 0: a pass took"), "{err}");
     }
 
     #[test]
@@ -4396,9 +4528,9 @@ mod tests {
     fn a_stopped_oscillator_has_to_stop_the_pwm_at_the_deadline_and_not_before() {
         let mut spinning = sim([SPIN]);
         spinning.chip.io[reg::TCA0_CTRLB] = TCA_DSBOTTOM | TCA_CMP0EN;
-        let err = stops_at_the_deadline(spinning, &mut Report::default()).unwrap_err();
+        let err = stops_at_the_deadline(&mut spinning, &mut Report::default()).unwrap_err();
         assert!(err.contains("past the deadline of 2048"), "{err}");
-        let err = stops_at_the_deadline(sim([SPIN]), &mut Report::default()).unwrap_err();
+        let err = stops_at_the_deadline(&mut sim([SPIN]), &mut Report::default()).unwrap_err();
         assert!(
             err.contains("after 0 PWM cycles, before the deadline"),
             "{err}"
