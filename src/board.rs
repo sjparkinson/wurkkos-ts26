@@ -1,4 +1,9 @@
+use crate::regs::addr;
 use crate::ui::Aux;
+
+pub const DSM_DUTY: usize = addr::GPIO_GPIOR1;
+pub const DSM_FRACTION: usize = addr::GPIO_GPIOR2;
+pub const DSM_SUM: usize = addr::GPIO_GPIOR3;
 
 pub const UPDI: u8 = 0;
 pub const BATTERY: u8 = 1;

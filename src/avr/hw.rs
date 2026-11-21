@@ -5,7 +5,9 @@ use core::ptr::{
     read_volatile, with_exposed_provenance, with_exposed_provenance_mut, write_volatile,
 };
 
-use ts26::board::{self, AUX_PINS, BATTERY, ENABLE, PWM, SWITCH, UPDI};
+use ts26::board::{
+    self, AUX_PINS, BATTERY, DSM_DUTY, DSM_FRACTION, DSM_SUM, ENABLE, PWM, SWITCH, UPDI,
+};
 use ts26::ramp::{DSM_BITS, DSM_TOP, Output, PWM_TOP};
 use ts26::selftest::Fuses;
 use ts26::sensors::{Channel, Convert};
@@ -156,9 +158,6 @@ fn set_pit(period: u8) {
 
 const TICK: u8 = 1 << 0;
 
-const DSM_DUTY: usize = reg::GPIO_GPIOR1;
-const DSM_FRACTION: usize = reg::GPIO_GPIOR2;
-const DSM_SUM: usize = reg::GPIO_GPIOR3;
 const FRACTION_MASK: u8 = (1 << DSM_BITS) - 1;
 
 fn prepare_sleep(rest: bool) {
