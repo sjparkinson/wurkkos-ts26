@@ -9,7 +9,7 @@ You find out what's true about the Wurkkos TS26 (model 0721, ATtiny1616, MP3432 
 
 Sources, in order of trust.
 
-1. What's been read or seen on this torch, in docs/hardware.md's "Seen on this torch". The stock backup itself is in `backup/torch/` in the main checkout (gitignored).
+1. What's been read or seen on this torch, marked "on this torch" in docs/hardware.md. The stock backup itself is in `backup/torch/` in the main checkout (gitignored).
 2. Microchip's ATDF, vendored at `vendor/ATtiny1616.atdf`, for anything about the chip itself. Read the local copy.
 3. The ATtiny1614/1616/1617 datasheet (DS40002204), its errata (DS80000886) and Microchip's app notes. Local copies may be in `docs/microchip/` (gitignored, so look in the main checkout if you're in a worktree). Search them with `pdftotext` and `rg`, or ask the caller to run the `microchip-docs` agent for a long dig. Cite section and revision letter.
 4. Monolithic Power Systems' MP3432 datasheet, for the boost converter's enable, soft start and what it does with a PWM'd input.
