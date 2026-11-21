@@ -48,7 +48,7 @@ Each way found so far that this torch could hurt someone or itself, and what cov
 
 **Hazard.** A fuse write that turns UPDI off, 12 V on the pad, a slipped probe or a wrong pad order. An earlier torch was lost on 2026-11-06 after a high-voltage UPDI programmer was hand-held on its pads.
 
-**Cover.** `xtask/src/updi.rs` never writes fuses, the user row or a locked chip, refuses the wrong signature, and `restore` refuses a backup from another chip. Only the plain UPDI kit goes on the pads, never a high-voltage programmer, recovery included. The first flash on any torch is T0 (`9d3b7dc`, branch `build-t0`).
+**Cover.** `xtask/src/updi.rs` never writes fuses, the user row or a locked chip, refuses the wrong signature, and `restore` refuses a backup from another chip. Only the plain UPDI kit goes on the pads, never a high-voltage programmer, recovery included.
 
 ### H9. A stray interrupt
 

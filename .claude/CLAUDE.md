@@ -39,7 +39,7 @@ The agents in `.claude/agents/` report back and never edit.
 - **No dependencies**, in the firmware or xtask.
 - **Only the non-HV UPDI programmer goes on this torch**, recovery included. The 12 V HV Friend never does, and it stays unplugged and off the bench while the torch is open, since both show as CH340 `1a86:7523`. An earlier torch was lost on 2026-11-06 after the Friend was held on its pads, and 12 V or a slipped probe is the suspected cause, unproven.
 - **Never write fuses, the user row or a locked chip**, and never suggest a command that does. A wrong `SYSCFG0` loses the torch.
-- **The first flash on any torch is T0** (commit `9d3b7dc`, branch `build-t0`). A torch that goes dark after a flash gets `cargo xtask peek`, then T0.
+- **A torch that goes dark after a flash gets `cargo xtask peek`.**
 - **Read programmer output for what it says.** "Nothing echoed back" can mean a short, `flash` only checks the signature, a verify doesn't prove the firmware runs, and `ping` and `peek` end with a reset. Ask which adapter is plugged in.
 - **At the bench**, touch ground first, measure ohms between the pads before first contact, and leave the torch a few seconds with no cell after a flash. Never put the meter in series above 3 A, and never take the cell under 2.8 V.
 - **Registers come from `src/regs.rs`**, generated from `vendor/ATtiny1616.atdf`. No bare numbers in `src/avr/`, and a number the ATDF lacks goes in `src/regs.rs` by hand with a comment.
