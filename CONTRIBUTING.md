@@ -12,13 +12,9 @@ cargo clippy --package ts26 --lib --bins --examples --release --target avr-none 
 cargo xtask hex
 ```
 
-The second clippy is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the firmware, checks the linked image (`xtask/src/layout.rs`), runs it on a simulated chip (`xtask/src/sim.rs`) through every row of `testing::EXAMPLES` and thousands of random ticks, then writes the hex with a commit stamp and CRC and prints flash and RAM use. `examples/link.rs` and `examples/guards.rs` are never flashed, and exist so xtask can check `link.x` and run `hw.rs`'s guards.
+The second clippy is the only place `src/avr/hw.rs` and `src/avr/rt.rs` get linted. `cargo xtask hex` builds the firmware, checks the linked image (`xtask/src/layout.rs`), runs it on a simulated chip (`xtask/src/sim.rs`) through every row of `testing::EXAMPLES` and thousands of random ticks, then writes the hex with a commit stamp and CRC and prints flash and RAM use. The files in `examples/` are never flashed. `link.rs` and `guards.rs` exist so xtask can check `link.x` and run `hw.rs`'s guards. `panics.rs` indexes out of bounds and `multiplies.rs` divides a `u16` by ten, and xtask's tests build both for the chip, failing unless the panic check refuses the first and the linker refuses the second.
 
-```sh
-cargo xtask breakages
-```
-
-This one takes about two minutes, so CI doesn't run it. It checks that `hex` refuses copies of the firmware broken on purpose (`xtask/src/breakages.rs`). Run it after touching `xtask/src/sim.rs`, `xtask/src/layout.rs`, `src/avr/hw.rs` or `src/avr/rt.rs`, and when bumping the nightly. Only add a breakage once you've seen it refused for the reason you meant.
+A rule in `xtask/src/sim.rs` or `xtask/src/layout.rs` gets a test beside it that drives the model with the mistake it refuses. A rule that only bites in a state the firmware has to be driven into also gets a check that the run got there, as `Report::exercised` does.
 
 The simulator finds mistakes and proves nothing. It's one reading of the datasheet, run against code written from the same reading. It doesn't model chip resets (a watchdog bite is a failed run), anything analogue (the driver, the cell, the divider), real time or a probe on the pads, so a firmware change still wants reading against the datasheet before it's flashed. It refuses a register it doesn't model, so teach it what the datasheet says.
 
@@ -39,7 +35,7 @@ The code is the source of truth, so a comment has to say something the code can'
 - Where a number comes from, such as `// DS40002204A §30.3.1.1`.
 - "Unconfirmed" or "unmeasured" on a guess.
 
-A trap, where the obvious edit would be wrong, gets a test, a breakage or a `const` assert with the reason as its message, not a comment. Leave out anything that restates a name or a signature, explains how the code works, narrates a test, records history, or points at a document. A test's name is its description.
+A trap, where the obvious edit would be wrong, gets a test or a `const` assert with the reason as its message, not a comment. Leave out anything that restates a name or a signature, explains how the code works, narrates a test, records history, or points at a document. A test's name is its description.
 
 ## Commits
 
@@ -47,4 +43,4 @@ Single-line [Conventional Commits](https://www.conventionalcommits.org), such as
 
 ## Bumping the nightly
 
-AVR is a tier 3 target and nightlies do break it. Change `rust-toolchain.toml`, run every check above including the breakages (which re-prove the no-panic and `__mulsi3` checks still fire), and compare `cargo xtask hex` before and after.
+AVR is a tier 3 target and nightlies do break it. Change `rust-toolchain.toml`, run every check above, and compare `cargo xtask hex` before and after. `cargo test` fails if the panic check no longer knows the new nightly's panic symbols, or if a wide multiply has started to link.

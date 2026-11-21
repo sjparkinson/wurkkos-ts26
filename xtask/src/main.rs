@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod atdf;
 mod avr;
-mod breakages;
 mod crc;
 mod elf;
 mod ihex;
@@ -33,8 +32,6 @@ commands:
   hex                     build the firmware, run it on the simulator, write
                           target/wurkkos-ts26-0721.hex and print flash, RAM,
                           stack, loop and handler use
-  breakages [name...]     check hex refuses copies of the firmware, each broken on
-                          purpose in one way, and leave the checkout alone
   ping <port>           check the programmer can see the chip, writing nothing,
                           though expect it to reset as UPDI turns off
   peek <port>             read the running chip's registers and SRAM, to see how
@@ -64,7 +61,6 @@ fn main() -> ExitCode {
 
     let result = match args.as_slice() {
         ["hex"] => hex(),
-        ["breakages", names @ ..] => breakages::run(&root(), names),
         ["ping", port] => ping(port),
         ["peek", port] => peek(port),
         ["backup", port, dir] => backup(port, Path::new(dir)),
@@ -507,8 +503,10 @@ fn at<E: Display>(path: &Path) -> impl Fn(E) -> String + '_ {
     move |e| format!("{}: {e}", path.display())
 }
 
+#[cfg(test)]
 struct TempDir(PathBuf);
 
+#[cfg(test)]
 impl TempDir {
     fn new(name: &str) -> Result<Self, String> {
         let dir = env::temp_dir().join(format!("ts26-{name}-{}", std::process::id()));
@@ -524,6 +522,7 @@ impl TempDir {
     }
 }
 
+#[cfg(test)]
 impl Drop for TempDir {
     fn drop(&mut self) {
         _ = fs::remove_dir_all(&self.0);
@@ -546,14 +545,52 @@ fn run(command: &mut Command) -> Result<(), String> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     use super::updi::tests::fake::Tiny;
     use super::updi::tests::images;
     use super::updi::{Programmer, SerialNumber};
     use super::{
-        TempDir, backup_from, commas, crc, ihex, program, read_hex, restore_onto, row, runs,
-        signed, stamp, this_boards_hex, write,
+        TempDir, backup_from, cargo, commas, crc, ihex, layout, load, program, read_hex,
+        restore_onto, root, row, runs, signed, stamp, this_boards_hex, write,
     };
+
+    /// Built for the chip the way `build` builds the firmware.
+    fn build_example(name: &str) -> (bool, String) {
+        let output = Command::new(cargo())
+            .current_dir(root())
+            .args([
+                "build",
+                "--package",
+                "ts26",
+                "--example",
+                name,
+                "--release",
+                "--target",
+                "avr-none",
+                "-Zbuild-std=core",
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (output.status.success(), stderr)
+    }
+
+    #[test]
+    fn a_build_that_indexes_out_of_bounds_is_one_the_panic_check_refuses() {
+        let (built, stderr) = build_example("panics");
+        assert!(built, "{stderr}");
+        let elf = load(&root().join("target/avr-none/release/examples/panics.elf")).unwrap();
+        let err = layout::no_panics(elf.symbols()).unwrap_err();
+        assert!(err.contains("panic_bounds_check"), "{err}");
+    }
+
+    #[test]
+    fn a_u16_divided_by_ten_fails_to_link_for_want_of_mulsi3() {
+        let (built, stderr) = build_example("multiplies");
+        assert!(!built, "a wide multiply links now");
+        assert!(stderr.contains("undefined symbol: __mulsi3"), "{stderr}");
+    }
 
     struct Scratch(TempDir);
 
