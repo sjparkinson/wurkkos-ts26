@@ -1,7 +1,7 @@
 //! A refusal shows one alarm rings for one mistake, not for every mistake of
 //! that kind.
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -562,7 +562,14 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).map_err(at(parent))?;
         }
-        return fs::copy(from, to).map(drop).map_err(at(from));
+        fs::copy(from, to).map_err(at(from))?;
+        // Linux's copy stamps the file with now, and cargo tells a fresh
+        // build from a stale one by which file is the newer.
+        let modified = fs::metadata(from).and_then(|from| from.modified());
+        let copy = File::options().write(true).open(to);
+        return modified
+            .and_then(|modified| copy?.set_modified(modified))
+            .map_err(at(to));
     }
     fs::create_dir_all(to).map_err(at(to))?;
     for entry in fs::read_dir(from).map_err(at(from))? {
@@ -619,16 +626,23 @@ fn every_mistake_has_its_own_name_and_finds_its_text_exactly_once() {
     }
 }
 
-/// Where cargo keeps the `core` it built for the firmware. A copy that starts
-/// with it doesn't build its own, and one that can't only takes longer.
-const CORE: &str = "target/avr-none/release/build/core";
+/// Where cargo keeps the `core` and `compiler_builtins` it built for the
+/// firmware. A copy that starts with them doesn't build its own, and one that
+/// can't only takes longer.
+const BUILT: [&str; 3] = [
+    "target/avr-none/release/build/core",
+    "target/avr-none/release/build/compiler_builtins",
+    "target/release/build/compiler_builtins",
+];
 
 fn copy_of_the_tree(name: &str) -> TempDir {
     let dir = TempDir::new(name).unwrap();
     for entry in COPIED {
         copy_tree(&root().join(entry), &dir.path().join(entry)).unwrap();
     }
-    _ = copy_tree(&root().join(CORE), &dir.path().join(CORE));
+    for entry in BUILT {
+        _ = copy_tree(&root().join(entry), &dir.path().join(entry));
+    }
     dir
 }
 
@@ -672,7 +686,7 @@ const COPIES: usize = 4;
 #[test]
 #[ignore = "builds the firmware once a mistake, which takes about ten seconds"]
 fn the_firmware_is_refused_with_any_one_mistake_in_it() {
-    // Leaves `CORE` built, and nothing writes it again while it's copied.
+    // Leaves `BUILT` built, and nothing writes it again while it's copied.
     let built = firmware_build(&root()).output().unwrap();
     let stderr = String::from_utf8_lossy(&built.stderr);
     assert!(built.status.success(), "{stderr}");
