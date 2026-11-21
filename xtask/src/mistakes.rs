@@ -3,8 +3,10 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 
-use crate::{TempDir, at, checked, firmware_build, root};
+use crate::{TempDir, at, checked, firmware_build, guards_checked, root};
 
 const COPIED: [&str; 10] = [
     ".cargo",
@@ -102,23 +104,6 @@ const MISTAKES: &[Mistake] = &[
         find: "    unsafe { asm!(\"cli\", options(nostack)) };\n    set_output(Output::OFF);\n",
         replace: "    set_output(Output::OFF);\n",
         expect: "stops for good with SREG.I still set",
-    },
-    // The firmware never asks for this, so only examples/guards.rs reaches it.
-    Mistake {
-        name: "power-down-with-the-light-on",
-        file: HW,
-        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
-        replace: "    let mode = if rest {\n",
-        expect: "powers down with PB2 high",
-    },
-    // examples/guards.rs again, which charges the filter with power-down asked
-    // for.
-    Mistake {
-        name: "power-down-while-charging",
-        file: HW,
-        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
-        replace: "    let mode = if rest && pb2 == 0 {\n",
-        expect: "powers down with the delta-sigma running",
     },
     Mistake {
         name: "pb2-raised-while-charging",
@@ -524,6 +509,42 @@ const MISTAKES: &[Mistake] = &[
     },
 ];
 
+/// The firmware never asks for these, so only examples/guards.rs reaches them,
+/// and only its checks are run on them.
+const GUARDS_MISTAKES: &[Mistake] = &[
+    Mistake {
+        name: "power-down-with-the-light-on",
+        file: HW,
+        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
+        replace: "    let mode = if rest {\n",
+        expect: "powers down with PB2 high",
+    },
+    // Charges the filter with power-down asked for.
+    Mistake {
+        name: "power-down-while-charging",
+        file: HW,
+        find: "    let mode = if rest && pb2 == 0 && read(reg::TCA0_INTCTRL) == 0 {\n",
+        replace: "    let mode = if rest && pb2 == 0 {\n",
+        expect: "powers down with the delta-sigma running",
+    },
+];
+
+type Check = fn(&Path) -> Result<(), String>;
+
+fn hex_checked(copy: &Path) -> Result<(), String> {
+    checked(copy).map(drop)
+}
+
+fn mistakes() -> Vec<(&'static Mistake, Check)> {
+    let whole = MISTAKES
+        .iter()
+        .map(|mistake| (mistake, hex_checked as Check));
+    let guards = GUARDS_MISTAKES
+        .iter()
+        .map(|mistake| (mistake, guards_checked as Check));
+    whole.chain(guards).collect()
+}
+
 fn substitute(source: &str, find: &str, replace: &str) -> Result<String, String> {
     if find.is_empty() || find == replace {
         return Err("the substitution changes nothing".into());
@@ -554,14 +575,15 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// What `cargo xtask hex` does up to writing the hex, with cargo's own
-/// refusal kept, since a link error is one of the reasons.
-fn refused(copy: &Path) -> Result<(), String> {
+/// What `cargo xtask hex` does up to writing the hex, or the share of it
+/// that's `check`, with cargo's own refusal kept, since a link error is one of
+/// the reasons.
+fn refused(copy: &Path, check: Check) -> Result<(), String> {
     let built = firmware_build(copy).output().map_err(|e| e.to_string())?;
     if !built.status.success() {
         return Err(String::from_utf8_lossy(&built.stderr).into_owned());
     }
-    checked(copy).map(drop)
+    check(copy)
 }
 
 #[test]
@@ -581,8 +603,9 @@ fn a_substitution_wants_its_text_there_exactly_once_and_has_to_change_it() {
 
 #[test]
 fn every_mistake_has_its_own_name_and_finds_its_text_exactly_once() {
-    for (i, mistake) in MISTAKES.iter().enumerate() {
-        let twice = MISTAKES[..i].iter().any(|m| m.name == mistake.name);
+    let mistakes = mistakes();
+    for (i, (mistake, _)) in mistakes.iter().enumerate() {
+        let twice = mistakes[..i].iter().any(|(m, _)| m.name == mistake.name);
         assert!(!twice, "two called {}", mistake.name);
         assert!(!mistake.expect.is_empty(), "{}", mistake.name);
         let copied = COPIED
@@ -596,34 +619,91 @@ fn every_mistake_has_its_own_name_and_finds_its_text_exactly_once() {
     }
 }
 
-#[test]
-#[ignore = "builds the firmware once a mistake, which takes about two minutes"]
-fn the_firmware_is_refused_with_any_one_mistake_in_it() {
-    let dir = TempDir::new("mistakes").unwrap();
-    let copy = dir.path();
-    for entry in COPIED {
-        copy_tree(&root().join(entry), &copy.join(entry)).unwrap();
-    }
-    refused(copy).expect("a copy with nothing broken has to pass, or no refusal means anything");
+/// Where cargo keeps the `core` it built for the firmware. A copy that starts
+/// with it doesn't build its own, and one that can't only takes longer.
+const CORE: &str = "target/avr-none/release/build/core";
 
+fn copy_of_the_tree(name: &str) -> TempDir {
+    let dir = TempDir::new(name).unwrap();
+    for entry in COPIED {
+        copy_tree(&root().join(entry), &dir.path().join(entry)).unwrap();
+    }
+    _ = copy_tree(&root().join(CORE), &dir.path().join(CORE));
+    dir
+}
+
+/// Gives back what wasn't refused as expected, each with its place in `mistakes`.
+fn try_mistakes(
+    copy: &Path,
+    mistakes: &[(&Mistake, Check)],
+    next: &AtomicUsize,
+) -> Vec<(usize, String)> {
     let mut missed = Vec::new();
-    for mistake in MISTAKES {
+    loop {
+        let i = next.fetch_add(1, Ordering::Relaxed);
+        let Some(&(mistake, check)) = mistakes.get(i) else {
+            return missed;
+        };
         let path = copy.join(mistake.file);
         let source = fs::read_to_string(&path).unwrap();
         let broken = substitute(&source, mistake.find, mistake.replace).unwrap();
         fs::write(&path, broken).unwrap();
-        let refusal = refused(copy);
+        let refusal = refused(copy, check);
         // Written rather than copied back, since a copy can keep the old
         // modified time, and cargo would then keep the broken build.
         fs::write(&path, source).unwrap();
         match refusal {
             Err(e) if e.contains(mistake.expect) => {}
-            Err(e) => missed.push(format!(
-                "{}: refused, but not with `{}`:\n{e}",
-                mistake.name, mistake.expect
+            Err(e) => missed.push((
+                i,
+                format!(
+                    "{}: refused, but not with `{}`:\n{e}",
+                    mistake.name, mistake.expect
+                ),
             )),
-            Ok(()) => missed.push(format!("{}: nothing refused it", mistake.name)),
+            Ok(()) => missed.push((i, format!("{}: nothing refused it", mistake.name))),
         }
+    }
+}
+
+/// As many as CI's runner has cores.
+const COPIES: usize = 4;
+
+#[test]
+#[ignore = "builds the firmware once a mistake, which takes about ten seconds"]
+fn the_firmware_is_refused_with_any_one_mistake_in_it() {
+    // Leaves `CORE` built, and nothing writes it again while it's copied.
+    let built = firmware_build(&root()).output().unwrap();
+    let stderr = String::from_utf8_lossy(&built.stderr);
+    assert!(built.status.success(), "{stderr}");
+
+    let (mistakes, next) = (mistakes(), AtomicUsize::new(0));
+    let mut missed: Vec<(usize, String)> = thread::scope(|scope| {
+        let copies: Vec<_> = (0..COPIES)
+            .map(|n| {
+                let (mistakes, next) = (&mistakes, &next);
+                scope.spawn(move || {
+                    let copy = copy_of_the_tree(&format!("mistakes-{n}"));
+                    try_mistakes(copy.path(), mistakes, next)
+                })
+            })
+            .collect();
+        copies
+            .into_iter()
+            .flat_map(|copy| copy.join().unwrap())
+            .collect()
+    });
+    missed.sort_by_key(|(i, _)| *i);
+    let mut missed: Vec<String> = missed.into_iter().map(|(_, why)| why).collect();
+    if !missed.is_empty()
+        && let Err(e) = refused(copy_of_the_tree("mistakes-none").path(), hex_checked)
+    {
+        missed.insert(
+            0,
+            format!(
+                "a copy with nothing broken is refused too, so no refusal means anything:\n{e}"
+            ),
+        );
     }
     assert!(missed.is_empty(), "{}", missed.join("\n\n"));
 }

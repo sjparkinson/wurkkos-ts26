@@ -10,7 +10,7 @@ cargo test --workspace --locked -q     # plain `cargo test` skips xtask
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings   # the only lint on hw.rs and rt.rs
 cargo xtask hex                        # after any firmware change
-cargo test --package xtask --locked -q -- --ignored   # about two minutes, after touching sim.rs, layout.rs, hw.rs, rt.rs, main.rs or a mistake's lines
+cargo test --package xtask --locked -q -- --ignored   # about ten seconds, after touching sim.rs, layout.rs, hw.rs, rt.rs, main.rs or a mistake's lines
 ```
 
 The firmware clippy and xtask rebuild `core`, and the first run fetches crates, which the sandbox may block. Rerun outside it if so.
