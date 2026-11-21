@@ -232,6 +232,7 @@ pub extern "avr-interrupt" fn porta_port() {
     write(reg::PORTA_INTFLAGS, 1 << SWITCH);
 }
 
+#[unsafe(export_name = "__halt")]
 pub fn halt() -> ! {
     // SAFETY: `cli` only clears SREG.I. No `nomem`, so nothing moves above it.
     unsafe { asm!("cli", options(nostack)) };

@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace.lints.rust]
 # Only src/avr/hw.rs, src/avr/rt.rs, the #[unsafe(no_mangle)] on main and the
-# no_mangle items in examples/link.rs and examples/guards.rs may opt back in.
+# exported items in examples/link.rs and examples/guards.rs may opt back in.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 

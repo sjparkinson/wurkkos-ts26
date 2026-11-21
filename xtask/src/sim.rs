@@ -25,7 +25,7 @@ use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, PASS_CLOCKS, TICK_DEADLINE_CYCLES};
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
-use crate::layout::{self, jmp_target, word};
+use crate::layout::{jmp_target, word};
 use crate::stamp;
 use crate::switching::RandomSwitching;
 use crate::updi::map;
@@ -182,7 +182,7 @@ impl Linked {
             main: symbol("main")? / 2,
             ends: Ends {
                 unhandled: symbol("__unhandled_interrupt")?,
-                halt: layout::halt(elf.symbols(), |name| elf.symbol(name))?,
+                halt: symbol("__halt")?,
             },
             layout: Layout {
                 data: sram("__data_start")?..sram("__data_end")?,
