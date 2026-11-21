@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::thread;
 
 use ts26::TICKS_PER_SECOND;
-use ts26::board;
+use ts26::board::{self, DSM_DUTY, DSM_FRACTION, DSM_SUM};
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
 use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
@@ -113,11 +113,6 @@ pub const HANDLER_BUDGET: u64 = (PWM_CYCLE - INTERRUPT_CYCLES) / 4;
 const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / DSM_FLOOR as u32 + 1;
 const DSM_WINDOW: usize = 1 << DSM_BITS;
 const DSM_SLACK: u32 = 2;
-/// The firmware's layout, not the chip's, so a firmware that moves these has
-/// to move them here too.
-const DSM_DUTY: usize = reg::GPIO_GPIOR1;
-const DSM_FRACTION: usize = reg::GPIO_GPIOR2;
-const DSM_SUM: usize = reg::GPIO_GPIOR3;
 
 /// Unmeasured; any non-zero count makes the firmware wait.
 const PIT_SYNC_READS: u8 = 2;
