@@ -15,7 +15,7 @@ See [docs/toolchain.md](docs/toolchain.md) for how it builds and links.
 
 ## Flashing
 
-The TS26 has three flashing pads, `R - +`, for a plain serial UPDI programmer, never a high-voltage one. Take the cell out first. The first flash on any torch is T0, the click on/off image on branch `build-t0`, and the full firmware goes on once that works.
+The TS26 has three flashing pads, `R - +`, for a plain serial UPDI programmer, never a high-voltage one. Take the cell out first.
 
 ```sh
 cargo xtask ping /dev/cu.usbserial-XXXX
