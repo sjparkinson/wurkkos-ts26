@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace.lints.rust]
 # Only src/avr/hw.rs, src/avr/rt.rs, the #[unsafe(no_mangle)] on main and the
-# exported items in examples/link.rs and examples/guards.rs may opt back in.
+# exported items in examples/ may opt back in.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
@@ -57,6 +57,20 @@ bench = false
 # Runs src/avr/hw.rs's guards that the firmware never reaches. Never flashed.
 [[example]]
 name = "guards"
+test = false
+bench = false
+
+# Indexes out of bounds, so xtask's tests can check its panic check still sees
+# one. Never flashed.
+[[example]]
+name = "panics"
+test = false
+bench = false
+
+# Divides a `u16` by ten, so xtask's tests can check a wide multiply still
+# fails to link. Never flashed, and never linked.
+[[example]]
+name = "multiplies"
 test = false
 bench = false
 

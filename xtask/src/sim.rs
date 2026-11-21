@@ -154,6 +154,29 @@ impl Report {
         self.landed += sim.overflows_landed;
         self.last_new = self.last_new.max(sim.last_new);
     }
+
+    fn exercised(&self) -> Result<(), String> {
+        if self.off_instructions == 0 {
+            return Err("never powered down".into());
+        }
+        if self.rest_instructions == 0 || self.woken == 0 {
+            return Err("never ticked at 1 Hz, or never woke from it on a press".into());
+        }
+        if self.landed == 0 {
+            return Err("no overflow ever landed mid-pass, so this checked nothing".into());
+        }
+        let longest = self
+            .loop_instructions
+            .max(self.off_instructions)
+            .max(self.rest_instructions);
+        if longest > PASS_BUDGET {
+            return Err(format!(
+                "a pass took {longest} instructions, over the {PASS_BUDGET} that fit the \
+                 {PASS_CLOCKS} WDT clocks watchdog.rs's sums allow it"
+            ));
+        }
+        Ok(())
+    }
 }
 
 struct Linked {
@@ -260,25 +283,7 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     for run in reports {
         report.merge(&run?);
     }
-    if report.off_instructions == 0 {
-        return Err("never powered down".into());
-    }
-    if report.rest_instructions == 0 || report.woken == 0 {
-        return Err("never ticked at 1 Hz, or never woke from it on a press".into());
-    }
-    if report.landed == 0 {
-        return Err("no overflow ever landed mid-pass, so this checked nothing".into());
-    }
-    let longest = report
-        .loop_instructions
-        .max(report.off_instructions)
-        .max(report.rest_instructions);
-    if longest > PASS_BUDGET {
-        return Err(format!(
-            "a pass took {longest} instructions, over the {PASS_BUDGET} that fit the \
-             {PASS_CLOCKS} WDT clocks watchdog.rs's sums allow it"
-        ));
-    }
+    report.exercised()?;
     Ok(report)
 }
 
@@ -4273,5 +4278,199 @@ mod tests {
             err,
             "vector 13 has a handler now, so pick another vector to force"
         );
+    }
+
+    #[test]
+    fn in_step_holds_a_power_down_to_the_librarys_too() {
+        let mut sim = ticking();
+        sim.chip.pit_busy = 0;
+        sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_POWER_DOWN | SLPCTRL_SEN;
+        let err = in_step_fails(&mut sim, 8);
+        assert!(
+            err.contains("the library says idle, but the firmware powered down"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_pit_and_the_watchdogs_window_are_held_to_the_librarys_pace() {
+        let (fast, slow) = (PIT_FRAME, regs::RTC_PERIOD_CYC32768);
+        let (window, none) = (regs::WDT_WINDOW_32CLK | WDT_PERIOD_MAX, WDT_PERIOD_MAX);
+        let paced = |pit: u8, wdt: u8, ticked: bool, took: u64, woken: bool| {
+            let mut chip = Chip::new(Vec::new());
+            chip.io[reg::RTC_PITCTRLA] = pit | RTC_PITEN;
+            chip.io[reg::WDT_CTRLA] = wdt;
+            let mut rig = Rig::default();
+            rig.ticked = ticked;
+            paced(&chip, &rig, took, woken)
+        };
+        assert_eq!(paced(fast, window, true, 5, false), Ok(()));
+        for (pit, wdt, ticked, took, woken, why) in [
+            (fast, window, false, 0, true, "slept through it"),
+            (fast, window, false, 5, false, "the library rests through"),
+            (slow, window, false, 5, true, "left the PIT at 1 Hz"),
+            (
+                slow,
+                window,
+                true,
+                5,
+                false,
+                "the library ticks at 64 Hz, but the PIT at 1 Hz",
+            ),
+            (
+                fast,
+                none,
+                true,
+                5,
+                false,
+                "window on, but WDT.CTRLA has it off",
+            ),
+        ] {
+            let err = paced(pit, wdt, ticked, took, woken).unwrap_err();
+            assert!(err.contains(why), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_handler_has_to_clear_the_flag_that_called_it() {
+        let run = |handler: &[u16]| {
+            let mut sim = sim(handled_by(VECTOR_PORTA, handler));
+            sim.cpu.r[16] = SWITCH;
+            poke(&mut sim.chip, PA5_CTRL, PORT_PULLUPEN | ISC_BOTHEDGES)?;
+            sim.chip.set_switch(true, false)?;
+            while sim.cpu.handling.is_none() {
+                sim.step()?;
+            }
+            while sim.cpu.handling.is_some() {
+                sim.step()?;
+            }
+            Ok::<_, String>(())
+        };
+        let [clear0, clear1] = sts(16, reg::PORTA_INTFLAGS as u16);
+        assert_eq!(run(&[clear0, clear1, RETI]), Ok(()));
+        let err = run(&[RETI]).unwrap_err();
+        assert_eq!(
+            err,
+            "the handler for PORTA_PORT (vector 3) returns with its flag still up, so it's \
+             taken again straight away"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_whose_source_is_off_cant_be_what_wakes_it() {
+        let mut chip = Chip::new(Vec::new());
+        poke(&mut chip, reg::RTC_PITINTCTRL, RTC_PI).unwrap();
+        poke(&mut chip, reg::SLPCTRL_CTRLA, SLEEP_IDLE | SLPCTRL_SEN).unwrap();
+        let err = chip.sleep().unwrap_err();
+        assert_eq!(err, "sleeps with no interrupt enabled that could wake it");
+        chip.io[reg::RTC_PITCTRLA] = PIT_FRAME | RTC_PITEN;
+        assert_eq!(chip.sleep(), Ok(true));
+    }
+
+    /// Slot 13 is `__unhandled_interrupt` and `hw::halt` in one.
+    fn halting() -> Sim {
+        let mut words = vec![SEI];
+        words.resize(SLOT_13 as usize / 2, NOP);
+        words.extend([CLI, SLEEP, SPIN]);
+        let ends = Ends {
+            unhandled: SLOT_13,
+            halt: SLOT_13,
+        };
+        let mut sim = Sim::new(image(words), SRAM.start, ends).unwrap();
+        sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
+        sim
+    }
+
+    #[test]
+    fn stopping_for_good_wants_the_light_off_and_the_main_clock_stopped() {
+        let mut lit = halting();
+        lit.chip.io[reg::VPORTB_DIR] = ENABLE | PWM;
+        lit.chip.io[reg::VPORTB_OUT] = ENABLE;
+        let err = stops_for_good(lit).unwrap_err();
+        assert_eq!(err, "stopped for good with PB2 high and a duty of 0");
+        let err = stops_for_good(halting()).unwrap_err();
+        assert!(err.starts_with("stopped for good in idle"), "{err}");
+    }
+
+    #[test]
+    fn a_stopped_oscillator_has_to_stop_the_pwm_at_the_deadline_and_not_before() {
+        let mut spinning = sim([SPIN]);
+        spinning.chip.io[reg::TCA0_CTRLB] = TCA_DSBOTTOM | TCA_CMP0EN;
+        let err = stops_at_the_deadline(spinning, &mut Report::default()).unwrap_err();
+        assert!(err.contains("past the deadline of 2048"), "{err}");
+        let err = stops_at_the_deadline(sim([SPIN]), &mut Report::default()).unwrap_err();
+        assert!(
+            err.contains("after 0 PWM cycles, before the deadline"),
+            "{err}"
+        );
+    }
+
+    const EXERCISED: Report = Report {
+        stack: 0,
+        loop_instructions: 1,
+        off_instructions: 1,
+        rest_instructions: 1,
+        handler_instructions: 0,
+        landed: 1,
+        last_new: 0,
+        woken: 1,
+    };
+
+    #[test]
+    fn a_report_has_to_show_every_kind_of_pass_and_none_too_long_for_the_watchdogs_sums() {
+        assert_eq!(EXERCISED.exercised(), Ok(()));
+        let long = PASS_BUDGET + 1;
+        let (off, rest) = (
+            Report {
+                off_instructions: 0,
+                ..EXERCISED
+            },
+            Report {
+                rest_instructions: 0,
+                ..EXERCISED
+            },
+        );
+        for (report, why) in [
+            (off, "never powered down"),
+            (rest, "never ticked at 1 Hz"),
+            (
+                Report {
+                    woken: 0,
+                    ..EXERCISED
+                },
+                "never woke from it",
+            ),
+            (
+                Report {
+                    landed: 0,
+                    ..EXERCISED
+                },
+                "no overflow ever landed",
+            ),
+            (
+                Report {
+                    loop_instructions: long,
+                    ..EXERCISED
+                },
+                "a pass took",
+            ),
+            (
+                Report {
+                    off_instructions: long,
+                    ..EXERCISED
+                },
+                "a pass took",
+            ),
+            (
+                Report {
+                    rest_instructions: long,
+                    ..EXERCISED
+                },
+                "a pass took",
+            ),
+        ] {
+            let err = report.exercised().unwrap_err();
+            assert!(err.contains(why), "{err}");
+        }
     }
 }

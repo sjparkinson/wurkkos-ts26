@@ -10,7 +10,6 @@ cargo test --workspace --locked -q     # plain `cargo test` skips xtask
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings   # the only lint on hw.rs and rt.rs
 cargo xtask hex                        # after any firmware change
-cargo xtask breakages                  # about two minutes, after touching sim.rs, layout.rs, hw.rs, rt.rs or a breakage's lines
 ```
 
 The firmware clippy and xtask rebuild `core`, and the first run fetches crates, which the sandbox may block. Rerun outside it if so.
@@ -31,7 +30,7 @@ The agents in `.claude/agents/` report back and never edit.
 - The sandbox can't write `.git/config`, so push with `git push origin <branch>` and pass `--head <branch>` to `gh pr create`.
 - PRs merge by rebase, so every commit is single-line and passes.
 - Docs and comments are in documentation style, with no "I" or "we", and uncertainty kept as "likely" or "unconfirmed".
-- Write a test, a breakage or a `const` assert rather than a comment. A comment stays only as a `// SAFETY:`, a citation for a number, or "unconfirmed" on a guess, at a line each.
+- Write a test or a `const` assert rather than a comment. A comment stays only as a `// SAFETY:`, a citation for a number, or "unconfirmed" on a guess, at a line each.
 - docs/safety.md changes when a hazard or its cover changes, and not for every code change.
 
 ## Rules that bite
