@@ -138,11 +138,15 @@ fn checked(root: &Path) -> Result<(elf::Elf, sim::Report), String> {
     layout::memory(&probe_elf).map_err(at(&probe))?;
     sim::probe(&probe_elf).map_err(|e| format!("{}: simulator: {e}", probe.display()))?;
 
+    guards_checked(root)?;
+    Ok((elf, report))
+}
+
+fn guards_checked(root: &Path) -> Result<(), String> {
     let guards = root.join(GUARDS);
     let guards_elf = load(&guards)?;
     layout::check(&guards_elf).map_err(at(&guards))?;
-    sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))?;
-    Ok((elf, report))
+    sim::guards(&guards_elf).map_err(|e| format!("{}: simulator: {e}", guards.display()))
 }
 
 fn load(path: &Path) -> Result<elf::Elf, String> {
