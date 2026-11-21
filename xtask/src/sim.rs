@@ -192,7 +192,7 @@ impl Linked {
     }
 }
 
-pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
+pub fn check(elf: &Elf) -> Result<Report, String> {
     let linked = Linked::of(elf)?;
     let image = elf.flash_image();
     let signed = crc::sign(&image, &stamp::TEST)?;
@@ -214,7 +214,6 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
         .map_err(|e| format!("with an interrupt that has no handler: {e}"))?;
     unhandled_interrupt_at_rest(power_on()?)
         .map_err(|e| format!("with an interrupt that has no handler at rest: {e}"))?;
-    let examples = if examples { EXAMPLES } else { &[] };
     let faults: [(FaultCheck, &str); 8] = [
         (slow_ticks, "with the slowest ticks"),
         (oscillator_stops, "with the 32 kHz oscillator stopped"),
@@ -244,7 +243,7 @@ pub fn check(elf: &Elf, examples: bool) -> Result<Report, String> {
             })
         });
         // Spawning every run before joining any is what runs them in parallel.
-        let runs: Vec<_> = examples
+        let runs: Vec<_> = EXAMPLES
             .iter()
             .map(Some)
             .chain([None])
