@@ -29,13 +29,9 @@ jobs:
       # log into annotations on the PR diff.
       - run: echo "::add-matcher::.github/rust-matchers.json"
 
-      # rustup reads rust-toolchain.toml and installs the pinned nightly,
-      # with every component it lists, the first time cargo runs.
-      - run: rustup show active-toolchain || rustup toolchain install
-
-      # rustup stamps rust-src with the time of the install, which is newer
-      # than the cached build of core, so cargo would rebuild core every run.
-      - run: find "$(rustc --print sysroot)/lib/rustlib/src" -exec touch --date=@0 {} +
+      - run: |
+          rustup show active-toolchain || rustup toolchain install
+          find "$(rustc --print sysroot)/lib/rustlib/src" -exec touch --date=@0 {} +
 
       - uses: actions/cache@v6.1.0
         with:
