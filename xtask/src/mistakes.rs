@@ -35,7 +35,6 @@ struct Mistake {
 const HW: &str = "src/avr/hw.rs";
 const MAIN: &str = "src/main.rs";
 const RT: &str = "src/avr/rt.rs";
-const WATCHDOG: &str = "src/watchdog.rs";
 
 const MISTAKES: &[Mistake] = &[
     Mistake {
@@ -154,15 +153,6 @@ const MISTAKES: &[Mistake] = &[
         find: "    set_watchdog(regs::WDT_PERIOD_8KCLK);\n",
         replace: "",
         expect: "slows the PIT with the watchdog's window still on",
-    },
-    // A press at rest then lands the window on a count left from the last rest
-    // feed, up to a second old.
-    Mistake {
-        name: "window-without-a-feed-first",
-        file: WATCHDOG,
-        find: "            State::Waking => (State::Arming, Some(Step::Feed)),\n",
-        replace: "            State::Waking => (State::Arming, None),\n",
-        expect: "without wdr",
     },
     Mistake {
         name: "falling-edge-at-rest",
@@ -623,6 +613,16 @@ fn every_mistake_has_its_own_name_and_finds_its_text_exactly_once() {
         let source = fs::read_to_string(&path).unwrap();
         substitute(&source, mistake.find, mistake.replace)
             .unwrap_or_else(|e| panic!("{}: {}: {e}", mistake.name, mistake.file));
+    }
+}
+
+// The simulator here is built from the unbroken library, so a broken one may
+// be refused only for disagreeing with it.
+#[test]
+fn every_mistake_is_outside_the_library_whose_own_tests_catch_its_mistakes() {
+    for (mistake, _) in mistakes() {
+        let firmware = mistake.file == MAIN || mistake.file.starts_with("src/avr/");
+        assert!(firmware, "{}: {}", mistake.name, mistake.file);
     }
 }
 
