@@ -30,7 +30,7 @@ Each way found so far that this torch could hurt someone or itself, and what cov
 
 **Hazard.** A press on the switch under pressure.
 
-**Cover.** 3C locks and unlocks. In lockout `ui::Ui` never lights, a hold does nothing, and a fourth press makes a 4C, which does nothing.
+**Cover.** 3C with the light on puts it out at the first click and locks it, and 3C in lockout unlocks it to off. A torch that's off only locks by lighting it first. In lockout `ui::Ui` never lights, a hold does nothing, and a fourth press makes a 4C, which does nothing.
 
 ### H6. Corrupt or half-written flash
 
