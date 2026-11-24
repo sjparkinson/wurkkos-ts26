@@ -4,6 +4,9 @@ pub const HOLD_TICKS: u16 = TICKS_PER_SECOND * 3 / 8;
 
 pub const RELEASE_TICKS: u16 = TICKS_PER_SECOND * 7 / 32;
 
+/// A press this long is `pending` as a hold. Unconfirmed that it leaves the filter time to fall.
+pub const CLICK_TICKS: u16 = HOLD_TICKS / 2;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     Click(u8),
@@ -45,13 +48,12 @@ enum Gesture {
     Down {
         clicks: u8,
         ticks: u16,
+        said: u8,
     },
     Up {
         clicks: u8,
         ticks: u16,
-    },
-    Spent {
-        up: u16,
+        said: u8,
     },
 }
 
@@ -72,14 +74,25 @@ impl Clicks {
     }
 
     pub const fn counting(&self) -> bool {
-        matches!(self.gesture, Gesture::Down { .. } | Gesture::Up { .. })
+        match self.gesture {
+            Gesture::Idle => false,
+            Gesture::Down { .. } => true,
+            Gesture::Up { clicks, said, .. } => clicks != said,
+        }
     }
 
     pub const fn pending(&self) -> Option<Event> {
         match self.gesture {
-            Gesture::Down { clicks, .. } => Some(Event::Hold { clicks, ticks: 0 }),
-            Gesture::Up { clicks, .. } => Some(Event::Click(clicks)),
-            Gesture::Idle | Gesture::Spent { .. } => None,
+            Gesture::Down {
+                clicks,
+                ticks,
+                said: 0,
+            } if ticks < CLICK_TICKS => Some(Event::Click(clicks.saturating_add(1))),
+            Gesture::Down {
+                clicks, said: 0, ..
+            } => Some(Event::Hold { clicks, ticks: 0 }),
+            Gesture::Up { clicks, said, .. } if clicks != said => Some(Event::Click(clicks)),
+            _ => None,
         }
     }
 
@@ -94,52 +107,67 @@ impl Clicks {
                 self.gesture = Gesture::Down {
                     clicks: 0,
                     ticks: 0,
+                    said: 0,
                 };
                 None
             }
-            (Gesture::Down { clicks, ticks }, true) => {
+            (
+                Gesture::Down {
+                    clicks,
+                    ticks,
+                    said,
+                },
+                true,
+            ) => {
                 *ticks = ticks.saturating_add(1);
-                let clicks = *clicks;
+                let (clicks, said) = (*clicks, *said);
                 ticks
                     .checked_sub(HOLD_TICKS)
+                    .filter(|_| said == 0)
                     .map(|ticks| Event::Hold { clicks, ticks })
             }
-            (&mut Gesture::Down { clicks, ticks }, false) if ticks >= HOLD_TICKS => {
+            (
+                &mut Gesture::Down {
+                    clicks,
+                    ticks,
+                    said,
+                },
+                false,
+            ) if ticks >= HOLD_TICKS => {
                 self.gesture = Gesture::Idle;
-                Some(Event::Release { clicks })
+                (said == 0).then_some(Event::Release { clicks })
             }
-            (&mut Gesture::Down { clicks, .. }, false) => {
+            (&mut Gesture::Down { clicks, said, .. }, false) => {
                 let clicks = clicks.saturating_add(1);
-                if most.is_some_and(|most| clicks >= most) {
-                    self.gesture = Gesture::Spent { up: 1 };
-                    Some(Event::Click(clicks))
-                } else {
-                    self.gesture = Gesture::Up { clicks, ticks: 1 };
-                    None
-                }
+                let now = said == 0 && most.is_some_and(|most| clicks >= most);
+                self.gesture = Gesture::Up {
+                    clicks,
+                    ticks: 1,
+                    said: if now { clicks } else { said },
+                };
+                now.then_some(Event::Click(clicks))
             }
-            (&mut Gesture::Up { clicks, .. }, true) => {
-                self.gesture = Gesture::Down { clicks, ticks: 0 };
+            (&mut Gesture::Up { clicks, said, .. }, true) => {
+                self.gesture = Gesture::Down {
+                    clicks,
+                    ticks: 0,
+                    said,
+                };
                 None
             }
-            (&mut Gesture::Up { clicks, ticks }, false) if ticks >= RELEASE_TICKS => {
+            (
+                &mut Gesture::Up {
+                    clicks,
+                    ticks,
+                    said,
+                },
+                false,
+            ) if ticks >= RELEASE_TICKS => {
                 self.gesture = Gesture::Idle;
-                Some(Event::Click(clicks))
+                (clicks != said).then_some(Event::Click(clicks))
             }
             (Gesture::Up { ticks, .. }, false) => {
                 *ticks = ticks.saturating_add(1);
-                None
-            }
-            (Gesture::Spent { up }, true) => {
-                *up = 0;
-                None
-            }
-            (&mut Gesture::Spent { up }, false) if up >= RELEASE_TICKS => {
-                self.gesture = Gesture::Idle;
-                None
-            }
-            (Gesture::Spent { up }, false) => {
-                *up = up.saturating_add(1);
                 None
             }
         }
@@ -335,7 +363,8 @@ mod tests {
                 Some(Event::Click(most))
             );
             assert!(!clicks.idle() && !clicks.counting());
-            for _ in 0..2 * RELEASE_TICKS {
+            assert_eq!(clicks.pending(), None);
+            for _ in 0..RELEASE_TICKS {
                 assert_eq!(clicks.tick_up_to(false, Some(most)), None);
             }
             assert!(clicks.idle());
@@ -343,23 +372,64 @@ mod tests {
     }
 
     #[test]
-    fn nothing_counts_after_the_click_that_reached_most_until_the_switch_is_left_alone() {
+    fn clicks_after_the_one_that_reached_most_count_once_more_with_it() {
+        for extra in 1..=3 {
+            let mut clicks = Clicks::new();
+            clicks.tick_up_to(true, Some(1));
+            assert_eq!(clicks.tick_up_to(false, Some(1)), Some(Event::Click(1)));
+            for _ in 0..extra {
+                assert_eq!(clicks.tick_up_to(true, Some(1)), None);
+                assert_eq!(clicks.pending(), None);
+                assert_eq!(clicks.tick_up_to(false, Some(1)), None);
+                assert!(!clicks.idle() && clicks.counting());
+            }
+            for _ in 0..RELEASE_TICKS - 1 {
+                assert_eq!(clicks.tick_up_to(false, Some(1)), None);
+            }
+            assert_eq!(clicks.pending(), Some(Event::Click(1 + extra)));
+            assert_eq!(
+                clicks.tick_up_to(false, Some(1)),
+                Some(Event::Click(1 + extra))
+            );
+            assert!(clicks.idle());
+        }
+    }
+
+    #[test]
+    fn a_press_is_pending_as_a_click_until_half_way_to_a_hold_and_as_a_hold_after() {
+        let mut clicks = Clicks::new();
+        assert_eq!(clicks.pending(), None);
+        for tick in 0..HOLD_TICKS {
+            clicks.tick_up_to(true, Some(1));
+            let pending = if tick < CLICK_TICKS {
+                Event::Click(1)
+            } else {
+                Event::Hold {
+                    clicks: 0,
+                    ticks: 0,
+                }
+            };
+            assert_eq!(clicks.pending(), Some(pending), "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn only_a_count_of_two_or_more_follows_the_click_that_reached_most() {
         for pattern in 0..=u16::MAX {
             let mut clicks = Clicks::new();
             clicks.tick_up_to(true, Some(1));
             assert_eq!(clicks.tick_up_to(false, Some(1)), Some(Event::Click(1)));
-            let mut up = 1;
             for bit in 0..16 {
-                if up > RELEASE_TICKS {
+                if clicks.idle() {
                     break;
                 }
                 let pressed = pattern >> bit & 1 == 1;
-                assert_eq!(
-                    clicks.tick_up_to(pressed, Some(1)),
-                    None,
-                    "sample {bit} of {pattern:#018b}"
+                let event = clicks.tick_up_to(pressed, Some(1));
+                assert!(
+                    matches!(event, None | Some(Event::Click(2..))),
+                    "{event:?} at sample {bit} of {pattern:#018b}"
                 );
-                up = if pressed { 0 } else { up + 1 };
+                assert!(event.is_none() || clicks.idle());
             }
         }
     }
@@ -372,9 +442,8 @@ mod tests {
         for _ in 0..3 * HOLD_TICKS {
             assert_eq!(clicks.tick_up_to(true, Some(3)), None);
         }
-        for _ in 0..=RELEASE_TICKS {
-            assert_eq!(clicks.tick_up_to(false, Some(3)), None);
-        }
+        assert_eq!(clicks.tick_up_to(false, Some(3)), None);
+        assert!(clicks.idle());
         for _ in 0..HOLD_TICKS {
             assert_eq!(clicks.tick_up_to(true, Some(3)), None);
         }
@@ -486,41 +555,46 @@ mod tests {
     fn model(runs: &[(bool, u16)], most: Option<u8>) -> Vec<Expected> {
         let mut expected = Vec::new();
         let mut waiting = 0u8;
+        let mut said = 0u8;
         let mut after_hold = false;
-        let mut spent = false;
+        let mut busy = false;
         for (index, &(pressed, len)) in runs.iter().enumerate() {
             if pressed {
                 for sample in 0..len {
-                    let event = (!spent && sample >= HOLD_TICKS).then(|| Event::Hold {
+                    let event = (said == 0 && sample >= HOLD_TICKS).then(|| Event::Hold {
                         clicks: waiting,
                         ticks: sample - HOLD_TICKS,
                     });
                     expected.push((event, false));
                 }
                 after_hold = len > HOLD_TICKS;
+                busy = len > 0;
                 continue;
             }
             let mut event_at = None;
-            if index > 0 && len > 0 && !spent {
+            let mut over_at = RELEASE_TICKS;
+            if index > 0 && len > 0 && busy {
                 if after_hold {
-                    event_at = Some((0, Event::Release { clicks: waiting }));
-                    waiting = 0;
+                    event_at = (said == 0).then_some((0, Event::Release { clicks: waiting }));
+                    over_at = 0;
                 } else {
                     waiting = waiting.saturating_add(1);
-                    spent = most.is_some_and(|most| waiting >= most);
-                    let at = if spent { 0 } else { RELEASE_TICKS };
-                    event_at = Some((at, Event::Click(waiting)));
+                    if said == 0 && most.is_some_and(|most| waiting >= most) {
+                        said = waiting;
+                        event_at = Some((0, Event::Click(waiting)));
+                    } else if waiting != said {
+                        event_at = Some((RELEASE_TICKS, Event::Click(waiting)));
+                    }
                 }
             }
             for sample in 0..len {
                 let event = event_at
                     .filter(|&(at, _)| at == sample)
                     .map(|(_, event)| event);
-                if matches!(event, Some(Event::Click(_))) {
-                    waiting = 0;
+                if busy && sample == over_at {
+                    (busy, waiting, said) = (false, 0, 0);
                 }
-                spent &= sample < RELEASE_TICKS;
-                expected.push((event, waiting == 0 && !spent));
+                expected.push((event, !busy));
             }
         }
         expected
@@ -566,7 +640,7 @@ mod tests {
         );
         let mut expected = std::vec![(None, false); spent.len()];
         expected[2].0 = Some(Event::Click(1));
-        expected[spent.len() - 2..].fill((None, true));
+        expected[spent.len() - usize::from(RELEASE_TICKS) - 2..].fill((None, true));
         assert_eq!(spent, expected);
 
         let hold = |clicks, ticks| Some(Event::Hold { clicks, ticks });

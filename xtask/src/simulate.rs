@@ -356,18 +356,20 @@ mod tests {
 
     #[test]
     fn everything_else_leaves_it_alone() {
-        assert_eq!(script("3C 5C 3H:2s").level, 0);
-        assert_eq!(script("2C 2H:2s").level, 0);
+        assert_eq!(script("1C 3C 5C 3H:2s").level, 0);
+        assert_eq!(script("1C 2C").level, 0);
+        assert_eq!(script("3C").level, LEVEL);
     }
 
     #[test]
     fn logs_one_line_per_click_and_per_hold() {
-        let lines = script("1C 1C 3H:1s 2C").lines;
-        assert_eq!(lines.len(), 4, "{lines:#?}");
+        let lines = script("1C 3C 3H:1s 2C").lines;
+        assert_eq!(lines.len(), 5, "{lines:#?}");
         assert!(lines[0].contains("1C") && lines[0].ends_with(&Level(LEVEL).to_string()));
         assert!(lines[1].contains("1C"), "{lines:#?}");
-        assert!(lines[2].contains("3H, held") && lines[2].ends_with("(no change)"));
-        assert!(lines[3].contains("2C") && lines[3].ends_with("(no change)"));
+        assert!(lines[2].contains("3C") && lines[2].ends_with("(no change)"));
+        assert!(lines[3].contains("3H, held") && lines[3].ends_with("(no change)"));
+        assert!(lines[4].contains("2C") && lines[4].ends_with("(no change)"));
     }
 
     #[test]
@@ -457,12 +459,14 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("1C") && live.torch.level() == LEVEL);
 
-        live.key(' ');
-        ticks_of(&mut live, 64);
         live.key('3');
         let lines = ticks_of(&mut live, 64);
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].contains("3C") && live.torch.level() == 0);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("1C") && lines[1].contains("3C"));
+        assert_eq!(live.torch.level(), 0);
+        live.key(' ');
+        assert_eq!(ticks_of(&mut live, 64).len(), 1);
+        assert_eq!(live.torch.level(), 0, "locked");
     }
 
     #[test]
