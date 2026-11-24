@@ -41,9 +41,11 @@ const fn ex(name: &'static str, script: &'static str, expect: Expect) -> Example
 pub const EXAMPLES: &[Example] = &[
     ex("Off: 1C", "1C", Level(52)),
     ex("Off: 1C, after using it", "1C 1H 1C 1C", Level(52)),
-    ex("Off: 2C or more", "3C", Level(52)),
-    ex("Off: 2C or more, then 1C", "3C 1C", Off),
-    ex("Off: 2C or more, then 1C twice", "3C 1C 1C", Level(52)),
+    ex("Off: 2C", "2C", Level(52)),
+    ex("Off: 3C", "3C", Level(52)),
+    ex("Off: 3C, then 1C", "3C 1C", Off),
+    ex("Off: 3C, then 1C twice", "3C 1C 1C", Level(52)),
+    ex("Off: 4C or more", "5C", Level(52)),
     ex("Off: 1H", "1H", Level(17)),
     ex("Off: 1H, held for a minute", "1H:60s", Level(17)),
     ex("Off: 1H, let go", "1H wait:10s", Level(17)),
@@ -102,6 +104,11 @@ pub const EXAMPLES: &[Example] = &[
     ),
     ex("Low cell", "1C cell:2.95V wait:12s", Level(37)),
     ex("Low cell, for long enough", "1C cell:2.95V wait:60s", Off),
+    ex(
+        "Low cell, 3C, then charged",
+        "1C cell:2.95V wait:12s 3C cell:3.80V wait:301s 1C",
+        Off,
+    ),
     ex("Low cell, 1H", "1H cell:2.95V wait:3s", Level(17)),
     ex(
         "Low cell, 1H, for long enough",
