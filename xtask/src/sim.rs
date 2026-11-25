@@ -27,6 +27,7 @@ use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, PASS_CLOCKS, TICK_DEADLINE_CYCLES};
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
 use crate::crc;
 use crate::elf::{DATA_SPACE, Elf, SRAM};
+use crate::int;
 use crate::layout::{jmp_target, word};
 use crate::stamp;
 use crate::switching::RandomSwitching;
@@ -58,11 +59,11 @@ const TCA_DSBOTTOM: u8 = regs::TCA_WGMODE_DSBOTTOM;
 const SLEEP_IDLE: u8 = regs::SLPCTRL_SMODE_IDLE;
 const SLEEP_POWER_DOWN: u8 = regs::SLPCTRL_SMODE_PDOWN;
 
-const VECTOR_PORTA: u8 = regs::VECTOR_PORTA_PORT as u8;
-const VECTOR_PORTB: u8 = regs::VECTOR_PORTB_PORT as u8;
-const VECTOR_PORTC: u8 = regs::VECTOR_PORTC_PORT as u8;
-const VECTOR_RTC_PIT: u8 = regs::VECTOR_RTC_PIT as u8;
-const VECTOR_TCA0_OVF: u8 = regs::VECTOR_TCA0_OVF as u8;
+const VECTOR_PORTA: u8 = int::u8_of(regs::VECTOR_PORTA_PORT);
+const VECTOR_PORTB: u8 = int::u8_of(regs::VECTOR_PORTB_PORT);
+const VECTOR_PORTC: u8 = int::u8_of(regs::VECTOR_PORTC_PORT);
+const VECTOR_RTC_PIT: u8 = int::u8_of(regs::VECTOR_RTC_PIT);
+const VECTOR_TCA0_OVF: u8 = int::u8_of(regs::VECTOR_TCA0_OVF);
 const VECTORS: usize = regs::VECTORS;
 
 const VREF_1V1: u8 = regs::VREF_ADC0REFSEL_1V1;
@@ -591,7 +592,7 @@ fn stops_at_the_deadline(sim: &mut Sim, report: &mut Report) -> Result<(), Strin
 }
 
 /// Nothing in the firmware touches TCB0.
-const VECTOR_UNHANDLED: u8 = regs::VECTOR_TCB0_INT as u8;
+const VECTOR_UNHANDLED: u8 = int::u8_of(regs::VECTOR_TCB0_INT);
 
 fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
     if sim.handled & 1 << VECTOR_UNHANDLED != 0 {
