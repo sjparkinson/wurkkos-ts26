@@ -13,6 +13,7 @@ impl Fuses {
     /// - A non-zero `WDTCFG` starts the watchdog at boot with LOCK set (DS40002204A §19.3.1).
     /// - `OSCLOCK` stops the calibration loading (errata 2.2.1).
     /// - `APPEND` and `BOOTEND` at 0 leave the CRC scan's checksum where `xtask` puts it.
+    #[must_use]
     pub const fn ok(self) -> bool {
         self.wdtcfg == 0
             && self.osccfg & regs::FUSE_FREQSEL == regs::FUSE_FREQSEL_20MHZ
@@ -23,6 +24,7 @@ impl Fuses {
     }
 }
 
+#[must_use]
 pub const fn hung(flags: u8) -> bool {
     flags & regs::RSTCTRL_WDRF != 0
 }
@@ -41,6 +43,7 @@ impl Faults {
         hang: false,
     };
 
+    #[must_use]
     pub const fn any(self) -> bool {
         self.flash || self.fuses || self.hang
     }

@@ -20,7 +20,7 @@ pub enum Reading {
 
 pub const FULL_SCALE: u16 = 4 * 1023;
 
-/// Likely: 3 LSb a sample, DS40002204A table 36-27's typical error, which gives no maximum.
+/// Likely: 3 `LSb` a sample, DS40002204A table 36-27's typical error, which gives no maximum.
 pub const GROUND_MAX: u16 = 4 * 3;
 
 pub const CYCLE_TICKS: u8 = 16;
@@ -37,6 +37,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             phase: 0,

@@ -38,6 +38,7 @@ const _: () = {
     reason = "reading is at most FULL_SCALE here, and the asserts on HIGH and LOW bound \
               every step for that"
 )]
+#[must_use]
 pub const fn centivolts(reading: u16) -> u16 {
     if reading > FULL_SCALE {
         return u16::MAX;
@@ -75,6 +76,7 @@ pub const FLAT_STEP: u8 = 30;
 pub const FORGET_TICKS: u16 = TICKS_PER_SECOND * 60 * 5;
 pub const PLAUSIBLE: core::ops::RangeInclusive<u16> = 100..=440;
 
+#[must_use]
 pub fn plausible(centivolts: u16) -> bool {
     PLAUSIBLE.contains(&centivolts)
 }
@@ -116,6 +118,7 @@ impl Default for Protection {
 }
 
 impl Protection {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             filtered: 0,
@@ -131,10 +134,12 @@ impl Protection {
         }
     }
 
+    #[must_use]
     pub const fn ceiling(&self) -> u8 {
         self.ceiling.level()
     }
 
+    #[must_use]
     pub const fn flat(&self) -> bool {
         self.flat
     }
@@ -143,6 +148,7 @@ impl Protection {
         self.ceiling.set(1, level);
     }
 
+    #[must_use]
     pub const fn weak(&self) -> bool {
         self.weak
     }
@@ -168,6 +174,7 @@ impl Protection {
         }
     }
 
+    #[must_use]
     pub const fn centivolts(&self) -> Option<u16> {
         match self.filtered {
             0 => None,
@@ -222,9 +229,10 @@ impl Protection {
             self.cut_samples = 0;
             return Verdict::Ceiling(ceiling);
         }
-        self.cut_samples = match centivolts < CUT_BELOW {
-            true => self.cut_samples.saturating_add(1),
-            false => 0,
+        self.cut_samples = if centivolts < CUT_BELOW {
+            self.cut_samples.saturating_add(1)
+        } else {
+            0
         };
         if self.cut_samples >= CUT_SAMPLES {
             (self.low_samples, self.flat_samples) = (0, 0);
@@ -232,9 +240,10 @@ impl Protection {
             self.flat = true;
             return Verdict::Flat;
         }
-        self.low_samples = match voltage < STEP_DOWN_BELOW {
-            true => self.low_samples.saturating_add(1),
-            false => 0,
+        self.low_samples = if voltage < STEP_DOWN_BELOW {
+            self.low_samples.saturating_add(1)
+        } else {
+            0
         };
         self.flat_samples = match voltage < OFF_BELOW {
             true if level > ceiling => 0,

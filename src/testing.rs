@@ -37,6 +37,7 @@ pub fn voltage_reading(cell: u16) -> u16 {
     closest(cell, battery::centivolts)
 }
 
+#[must_use]
 pub fn temperature_reading(kelvin: u16) -> u16 {
     closest(kelvin.saturating_mul(16), |raw| CALIBRATION.sixteenths(raw))
 }
@@ -81,6 +82,7 @@ impl Default for Adc {
 }
 
 impl Adc {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             voltage: 3516,
@@ -270,14 +272,11 @@ fn centivolts(volts: &str) -> Result<u16, Error> {
 }
 
 fn ticks(duration: &str) -> Result<u16, Error> {
-    let ms = if let Some(ms) = duration.strip_suffix("ms") {
-        ms.parse().ok()
-    } else if let Some(s) = duration.strip_suffix('s') {
-        decimal(s, 3)
-    } else {
-        None
-    };
-    let ms = ms.ok_or(Error::Duration)?;
+    let ms: u32 = duration
+        .strip_suffix("ms")
+        .and_then(|ms| ms.parse().ok())
+        .or_else(|| duration.strip_suffix('s').and_then(|s| decimal(s, 3)))
+        .ok_or(Error::Duration)?;
     let rounded = u64::from(ms)
         .checked_mul(u64::from(TICKS_PER_SECOND))
         .and_then(|scaled| scaled.checked_add(500))
@@ -313,6 +312,7 @@ impl Scene {
         adc: None,
     };
 
+    #[must_use]
     pub const fn faults(&self) -> Faults {
         Faults {
             fuses: self.fault,
@@ -321,6 +321,7 @@ impl Scene {
         }
     }
 
+    #[must_use]
     pub fn reading(&self, channel: Channel) -> u16 {
         match channel {
             _ if self.adc == Some(AdcFault::Frozen) => voltage_reading(self.cell),
@@ -399,6 +400,7 @@ impl Default for Rig {
 }
 
 impl Rig {
+    #[must_use]
     pub const fn new(faults: Faults) -> Self {
         Self {
             torch: Torch::new(CALIBRATION, faults),
@@ -410,6 +412,7 @@ impl Rig {
         }
     }
 
+    #[must_use]
     pub const fn powers_down(&self) -> bool {
         self.torch.resting() && self.pace.powers_down()
     }
@@ -420,6 +423,9 @@ impl Rig {
         event
     }
 
+    /// # Panics
+    ///
+    /// If a press wakes a slow pace into anything but [`Step::Fast`].
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
         self.frame = self.frame.wrapping_add(1) % REST_TICKS;
         let changed = core::mem::replace(&mut self.pressed, pressed) != pressed;
@@ -476,6 +482,7 @@ pub struct Rng(u32);
 
 impl Rng {
     /// Xorshift never leaves zero.
+    #[must_use]
     pub const fn new(seed: u32) -> Self {
         Self(if seed == 0 { 1 } else { seed })
     }

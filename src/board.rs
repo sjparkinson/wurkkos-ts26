@@ -21,6 +21,7 @@ pub const AUX: [(u8, u8); 3] = [
     (AUX_RED, 1 << AUX_RED),
 ];
 
+#[must_use]
 pub const fn aux_pin(colour: Aux) -> u8 {
     match colour {
         Aux::Off => 0,
@@ -31,6 +32,7 @@ pub const fn aux_pin(colour: Aux) -> u8 {
     }
 }
 
+#[must_use]
 pub const fn aux_bright(colour: Aux) -> u8 {
     match colour {
         Aux::Red => 1 << AUX_RED,
