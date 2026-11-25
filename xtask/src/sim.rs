@@ -2215,6 +2215,167 @@ impl Chip {
         Ok(())
     }
 
+    fn write_ccp(&mut self, value: u8) -> Result<(), String> {
+        if value != CCP_IOREG {
+            return Err(format!(
+                "writes {value:#04x} to CPU.CCP, which isn't the IOREG key"
+            ));
+        }
+        self.unlocked_until = Some(self.now.saturating_add(4));
+        self.ccp_hold = true;
+        Ok(())
+    }
+
+    fn write_clock(&mut self, a: usize, value: u8) -> Result<(), String> {
+        self.take_protected_write(a)?;
+        if value != CLOCK_10MHZ {
+            return Err(format!(
+                "writes {value:#04x} to CLKCTRL.MCLKCTRLB: the firmware runs at \
+                 10 MHz, and the PWM's frequency depends on it"
+            ));
+        }
+        *self.io_mut(a) = value;
+        Ok(())
+    }
+
+    fn write_tca_ctrla(&mut self, value: u8) -> Result<(), String> {
+        if value != TCA_RUNNING {
+            return Err(format!(
+                "writes {value:#04x} to TCA0.CTRLA: the period and the duty \
+                 assume the timer runs undivided, and it never stops"
+            ));
+        }
+        *self.io_mut(reg::TCA0_CTRLA) = value;
+        // Unconfirmed: a full first cycle at whatever PER is.
+        self.tca.next_bottom = self.now.saturating_add(2 * u64::from(self.tca.per.max(1)));
+        self.plan_next_event();
+        Ok(())
+    }
+
+    fn write_tca_ctrlb(&mut self, value: u8) -> Result<(), String> {
+        if value & !TCA_CMP0EN != TCA_DSBOTTOM {
+            return Err(format!(
+                "writes {value:#04x} to TCA0.CTRLB: the period and the duty assume \
+                 dual-slope at BOTTOM on WO0"
+            ));
+        }
+        if (self.io(reg::TCA0_CTRLB) ^ value) & TCA_CMP0EN != 0 {
+            self.tca.settled = 0;
+        }
+        *self.io_mut(reg::TCA0_CTRLB) = value;
+        Ok(())
+    }
+
+    fn write_tca_intctrl(&mut self, value: u8) -> Result<(), String> {
+        let turned_on = value & TCA_OVF != 0 && self.io(reg::TCA0_INTCTRL) & TCA_OVF == 0;
+        if turned_on && self.io(DSM_SUM) != 0 {
+            return Err(format!(
+                "turns TCA0's overflow interrupt on with the delta-sigma's sum at {}, \
+                 left over from the last time the light was on",
+                self.io(DSM_SUM)
+            ));
+        }
+        // The request is the flag and the enable together, and BOTTOM sets
+        // the flag with the interrupt off too (§20.3.5). One that went up
+        // between a clear and this write is a real BOTTOM, and fine.
+        if turned_on && self.tca.ovf && self.since(self.tca.ovf_up_at)? >= PWM_CYCLE {
+            return Err(
+                "turns TCA0's overflow interrupt on with INTFLAGS.OVF still up from \
+                 before, so the handler runs at once rather than at the next BOTTOM \
+                 (section 20.3.5)"
+                    .into(),
+            );
+        }
+        *self.io_mut(reg::TCA0_INTCTRL) = value;
+        self.update_enabled();
+        Ok(())
+    }
+
+    fn write_pit_ctrla(&mut self, value: u8) -> Result<(), String> {
+        let a = reg::RTC_PITCTRLA;
+        if self.pit_busy > 0 {
+            return Err(format!(
+                "writes {} while RTC.PITSTATUS.CTRLBUSY is set, and the chip drops \
+                 that write",
+                name(a)
+            ));
+        }
+        if self.io(a) & RTC_PITEN != 0 && value & RTC_PITEN == 0 {
+            return Err("clears RTC.PITCTRLA.PITEN, which stops the RTC too \
+                        (errata 2.6.2), and the firmware never stops its tick"
+                .into());
+        }
+        let period = value & RTC_PERIOD;
+        if !(PIT_FRAME..=regs::RTC_PERIOD_CYC32768).contains(&period) {
+            return Err(format!(
+                "writes {value:#04x} to RTC.PITCTRLA, a PIT period the simulator \
+                 doesn't model: it moves in frames of 512 RTC clocks"
+            ));
+        }
+        let wdt = self.io(reg::WDT_CTRLA) | self.wdt.pending.unwrap_or(0);
+        if period != PIT_FRAME && wdt & WDT_WINDOW != 0 {
+            return Err(
+                "slows the PIT with the watchdog's window still on, which bites \
+                 before a slower tick could feed it"
+                    .into(),
+            );
+        }
+        let was = self.io(a);
+        if self.tick_on_speed_up
+            && was & RTC_PITEN != 0
+            && was & RTC_PERIOD != PIT_FRAME
+            && period == PIT_FRAME
+        {
+            self.pit_flag = true;
+        }
+        *self.io_mut(a) = value;
+        self.pit_busy = PIT_SYNC_READS;
+        Ok(())
+    }
+
+    fn write_wdt_ctrla(&mut self, value: u8) -> Result<(), String> {
+        self.take_protected_write(reg::WDT_CTRLA)?;
+        if self.wdt.busy > 0 {
+            return Err("writes WDT.CTRLA while WDT.STATUS.SYNCBUSY is set, \
+                        which the datasheet doesn't allow (section 19.3.6)"
+                .into());
+        }
+        if value & WDT_PERIOD == 0 {
+            return Err(format!(
+                "writes {value:#04x} to WDT.CTRLA, a PERIOD of 0, which turns the \
+                 watchdog off"
+            ));
+        }
+        if value & WDT_PERIOD > WDT_PERIOD_MAX || (value & WDT_WINDOW) >> 4 > WDT_PERIOD_MAX {
+            return Err(format!(
+                "writes {value:#04x} to WDT.CTRLA: a reserved WDT period or window"
+            ));
+        }
+        self.wdt.pending = Some(value);
+        self.wdt.busy = WDT_SYNC_READS;
+        Ok(())
+    }
+
+    fn wdt_status_refused(value: u8) -> String {
+        if value & WDT_LOCK != 0 {
+            "sets WDT.STATUS.LOCK, which only debug mode can clear".into()
+        } else {
+            "writes WDT.STATUS, whose only writable bit is LOCK".into()
+        }
+    }
+
+    fn write_crcscan_ctrla(&mut self, value: u8) -> Result<(), String> {
+        if value != CRCSCAN_ENABLE {
+            return Err(format!(
+                "writes {value:#04x} to CRCSCAN.CTRLA; the simulator only models \
+                 ENABLE, with STATUS polled (NMIEN can't be undone without a reset)"
+            ));
+        }
+        self.start_crc()?;
+        *self.io_mut(reg::CRCSCAN_CTRLA) = value;
+        Ok(())
+    }
+
     fn tca_written(&mut self, low: usize, value: u16) -> Result<(), String> {
         match low {
             reg::TCA0_PERBUF | reg::TCA0_PER if value != PWM_TOP => Err(format!(
@@ -2613,76 +2774,13 @@ impl Bus for Chip {
         self.register_writes = self.register_writes.saturating_add(1);
         self.boot.write(self.now, a, value);
         match a {
-            reg::CPU_CCP => {
-                if value != CCP_IOREG {
-                    return Err(format!(
-                        "writes {value:#04x} to CPU.CCP, which isn't the IOREG key"
-                    ));
-                }
-                self.unlocked_until = Some(self.now.saturating_add(4));
-                self.ccp_hold = true;
-            }
-            reg::CLKCTRL_MCLKCTRLB => {
-                self.take_protected_write(a)?;
-                if value != CLOCK_10MHZ {
-                    return Err(format!(
-                        "writes {value:#04x} to CLKCTRL.MCLKCTRLB: the firmware runs at \
-                         10 MHz, and the PWM's frequency depends on it"
-                    ));
-                }
-                *self.io_mut(a) = value;
-            }
+            reg::CPU_CCP => self.write_ccp(value)?,
+            reg::CLKCTRL_MCLKCTRLB => self.write_clock(a, value)?,
             reg::VPORTB_DIR | reg::VPORTB_OUT => self.write_portb(a, value)?,
-            reg::TCA0_CTRLA => {
-                if value != TCA_RUNNING {
-                    return Err(format!(
-                        "writes {value:#04x} to TCA0.CTRLA: the period and the duty \
-                         assume the timer runs undivided, and it never stops"
-                    ));
-                }
-                *self.io_mut(a) = value;
-                // Unconfirmed: a full first cycle at whatever PER is.
-                self.tca.next_bottom = self.now.saturating_add(2 * u64::from(self.tca.per.max(1)));
-                self.plan_next_event();
-            }
-            reg::TCA0_CTRLB => {
-                if value & !TCA_CMP0EN != TCA_DSBOTTOM {
-                    return Err(format!(
-                        "writes {value:#04x} to TCA0.CTRLB: the period and the duty assume \
-                         dual-slope at BOTTOM on WO0"
-                    ));
-                }
-                if (self.io(a) ^ value) & TCA_CMP0EN != 0 {
-                    self.tca.settled = 0;
-                }
-                *self.io_mut(a) = value;
-            }
-            reg::TCA0_INTCTRL
-                if value & TCA_OVF != 0 && self.io(a) & TCA_OVF == 0 && self.io(DSM_SUM) != 0 =>
-            {
-                return Err(format!(
-                    "turns TCA0's overflow interrupt on with the delta-sigma's sum at {}, \
-                     left over from the last time the light was on",
-                    self.io(DSM_SUM)
-                ));
-            }
-            // The request is the flag and the enable together, and BOTTOM sets
-            // the flag with the interrupt off too (§20.3.5). One that went up
-            // between a clear and this write is a real BOTTOM, and fine.
-            reg::TCA0_INTCTRL
-                if value & TCA_OVF != 0
-                    && self.io(a) & TCA_OVF == 0
-                    && self.tca.ovf
-                    && self.since(self.tca.ovf_up_at)? >= PWM_CYCLE =>
-            {
-                return Err(
-                    "turns TCA0's overflow interrupt on with INTFLAGS.OVF still up from \
-                     before, so the handler runs at once rather than at the next BOTTOM \
-                     (section 20.3.5)"
-                        .into(),
-                );
-            }
-            reg::TCA0_INTCTRL | reg::RTC_PITINTCTRL => {
+            reg::TCA0_CTRLA => self.write_tca_ctrla(value)?,
+            reg::TCA0_CTRLB => self.write_tca_ctrlb(value)?,
+            reg::TCA0_INTCTRL => self.write_tca_intctrl(value)?,
+            reg::RTC_PITINTCTRL => {
                 *self.io_mut(a) = value;
                 self.update_enabled();
             }
@@ -2702,45 +2800,7 @@ impl Bus for Chip {
                     self.tca.ovf = false;
                 }
             }
-            reg::RTC_PITCTRLA => {
-                if self.pit_busy > 0 {
-                    return Err(format!(
-                        "writes {} while RTC.PITSTATUS.CTRLBUSY is set, and the chip drops \
-                         that write",
-                        name(a)
-                    ));
-                }
-                if self.io(a) & RTC_PITEN != 0 && value & RTC_PITEN == 0 {
-                    return Err("clears RTC.PITCTRLA.PITEN, which stops the RTC too \
-                                (errata 2.6.2), and the firmware never stops its tick"
-                        .into());
-                }
-                let period = value & RTC_PERIOD;
-                if !(PIT_FRAME..=regs::RTC_PERIOD_CYC32768).contains(&period) {
-                    return Err(format!(
-                        "writes {value:#04x} to RTC.PITCTRLA, a PIT period the simulator \
-                         doesn't model: it moves in frames of 512 RTC clocks"
-                    ));
-                }
-                let wdt = self.io(reg::WDT_CTRLA) | self.wdt.pending.unwrap_or(0);
-                if period != PIT_FRAME && wdt & WDT_WINDOW != 0 {
-                    return Err(
-                        "slows the PIT with the watchdog's window still on, which bites \
-                         before a slower tick could feed it"
-                            .into(),
-                    );
-                }
-                let was = self.io(a);
-                if self.tick_on_speed_up
-                    && was & RTC_PITEN != 0
-                    && was & RTC_PERIOD != PIT_FRAME
-                    && period == PIT_FRAME
-                {
-                    self.pit_flag = true;
-                }
-                *self.io_mut(a) = value;
-                self.pit_busy = PIT_SYNC_READS;
-            }
+            reg::RTC_PITCTRLA => self.write_pit_ctrla(value)?,
             reg::RTC_PITINTFLAGS => {
                 if value & RTC_PI != 0 {
                     self.pit_flag = false;
@@ -2764,46 +2824,10 @@ impl Bus for Chip {
                 let word = self.temp.high(Wide::Tca0, low, value)?;
                 self.tca_written(low, word)?;
             }
-            reg::WDT_CTRLA => {
-                self.take_protected_write(a)?;
-                if self.wdt.busy > 0 {
-                    return Err("writes WDT.CTRLA while WDT.STATUS.SYNCBUSY is set, \
-                                which the datasheet doesn't allow (section 19.3.6)"
-                        .into());
-                }
-                if value & WDT_PERIOD == 0 {
-                    return Err(format!(
-                        "writes {value:#04x} to WDT.CTRLA, a PERIOD of 0, which turns the \
-                         watchdog off"
-                    ));
-                }
-                if value & WDT_PERIOD > WDT_PERIOD_MAX || (value & WDT_WINDOW) >> 4 > WDT_PERIOD_MAX
-                {
-                    return Err(format!(
-                        "writes {value:#04x} to WDT.CTRLA: a reserved WDT period or window"
-                    ));
-                }
-                self.wdt.pending = Some(value);
-                self.wdt.busy = WDT_SYNC_READS;
-            }
-            reg::WDT_STATUS => {
-                return Err(if value & WDT_LOCK != 0 {
-                    "sets WDT.STATUS.LOCK, which only debug mode can clear".into()
-                } else {
-                    "writes WDT.STATUS, whose only writable bit is LOCK".into()
-                });
-            }
+            reg::WDT_CTRLA => self.write_wdt_ctrla(value)?,
+            reg::WDT_STATUS => return Err(Self::wdt_status_refused(value)),
             reg::RSTCTRL_RSTFR => self.rstfr &= !value,
-            reg::CRCSCAN_CTRLA => {
-                if value != CRCSCAN_ENABLE {
-                    return Err(format!(
-                        "writes {value:#04x} to CRCSCAN.CTRLA; the simulator only models \
-                         ENABLE, with STATUS polled (NMIEN can't be undone without a reset)"
-                    ));
-                }
-                self.start_crc()?;
-                *self.io_mut(a) = value;
-            }
+            reg::CRCSCAN_CTRLA => self.write_crcscan_ctrla(value)?,
             reg::CRCSCAN_CTRLB => *self.io_mut(a) = value,
             reg::ADC0_COMMAND => {
                 if value & ADC_STCONV != 0 {
