@@ -10,8 +10,8 @@ pub fn encode(image: &[u8]) -> String {
     );
 
     let mut out = String::new();
-    for (i, chunk) in image.chunks(16).enumerate() {
-        record(&mut out, (i * 16) as u16, 0x00, chunk);
+    for (chunk, address) in image.chunks(16).zip((0..=u16::MAX).step_by(16)) {
+        record(&mut out, address, 0x00, chunk);
     }
     record(&mut out, 0, 0x01, &[]);
     out
@@ -21,12 +21,12 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
     let mut image = Vec::new();
     let mut base = 0usize;
 
-    for (n, line) in text.lines().enumerate() {
+    for (line, n) in text.lines().zip(1_usize..) {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let at = |msg: &str| format!("line {}: {msg}", n + 1);
+        let at = |msg: &str| format!("line {n}: {msg}");
 
         let hex = line
             .strip_prefix(':')
@@ -34,36 +34,44 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
         if hex.len() % 2 != 0 || hex.len() < 10 {
             return Err(at("malformed record"));
         }
-        let bytes = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        let bytes = hex
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(str::from_utf8(pair).ok()?, 16).ok())
             .collect::<Option<Vec<u8>>>()
             .filter(|_| hex.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or_else(|| at("not hex"))?;
 
-        let len = usize::from(bytes[0]);
-        if bytes.len() != len + 5 {
+        let &[len, hi, lo, kind, ref data @ .., _] = bytes.as_slice() else {
+            return Err(at("malformed record"));
+        };
+        if data.len() != usize::from(len) {
             return Err(at("length doesn't match"));
         }
         if sum(&bytes) != 0 {
             return Err(at("bad checksum"));
         }
-        let address = usize::from(u16::from_be_bytes([bytes[1], bytes[2]]));
-        let data = &bytes[4..4 + len];
+        let address = usize::from(u16::from_be_bytes([hi, lo]));
 
-        match bytes[3] {
-            0x00 => {
-                let start = base + address;
-                if image.len() < start + len {
-                    image.resize(start + len, 0xFF);
+        match (kind, data) {
+            (0x00, _) => {
+                let start = base.checked_add(address);
+                let end = start.and_then(|start| start.checked_add(data.len()));
+                let (Some(start), Some(end)) = (start, end) else {
+                    return Err(at("address out of range"));
+                };
+                if image.len() < end {
+                    image.resize(end, 0xFF);
                 }
-                image[start..start + len].copy_from_slice(data);
+                for (to, &from) in image.iter_mut().skip(start).zip(data) {
+                    *to = from;
+                }
             }
-            0x01 => return Ok(image),
-            0x02 if len == 2 => base = usize::from(u16::from_be_bytes([data[0], data[1]])) << 4,
-            0x04 if len == 2 => base = usize::from(u16::from_be_bytes([data[0], data[1]])) << 16,
-            0x03 | 0x05 => {} // start addresses mean nothing for AVR flash
-            kind => return Err(at(&format!("unsupported record type {kind:02X}"))),
+            (0x01, _) => return Ok(image),
+            (0x02, &[hi, lo]) => base = usize::from(u16::from_be_bytes([hi, lo])) << 4,
+            (0x04, &[hi, lo]) => base = usize::from(u16::from_be_bytes([hi, lo])) << 16,
+            (0x03 | 0x05, _) => {} // start addresses mean nothing for AVR flash
+            (kind, _) => return Err(at(&format!("unsupported record type {kind:02X}"))),
         }
     }
     Err("no end-of-file record".into())
@@ -71,6 +79,11 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
 
 fn record(out: &mut String, address: u16, kind: u8, data: &[u8]) {
     let [hi, lo] = address.to_be_bytes();
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "encode hands over 16 bytes of data at most"
+    )]
     let header = [data.len() as u8, hi, lo, kind];
     let checksum = sum(&header).wrapping_add(sum(data)).wrapping_neg();
 
