@@ -49,18 +49,10 @@ const PLAUSIBLE_SIXTEENTHS: core::ops::RangeInclusive<u16> =
 const NOW_LOW: i16 = PLAUSIBLE_SIXTEENTHS.start().cast_signed();
 const NOW_HIGH: i16 = PLAUSIBLE_SIXTEENTHS.end().cast_signed();
 
-#[expect(
-    clippy::as_conversions,
-    reason = "widening to i32 in a const, where From can't be called"
-)]
 const _: () = {
-    let (low, high) = (
-        *PLAUSIBLE.start() as i32 * FRACTION as i32,
-        *PLAUSIBLE.end() as i32 * FRACTION as i32,
-    );
-    let swing = MAX_TREND as i32 * LOOKAHEAD as i32;
-    assert!(high + swing <= i16::MAX as i32);
-    assert!(low - swing - LIMIT_SIXTEENTHS as i32 >= i16::MIN as i32);
+    let swing = MAX_TREND * LOOKAHEAD;
+    assert!(NOW_HIGH.checked_add(swing).is_some());
+    assert!(NOW_LOW.checked_sub(swing + LIMIT_SIXTEENTHS).is_some());
 };
 
 const JUMP: u16 = 6 * FRACTION.cast_unsigned();
