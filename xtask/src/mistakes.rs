@@ -458,7 +458,7 @@ const MISTAKES: &[Mistake] = &[
         find: "    // SAFETY: four `nop`s, which touch nothing.\n    \
                unsafe {\n        asm!(\n            \
                \"nop\",\n            \"nop\",\n            \"nop\",\n            \"nop\",\n            \
-               options(nostack, preserves_flags)\n        )\n    };\n",
+               options(nostack, preserves_flags)\n        );\n    }\n",
         replace: "",
         expect: "but the library says Blue",
     },

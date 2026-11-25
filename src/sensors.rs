@@ -106,8 +106,8 @@ mod tests {
             .collect()
     }
 
-    const fn convert(channel: Channel, setup: bool) -> Option<Convert> {
-        Some(Convert { channel, setup })
+    const fn convert(channel: Channel, setup: bool) -> Convert {
+        Convert { channel, setup }
     }
 
     #[test]
@@ -115,14 +115,14 @@ mod tests {
         let mut schedule = Schedule::new();
         let ticks = run(&mut schedule, 16, Some(7), true);
         let mut expected = [(None, None); 16];
-        expected[0].1 = convert(Channel::Voltage, true);
-        expected[1].1 = convert(Channel::Voltage, false);
+        expected[0].1 = Some(convert(Channel::Voltage, true));
+        expected[1].1 = Some(convert(Channel::Voltage, false));
         expected[2].0 = Some(Reading::Voltage(7));
-        expected[4].1 = convert(Channel::Ground, true);
-        expected[5].1 = convert(Channel::Ground, false);
+        expected[4].1 = Some(convert(Channel::Ground, true));
+        expected[5].1 = Some(convert(Channel::Ground, false));
         expected[6].0 = Some(Reading::Ground(7));
-        expected[8].1 = convert(Channel::Temperature, true);
-        expected[9].1 = convert(Channel::Temperature, false);
+        expected[8].1 = Some(convert(Channel::Temperature, true));
+        expected[9].1 = Some(convert(Channel::Temperature, false));
         expected[10].0 = Some(Reading::Temperature(7));
         assert_eq!(ticks, expected);
     }
@@ -178,11 +178,11 @@ mod tests {
         run(&mut schedule, 8, Some(1), false);
         assert_eq!(
             schedule.tick(Some(1), true),
-            (None, convert(Channel::Temperature, true))
+            (None, Some(convert(Channel::Temperature, true)))
         );
         assert_eq!(
             schedule.tick(Some(1), false),
-            (None, convert(Channel::Temperature, false))
+            (None, Some(convert(Channel::Temperature, false)))
         );
         assert_eq!(
             schedule.tick(Some(1), false),
@@ -215,8 +215,8 @@ mod tests {
         run(&mut schedule, 21, Some(1), true);
         schedule.rest();
         let ticks = run(&mut schedule, 3, Some(7), false);
-        assert_eq!(ticks[0], (None, convert(Channel::Voltage, true)));
-        assert_eq!(ticks[1], (None, convert(Channel::Voltage, false)));
+        assert_eq!(ticks[0], (None, Some(convert(Channel::Voltage, true))));
+        assert_eq!(ticks[1], (None, Some(convert(Channel::Voltage, false))));
         assert_eq!(ticks[2], (Some(Reading::Voltage(7)), None));
     }
 
