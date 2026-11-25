@@ -1,5 +1,10 @@
 //! Opcodes are from the AVR Instruction Set Manual.
 
+#![expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) inside private modules says who uses an item, not who can"
+)]
+
 use ts26::regs::{VECTORS, addr};
 
 use crate::avr::{io_address, is_two_words, long_target};

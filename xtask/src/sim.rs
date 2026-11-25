@@ -1508,6 +1508,10 @@ struct Tca {
     settled: usize,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the chip's state flags, which change independently"
+)]
 struct Chip {
     flash: Vec<u8>,
     sram: Vec<u8>,

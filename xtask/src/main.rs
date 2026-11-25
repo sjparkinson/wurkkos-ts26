@@ -214,16 +214,15 @@ fn hex() -> Result<(), String> {
 }
 
 fn row(label: &str, used: u64, of: Option<u64>, unit: &str) -> String {
-    let (of, percent) = match of {
-        Some(of) => (
+    let (of, percent) = of.map_or_default(|of| {
+        (
             format!("/ {:>6}", commas(of)),
             format!(
                 "{:>3}%",
                 used.saturating_mul(100).checked_div(of).unwrap_or(0)
             ),
-        ),
-        None => (String::new(), String::new()),
-    };
+        )
+    });
     format!(
         "{label:<5} {:>6} {of:<8} {percent:>4}  {unit}",
         commas(used)

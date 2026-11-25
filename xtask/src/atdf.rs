@@ -47,11 +47,11 @@ impl Element {
 }
 
 fn num(s: &str) -> Result<u32, String> {
-    let parsed = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        Some(hex) => u32::from_str_radix(hex, 16),
-        None => s.parse(),
-    };
-    parsed.map_err(|_| format!("{s:?} isn't a number"))
+    let (digits, radix) = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .map_or((s, 10), |hex| (hex, 16));
+    u32::from_str_radix(digits, radix).map_err(|_| format!("{s:?} isn't a number"))
 }
 
 fn parse(xml: &str) -> Result<Element, String> {
@@ -105,10 +105,7 @@ fn parse(xml: &str) -> Result<Element, String> {
                 .ok_or("unterminated start tag")?;
             let tag = &rest[1..end];
             rest = chars.as_str();
-            let (tag, empty) = match tag.strip_suffix('/') {
-                Some(t) => (t, true),
-                None => (tag, false),
-            };
+            let (tag, empty) = tag.strip_suffix('/').map_or((tag, false), |t| (t, true));
             let element = parse_tag(tag)?;
             if empty {
                 stack
@@ -209,6 +206,10 @@ struct Consts(BTreeMap<String, (u32, String)>);
 impl Consts {
     /// A name can turn up more than once (RTC.PITINTFLAGS.PI and
     /// RTC.PITINTCTRL.PI), which is fine while the value agrees.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "doc moves into the map when the name is new"
+    )]
     fn add(&mut self, name: String, value: u32, doc: String) {
         let name = name.to_ascii_uppercase();
         if let Some((theirs, first)) = self.0.get(&name) {
@@ -601,10 +602,8 @@ mod tests {
                         .and_then(|f| f.trim().strip_prefix('='))
                         .unwrap_or_else(|| panic!("{name} has no {key}"))
                         .trim();
-                    match value.strip_suffix('K') {
-                        Some(k) => num(k).unwrap() * 1024,
-                        None => num(value).unwrap(),
-                    }
+                    let (digits, scale) = value.strip_suffix('K').map_or((value, 1), |k| (k, 1024));
+                    num(digits).unwrap() * scale
                 };
                 (name.to_string(), field("ORIGIN"), field("LENGTH"))
             })

@@ -62,6 +62,10 @@ impl Terminal {
         }
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "only a terminal that's been set up for raw input writes"
+    )]
     pub fn write(&self, text: &str) {
         let mut out = io::stdout().lock();
         let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
