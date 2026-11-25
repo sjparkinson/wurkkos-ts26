@@ -17,43 +17,43 @@ impl Element {
             .map(|(_, v)| v.as_str())
     }
 
-    fn get(&self, key: &str) -> &str {
+    fn get(&self, key: &str) -> Result<&str, String> {
         self.attr(key)
-            .unwrap_or_else(|| panic!("<{}> has no {key} attribute", self.name))
+            .ok_or_else(|| format!("<{}> has no {key} attribute", self.name))
     }
 
     fn all<'a>(&'a self, tag: &'static str) -> impl Iterator<Item = &'a Self> {
         self.children.iter().filter(move |c| c.name == tag)
     }
 
-    fn child(&self, tag: &str) -> &Self {
+    fn child(&self, tag: &str) -> Result<&Self, String> {
         self.children
             .iter()
             .find(|c| c.name == tag)
-            .unwrap_or_else(|| panic!("<{}> has no <{tag}>", self.name))
+            .ok_or_else(|| format!("<{}> has no <{tag}>", self.name))
     }
 
-    fn named(&self, tag: &str, name: &str) -> &Self {
+    fn named(&self, tag: &str, name: &str) -> Result<&Self, String> {
         self.children
             .iter()
             .find(|c| c.name == tag && c.attr("name") == Some(name))
-            .unwrap_or_else(|| panic!("<{}> has no <{tag} name=\"{name}\">", self.name))
+            .ok_or_else(|| format!("<{}> has no <{tag} name=\"{name}\">", self.name))
     }
 
-    fn num(&self, key: &str) -> u32 {
-        num(self.get(key))
+    fn num(&self, key: &str) -> Result<u32, String> {
+        num(self.get(key)?)
     }
 }
 
-fn num(s: &str) -> u32 {
+fn num(s: &str) -> Result<u32, String> {
     let parsed = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         Some(hex) => u32::from_str_radix(hex, 16),
         None => s.parse(),
     };
-    parsed.unwrap_or_else(|_| panic!("{s:?} isn't a number"))
+    parsed.map_err(|_| format!("{s:?} isn't a number"))
 }
 
-fn parse(xml: &str) -> Element {
+fn parse(xml: &str) -> Result<Element, String> {
     let mut stack = vec![Element {
         name: "#document".into(),
         attrs: Vec::new(),
@@ -63,25 +63,31 @@ fn parse(xml: &str) -> Element {
     while let Some(i) = rest.find('<') {
         rest = &rest[i..];
         if let Some(r) = rest.strip_prefix("<!--") {
-            let end = r.find("-->").expect("unterminated comment");
-            rest = &r[end + 3..];
+            let (_, after) = r.split_once("-->").ok_or("unterminated comment")?;
+            rest = after;
         } else if rest.starts_with("<?") || rest.starts_with("<!") {
-            let end = rest.find('>').expect("unterminated declaration");
-            rest = &rest[end + 1..];
+            let (_, after) = rest.split_once('>').ok_or("unterminated declaration")?;
+            rest = after;
         } else if let Some(r) = rest.strip_prefix("</") {
-            let end = r.find('>').expect("unterminated end tag");
-            let element = stack.pop().expect("end tag with nothing open");
-            assert_eq!(element.name, r[..end].trim(), "mismatched end tag");
+            let (name, after) = r.split_once('>').ok_or("unterminated end tag")?;
+            let element = stack.pop().ok_or("end tag with nothing open")?;
+            if element.name != name.trim() {
+                return Err(format!(
+                    "mismatched end tag: <{}> closed by </{}>",
+                    element.name,
+                    name.trim()
+                ));
+            }
             stack
                 .last_mut()
-                .expect("end tag closes the document")
+                .ok_or("end tag closes the document")?
                 .children
                 .push(element);
-            rest = &r[end + 1..];
+            rest = after;
         } else {
             let mut quote = None;
-            let end = rest
-                .char_indices()
+            let mut chars = rest.char_indices();
+            let end = chars
                 .find(|&(_, c)| match quote {
                     Some(q) if c == q => {
                         quote = None;
@@ -95,18 +101,18 @@ fn parse(xml: &str) -> Element {
                     None => c == '>',
                 })
                 .map(|(j, _)| j)
-                .expect("unterminated start tag");
+                .ok_or("unterminated start tag")?;
             let tag = &rest[1..end];
-            rest = &rest[end + 1..];
+            rest = chars.as_str();
             let (tag, empty) = match tag.strip_suffix('/') {
                 Some(t) => (t, true),
                 None => (tag, false),
             };
-            let element = parse_tag(tag);
+            let element = parse_tag(tag)?;
             if empty {
                 stack
                     .last_mut()
-                    .expect("no open element")
+                    .ok_or("no open element")?
                     .children
                     .push(element);
             } else {
@@ -114,16 +120,16 @@ fn parse(xml: &str) -> Element {
             }
         }
     }
-    assert_eq!(
-        stack.len(),
-        1,
-        "unclosed <{}>",
-        stack.last().map_or("", |e| &e.name)
-    );
-    stack.pop().expect("the document is always on the stack")
+    match <[Element; 1]>::try_from(stack) {
+        Ok([document]) => Ok(document),
+        Err(stack) => Err(format!(
+            "unclosed <{}>",
+            stack.last().map_or("", |e| &e.name)
+        )),
+    }
 }
 
-fn parse_tag(tag: &str) -> Element {
+fn parse_tag(tag: &str) -> Result<Element, String> {
     let tag = tag.trim();
     let name_end = tag.find(char::is_whitespace).unwrap_or(tag.len());
     let mut element = Element {
@@ -133,22 +139,20 @@ fn parse_tag(tag: &str) -> Element {
     };
     let mut rest = tag[name_end..].trim_start();
     while !rest.is_empty() {
-        let eq = rest
-            .find('=')
-            .unwrap_or_else(|| panic!("bad attribute in <{tag}>"));
-        let key = rest[..eq].trim();
-        let after = rest[eq + 1..].trim_start();
-        let q = after.chars().next().filter(|&c| c == '"' || c == '\'');
-        let q = q.unwrap_or_else(|| panic!("unquoted attribute in <{tag}>"));
-        let close = after[1..]
-            .find(q)
-            .unwrap_or_else(|| panic!("unterminated attribute in <{tag}>"));
-        element
-            .attrs
-            .push((key.into(), unescape(&after[1..=close])));
-        rest = after[close + 2..].trim_start();
+        let (key, after) = rest
+            .split_once('=')
+            .ok_or_else(|| format!("bad attribute in <{tag}>"))?;
+        let mut after = after.trim_start().chars();
+        let q = after.next().filter(|&c| c == '"' || c == '\'');
+        let q = q.ok_or_else(|| format!("unquoted attribute in <{tag}>"))?;
+        let (value, after) = after
+            .as_str()
+            .split_once(q)
+            .ok_or_else(|| format!("unterminated attribute in <{tag}>"))?;
+        element.attrs.push((key.trim().into(), unescape(value)));
+        rest = after.trim_start();
     }
-    element
+    Ok(element)
 }
 
 fn unescape(s: &str) -> String {
@@ -168,28 +172,34 @@ struct Register<'a> {
 }
 
 /// TCA0's come twice where its SINGLE and SPLIT modes share a name.
-fn registers(document: &Element) -> Vec<Register<'_>> {
-    let file = document.child("avr-tools-device-file");
-    let device = file.child("devices").child("device");
+fn registers(document: &Element) -> Result<Vec<Register<'_>>, String> {
+    let file = document.child("avr-tools-device-file")?;
+    let device = file.child("devices")?.child("device")?;
     let mut registers = Vec::new();
-    for module in device.child("peripherals").all("module") {
-        let definition = file.child("modules").named("module", module.get("name"));
+    for module in device.child("peripherals")?.all("module") {
+        let definition = file
+            .child("modules")?
+            .named("module", module.get("name")?)?;
         for instance in module.all("instance") {
             for group in instance.all("register-group") {
-                let name = group.get("name-in-module");
-                for element in definition.named("register-group", name).all("register") {
+                let name = group.get("name-in-module")?;
+                for element in definition.named("register-group", name)?.all("register") {
+                    let (instance, name) = (instance.get("name")?, element.get("name")?);
                     registers.push(Register {
-                        instance: instance.get("name"),
-                        name: element.get("name"),
-                        address: group.num("offset") + element.num("offset"),
-                        size: element.num("size"),
+                        instance,
+                        name,
+                        address: group
+                            .num("offset")?
+                            .checked_add(element.num("offset")?)
+                            .ok_or_else(|| format!("{instance}.{name}'s address overflows"))?,
+                        size: element.num("size")?,
                         element,
                     });
                 }
             }
         }
     }
-    registers
+    Ok(registers)
 }
 
 #[derive(Default)]
@@ -230,16 +240,21 @@ fn doc(path: String, element: &Element) -> String {
 
 /// The `initval`s stay out, because they disagree with the datasheet on
 /// ADC0.CALIB and the factory OSCCFG and SYSCFG0.
-pub fn generate(xml: &str) -> String {
-    let document = parse(xml);
-    let file = document.child("avr-tools-device-file");
-    let device = file.child("devices").child("device");
+pub fn generate(xml: &str) -> Result<String, String> {
+    let document = parse(xml)?;
+    let file = document.child("avr-tools-device-file")?;
+    let device = file.child("devices")?.child("device")?;
 
     let mut addr = Consts::default();
-    for r in registers(&document) {
+    for r in registers(&document)? {
         let width = match r.size {
             1 => String::new(),
-            size => format!(", {}-bit", size * 8),
+            size => {
+                let bits = size
+                    .checked_mul(8)
+                    .ok_or_else(|| format!("{}.{} is too big", r.instance, r.name))?;
+                format!(", {bits}-bit")
+            }
         };
         addr.add(
             format!("{}_{}", r.instance, r.name),
@@ -249,38 +264,41 @@ pub fn generate(xml: &str) -> String {
     }
 
     let mut mem = Consts::default();
-    let spaces = device.child("address-spaces").all("address-space");
+    let spaces = device.child("address-spaces")?.all("address-space");
     for segment in spaces.flat_map(|space| space.all("memory-segment")) {
-        let name = segment.get("name");
-        let (start, size) = (segment.num("start"), segment.num("size"));
+        let name = segment.get("name")?;
+        let (start, size) = (segment.num("start")?, segment.num("size")?);
         mem.add(format!("{name}_START"), start, format!("{name}'s start."));
         mem.add(format!("{name}_SIZE"), size, format!("{name}'s size."));
-        let end = "The first address after it.".to_string();
-        mem.add(format!("{name}_END"), start + size, end);
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| format!("{name} is too big"))?;
+        let doc = "The first address after it.".to_string();
+        mem.add(format!("{name}_END"), end, doc);
         if let Some(page) = segment.attr("pagesize") {
             let doc = format!("{name}'s page size.");
-            mem.add(format!("{name}_PAGE"), num(page), doc);
+            mem.add(format!("{name}_PAGE"), num(page)?, doc);
         }
     }
 
     let mut bits = Consts::default();
-    for module in file.child("modules").all("module") {
-        let prefix = module.get("name");
+    for module in file.child("modules")?.all("module") {
+        let prefix = module.get("name")?;
         let registers = module
             .all("register-group")
             .flat_map(|group| group.all("register"));
         for register in registers {
             for field in register.all("bitfield") {
-                let mask = field.num("mask");
-                let name = format!("{prefix}_{}", field.get("name"));
-                let path = format!("{prefix}.{}.{}", register.get("name"), field.get("name"));
-                let values = field.attr("values").map(|group| {
-                    let group = module.named("value-group", group);
-                    group.all("value")
-                });
+                let mask = field.num("mask")?;
+                let name = format!("{prefix}_{}", field.get("name")?);
+                let path = format!("{prefix}.{}.{}", register.get("name")?, field.get("name")?);
+                let values = match field.attr("values") {
+                    Some(group) => Some(module.named("value-group", group)?.all("value")),
+                    None => None,
+                };
                 for value in values.into_iter().flatten() {
-                    let label = value.get("name");
-                    let shifted = value.num("value") << mask.trailing_zeros();
+                    let label = value.get("name")?;
+                    let shifted = value.num("value")? << mask.trailing_zeros();
                     assert_eq!(shifted & !mask, 0, "{path}={label} spills out of its mask");
                     bits.add(
                         format!("{name}_{label}"),
@@ -295,10 +313,13 @@ pub fn generate(xml: &str) -> String {
 
     let mut vectors = Consts::default();
     let mut count = 0;
-    for interrupt in device.child("interrupts").all("interrupt") {
-        let index = interrupt.num("index");
-        let (instance, name) = (interrupt.get("module-instance"), interrupt.get("name"));
-        count = count.max(index + 1);
+    for interrupt in device.child("interrupts")?.all("interrupt") {
+        let index = interrupt.num("index")?;
+        let (instance, name) = (interrupt.get("module-instance")?, interrupt.get("name")?);
+        let after = index
+            .checked_add(1)
+            .ok_or_else(|| format!("{instance}.{name}'s vector is too high"))?;
+        count = count.max(after);
         let path = format!("{instance}.{name}'s vector");
         vectors.add(
             format!("VECTOR_{instance}_{name}"),
@@ -310,20 +331,20 @@ pub fn generate(xml: &str) -> String {
     vectors.add("VECTORS".into(), count, doc);
 
     let property = |name: &str| {
-        let groups = device.child("property-groups").all("property-group");
+        let groups = device.child("property-groups")?.all("property-group");
         groups
             .flat_map(|group| group.all("property"))
             .find(|p| p.attr("name") == Some(name))
-            .unwrap_or_else(|| panic!("no property {name}"))
+            .ok_or_else(|| format!("no property {name}"))?
             .num("value")
     };
     let signature = [
-        property("SIGNATURE0"),
-        property("SIGNATURE1"),
-        property("SIGNATURE2"),
+        property("SIGNATURE0")?,
+        property("SIGNATURE1")?,
+        property("SIGNATURE2")?,
     ];
 
-    format!(
+    Ok(format!(
         "/// Data-space addresses of every register.\n\
          pub mod addr {{\n{}}}\n\n\
          /// Every memory segment. All of them are in data space but PROGMEM.\n\
@@ -335,7 +356,7 @@ pub fn generate(xml: &str) -> String {
         mem.render(|_| "usize"),
         bits.render(|value| if value > 0xFF { "u16" } else { "u8" }),
         vectors.render(|_| "usize"),
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -356,14 +377,15 @@ mod tests {
         let doc = parse(
             "<?xml version=\"1.0\"?>\n<!-- a <comment> -->\n\
              <a x=\"1\" y='a &gt; b'><b name=\"c\"/><b name=\"d\">text</b></a>",
-        );
-        let a = doc.child("a");
+        )
+        .unwrap();
+        let a = doc.child("a").unwrap();
         assert_eq!(a.attr("x"), Some("1"));
         assert_eq!(a.attr("y"), Some("a > b"));
         assert_eq!(a.all("b").count(), 2);
-        assert_eq!(a.named("b", "d").name, "b");
-        assert_eq!(num("0x0A00"), 0x0A00);
-        assert_eq!(num("16"), 16);
+        assert_eq!(a.named("b", "d").unwrap().name, "b");
+        assert_eq!(num("0x0A00"), Ok(0x0A00));
+        assert_eq!(num("16"), Ok(16));
     }
 
     /// From the datasheet, so a generator that goes wrong can't agree with
@@ -391,7 +413,7 @@ mod tests {
 
     #[test]
     fn generated_constants_say_where_they_came_from() {
-        let source = generate(&atdf());
+        let source = generate(&atdf()).unwrap();
         for line in [
             "pub const ADC0_RES: usize = 0x610;",
             "pub const TCD_CMPASET: u16 = 0xFFF;",
@@ -424,8 +446,8 @@ mod tests {
     #[test]
     fn the_16_bit_registers_are_16_bits() {
         let xml = atdf();
-        let document = parse(&xml);
-        let registers = registers(&document);
+        let document = parse(&xml).unwrap();
+        let registers = registers(&document).unwrap();
         for wide in [
             addr::TCA0_CNT,
             addr::TCA0_PER,
@@ -445,8 +467,8 @@ mod tests {
     #[test]
     fn pin_controls_are_consecutive() {
         let xml = atdf();
-        let document = parse(&xml);
-        let registers = registers(&document);
+        let document = parse(&xml).unwrap();
+        let registers = registers(&document).unwrap();
         for (base, port) in [
             (addr::PORTA_PIN0CTRL, "PORTA"),
             (addr::PORTB_PIN0CTRL, "PORTB"),
@@ -544,8 +566,8 @@ mod tests {
                         .unwrap_or_else(|| panic!("{name} has no {key}"))
                         .trim();
                     match value.strip_suffix('K') {
-                        Some(k) => num(k) * 1024,
-                        None => num(value),
+                        Some(k) => num(k).unwrap() * 1024,
+                        None => num(value).unwrap(),
                     }
                 };
                 (name.to_string(), field("ORIGIN"), field("LENGTH"))
@@ -555,7 +577,7 @@ mod tests {
         let numbers = text[close + 1..]
             .split(|c: char| !c.is_ascii_alphanumeric())
             .filter(|w| w.starts_with("0x"))
-            .map(num)
+            .map(|w| num(w).unwrap())
             .collect();
         (memory, numbers)
     }
