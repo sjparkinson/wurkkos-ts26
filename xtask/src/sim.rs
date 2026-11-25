@@ -21,7 +21,7 @@ use ts26::TICKS_PER_SECOND;
 use ts26::board::{self, DSM_DUTY, DSM_FRACTION, DSM_SUM};
 use ts26::ramp::{DSM_BITS, DSM_FLOOR, Output, PWM_TOP};
 use ts26::sensors::Channel;
-use ts26::testing::{self, Action, EXAMPLES, Example, Rig, Sample, Scene};
+use ts26::testing::{self, Action, AdcFault, EXAMPLES, Example, Rig, Sample, Scene};
 use ts26::watchdog::{CLOCK_HZ, FEED_TICKS, PASS_CLOCKS, TICK_DEADLINE_CYCLES};
 
 use crate::avr::{Bus, Cpu, I, VECTOR_WORDS, is_call, is_two_words, ldi, ldi_operands};
@@ -451,8 +451,11 @@ fn adc_broken(sim: &mut Sim, report: &mut Report, dead: bool) -> Result<(), Stri
     let mut levels = Vec::new();
     let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| Sample {
         scene: Scene {
-            adc_dead: dead,
-            adc_frozen: !dead,
+            adc: Some(if dead {
+                AdcFault::Dead
+            } else {
+                AdcFault::Frozen
+            }),
             ..sample.scene
         },
         ..sample
@@ -1836,11 +1839,12 @@ impl Chip {
             }
         };
         let setup = Some(muxpos);
-        self.adc.result = if self.adc.last_setup == setup || self.world.scene.adc_frozen {
-            self.world.reading(channel)
-        } else {
-            UNSETTLED
-        };
+        self.adc.result =
+            if self.adc.last_setup == setup || self.world.scene.adc == Some(AdcFault::Frozen) {
+                self.world.reading(channel)
+            } else {
+                UNSETTLED
+            };
         self.adc.last_setup = setup;
         self.adc.ready_at = Some(self.now + CONVERSION_INSTRUCTIONS);
         Ok(())
@@ -2461,7 +2465,7 @@ impl Bus for Chip {
             reg::RSTCTRL_RSTFR => Ok(self.rstfr),
             reg::ADC0_INTFLAGS => {
                 let ready = self.adc.ready_at.is_some_and(|at| self.now >= at);
-                Ok(if ready && !self.world.scene.adc_dead {
+                Ok(if ready && self.world.scene.adc != Some(AdcFault::Dead) {
                     ADC_RESRDY
                 } else {
                     0

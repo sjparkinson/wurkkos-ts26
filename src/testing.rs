@@ -283,13 +283,18 @@ fn ticks(duration: &str) -> Result<u16, Error> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdcFault {
+    Dead,
+    Frozen,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scene {
     pub cell: u16,
     pub kelvin: u16,
     pub fault: bool,
     pub corrupt_flash: bool,
-    pub adc_dead: bool,
-    pub adc_frozen: bool,
+    pub adc: Option<AdcFault>,
 }
 
 impl Scene {
@@ -298,8 +303,7 @@ impl Scene {
         kelvin: thermal::celsius(25),
         fault: false,
         corrupt_flash: false,
-        adc_dead: false,
-        adc_frozen: false,
+        adc: None,
     };
 
     pub const fn faults(&self) -> Faults {
@@ -312,7 +316,7 @@ impl Scene {
 
     pub fn reading(&self, channel: Channel) -> u16 {
         match channel {
-            _ if self.adc_frozen => voltage_reading(self.cell),
+            _ if self.adc == Some(AdcFault::Frozen) => voltage_reading(self.cell),
             Channel::Voltage => voltage_reading(self.cell),
             Channel::Ground => 0,
             Channel::Temperature => temperature_reading(self.kelvin),
@@ -423,7 +427,10 @@ impl Rig {
         let event = self
             .torch
             .tick(pressed, self.adc.result(), self.pace.ticks());
-        let convert = self.torch.convert().filter(|_| !scene.adc_dead);
+        let convert = self
+            .torch
+            .convert()
+            .filter(|_| scene.adc != Some(AdcFault::Dead));
         self.adc
             .start_with(convert, |channel| scene.reading(channel));
         self.pace.tick(self.torch.slow());
@@ -716,8 +723,7 @@ mod tests {
             kelvin: thermal::celsius(80),
             fault: true,
             corrupt_flash: false,
-            adc_dead: false,
-            adc_frozen: false,
+            adc: None,
         };
         let mut samples = samples(script).peekable();
         assert!(samples.peek().is_some());
