@@ -684,6 +684,7 @@ mod tests {
 
     #[test]
     fn matches_the_model_for_every_six_runs_around_the_boundaries() {
+        const RUNS: usize = 6;
         let presses = [
             1,
             2,
@@ -700,7 +701,6 @@ mod tests {
             RELEASE_TICKS + 1,
             RELEASE_TICKS + 2,
         ];
-        const RUNS: usize = 6;
         let mut scripts = 0u32;
         for first in [true, false] {
             for code in 0..6usize.pow(RUNS as u32) {
