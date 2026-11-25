@@ -379,6 +379,10 @@ pub extern "avr-interrupt" fn tca0_ovf() {
 }
 
 pub fn set_output(output: Output) {
+    const _: () = assert!(
+        DSM_TOP >> DSM_BITS <= 0xFF,
+        "a duty past a byte would fall back to 0 with the enable high"
+    );
     if !output.enable {
         write(reg::VPORTB_OUT, read(reg::VPORTB_OUT) & !(1 << ENABLE));
     }
@@ -397,10 +401,6 @@ pub fn set_output(output: Output) {
     }
 
     let dsm = output.dsm.min(DSM_TOP);
-    const _: () = assert!(
-        DSM_TOP >> DSM_BITS <= 0xFF,
-        "a duty past a byte would fall back to 0 with the enable high"
-    );
     let duty = u8::try_from(dsm >> DSM_BITS).unwrap_or(0);
     let [low, _] = dsm.to_le_bytes();
     let fraction = low & FRACTION_MASK;

@@ -39,6 +39,7 @@ impl Default for Ui {
 }
 
 impl Ui {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             mode: Mode::Off,
@@ -48,10 +49,12 @@ impl Ui {
         }
     }
 
+    #[must_use]
     pub const fn mode(&self) -> Mode {
         self.mode
     }
 
+    #[must_use]
     pub const fn output_level(&self) -> u8 {
         match self.mode {
             Mode::On => self.level,
@@ -59,6 +62,7 @@ impl Ui {
         }
     }
 
+    #[must_use]
     pub const fn most_clicks(&self) -> Option<u8> {
         match self.mode {
             Mode::On | Mode::Off => Some(1),
@@ -66,6 +70,7 @@ impl Ui {
         }
     }
 
+    #[must_use]
     pub const fn aux(&self) -> Aux {
         match self.mode {
             Mode::On => Aux::Off,
@@ -74,6 +79,7 @@ impl Ui {
         }
     }
 
+    #[must_use]
     pub const fn lights(&self, event: Event) -> u8 {
         match (self.mode, event) {
             (Mode::Off, Event::Click(1)) => ON_LEVEL,

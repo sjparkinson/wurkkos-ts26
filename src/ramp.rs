@@ -31,6 +31,7 @@ impl Output {
 )]
 static TABLE: [u16; LEVELS as usize] = table();
 
+#[must_use]
 pub fn output(level: u8) -> Output {
     let Some(index) = level.min(CEILING).checked_sub(1) else {
         return Output::OFF;
@@ -45,6 +46,7 @@ pub const FRACTION: u16 = 16;
 
 const _: () = assert!(FRACTION.is_power_of_two());
 
+#[must_use]
 pub fn faded(position: u16) -> Output {
     let position = position.min(u16::from(CEILING) * FRACTION);
     let Some(index) = (position / FRACTION).checked_sub(1) else {
@@ -164,6 +166,6 @@ mod tests {
     fn halfway_between_two_levels_is_halfway_between_their_outputs() {
         let (below, above) = (output(140).dsm, output(141).dsm);
         let halfway = faded(140 * FRACTION + FRACTION / 2);
-        assert_eq!(halfway.dsm, (below + above) / 2);
+        assert_eq!(halfway.dsm, u16::midpoint(below, above));
     }
 }

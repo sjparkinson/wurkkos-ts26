@@ -7,6 +7,7 @@ pub struct Calibration {
 }
 
 impl Calibration {
+    #[must_use]
     pub fn sixteenths(self, sum: u16) -> u16 {
         sixteenths(sum, self.offset, self.gain)
     }
@@ -28,6 +29,7 @@ const _: () = {
     clippy::arithmetic_side_effects,
     reason = "an i8 times -4 is within -508..=512, and the assert above bounds the rest"
 )]
+#[must_use]
 pub fn sixteenths(sum: u16, offset: i8, gain: u8) -> u16 {
     let d = sum
         .saturating_add_signed(-4 * i16::from(offset))

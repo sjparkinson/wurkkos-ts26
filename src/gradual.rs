@@ -13,10 +13,12 @@ pub struct Fade {
 }
 
 impl Fade {
+    #[must_use]
     pub const fn new() -> Self {
         Self { position: 0 }
     }
 
+    #[must_use]
     pub const fn position(&self) -> u16 {
         self.position
     }
@@ -48,6 +50,7 @@ pub struct Gradual {
 }
 
 impl Gradual {
+    #[must_use]
     pub const fn new(level: u8, down_every: u8, up_every: u8) -> Self {
         Self {
             level,
@@ -57,6 +60,7 @@ impl Gradual {
         }
     }
 
+    #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
     }
@@ -99,6 +103,7 @@ pub struct Ceiling {
 }
 
 impl Ceiling {
+    #[must_use]
     pub const fn new(down_every: u8, up_every: u8) -> Self {
         Self {
             target: CEILING,
@@ -106,10 +111,12 @@ impl Ceiling {
         }
     }
 
+    #[must_use]
     pub const fn level(&self) -> u8 {
         self.level.level()
     }
 
+    #[must_use]
     pub const fn target(&self) -> u8 {
         self.target
     }

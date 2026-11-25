@@ -7,6 +7,7 @@ use crate::u16_from;
     clippy::as_conversions,
     reason = "widening u8 to u16 in a const fn, where From can't be called"
 )]
+#[must_use]
 pub const fn celsius(degrees: u8) -> u16 {
     degrees as u16 + 273
 }
@@ -36,6 +37,7 @@ const LIMIT_SIXTEENTHS: i16 = LIMIT.cast_signed() * FRACTION;
 
 const _: () = assert!(LIMIT <= *PLAUSIBLE.end());
 
+#[must_use]
 pub fn plausible(sixteenths: u16) -> bool {
     PLAUSIBLE_SIXTEENTHS.contains(&sixteenths)
 }
@@ -148,6 +150,7 @@ impl Default for Thermal {
 }
 
 impl Thermal {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             ceiling: Ceiling::new(DOWN_EVERY, UP_EVERY),
@@ -157,6 +160,7 @@ impl Thermal {
         }
     }
 
+    #[must_use]
     pub const fn ceiling(&self) -> u8 {
         self.ceiling.level()
     }
@@ -198,9 +202,10 @@ impl Thermal {
         )]
         let over = smooth + trend * LOOKAHEAD - LIMIT_SIXTEENTHS;
         if over > 0 && (trend >= 0 || smooth > LIMIT_SIXTEENTHS + WINDOW) {
-            let push = match level > FAST_ABOVE {
-                true => over.saturating_mul(FAST_GAIN),
-                false => over,
+            let push = if level > FAST_ABOVE {
+                over.saturating_mul(FAST_GAIN)
+            } else {
+                over
             };
             let pressure = self.pressure.max(0).saturating_add(push);
             let steps = (pressure / DOWN_PRESSURE).min(i16::from(MAX_STEP_DOWN));
@@ -307,6 +312,10 @@ mod tests {
     }
 
     /// Unmeasured: a guess at a head, in thousandths of a kelvin.
+    #[expect(
+        clippy::struct_field_names,
+        reason = "the head's temperature, beside the MCU's and the ambient"
+    )]
     struct Head {
         head: i32,
         mcu: i32,
@@ -1056,9 +1065,11 @@ mod tests {
                         "sum {sum} ({reading}), sample {sample}: {ceiling}"
                     );
                 }
-                settled = match thermal.ceiling() == if too_hot { FLOOR } else { CEILING } {
-                    true => settled + 1,
-                    false => 0,
+                let target = if too_hot { FLOOR } else { CEILING };
+                settled = if thermal.ceiling() == target {
+                    settled + 1
+                } else {
+                    0
                 };
                 if settled >= 50 {
                     break;

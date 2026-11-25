@@ -21,6 +21,7 @@ pub struct Debounce {
 }
 
 impl Debounce {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             pressed: false,
@@ -28,6 +29,7 @@ impl Debounce {
         }
     }
 
+    #[must_use]
     pub const fn settled(&self) -> bool {
         !self.pressed && !self.last
     }
@@ -63,16 +65,19 @@ pub struct Clicks {
 }
 
 impl Clicks {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             gesture: Gesture::Idle,
         }
     }
 
+    #[must_use]
     pub const fn idle(&self) -> bool {
         matches!(self.gesture, Gesture::Idle)
     }
 
+    #[must_use]
     pub const fn counting(&self) -> bool {
         match self.gesture {
             Gesture::Idle => false,
@@ -81,6 +86,7 @@ impl Clicks {
         }
     }
 
+    #[must_use]
     pub const fn pending(&self) -> Option<Event> {
         match self.gesture {
             Gesture::Down {
@@ -628,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::similar_names, reason = "the names pair up on purpose")]
     fn the_model_agrees_with_the_examples() {
         let spent = model(
             &[
@@ -683,6 +690,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::similar_names,
+        reason = "pressed and presses are a run and its lengths"
+    )]
     fn matches_the_model_for_every_six_runs_around_the_boundaries() {
         const RUNS: usize = 6;
         let presses = [

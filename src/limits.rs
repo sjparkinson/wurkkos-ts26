@@ -38,6 +38,7 @@ pub struct Limits {
 }
 
 impl Limits {
+    #[must_use]
     pub const fn new(calibration: Calibration, faults: Faults) -> Self {
         Self {
             schedule: Schedule::new(),
@@ -54,26 +55,32 @@ impl Limits {
         }
     }
 
+    #[must_use]
     pub const fn convert(&self) -> Option<Convert> {
         self.convert
     }
 
+    #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
     }
 
+    #[must_use]
     pub const fn position(&self) -> u16 {
         self.fade.position()
     }
 
+    #[must_use]
     pub const fn weak(&self) -> bool {
         self.protection.weak()
     }
 
+    #[must_use]
     pub const fn ceilings(&self) -> (u8, u8) {
         (self.protection.ceiling(), self.thermal.ceiling())
     }
 
+    #[must_use]
     pub const fn health(&self) -> Health {
         if self.fault {
             Health::Fault
@@ -103,12 +110,12 @@ impl Limits {
         let steady = ui == self.asked;
         self.asked = ui;
         let ui = ui.min(CEILING);
-        let level = match on {
-            true => ui
-                .min(self.thermal.ceiling())
+        let level = if on {
+            ui.min(self.thermal.ceiling())
                 .min(self.protection.ceiling())
-                .max(self.level),
-            false => 0,
+                .max(self.level)
+        } else {
+            0
         };
 
         let (reading, convert) = self.schedule.tick(result, on);

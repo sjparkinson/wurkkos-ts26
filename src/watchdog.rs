@@ -101,6 +101,7 @@ impl Default for Pace {
 }
 
 impl Pace {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             state: State::Awake { wait: 0 },
@@ -108,18 +109,22 @@ impl Pace {
         }
     }
 
+    #[must_use]
     pub const fn powers_down(&self) -> bool {
         !self.armed
     }
 
+    #[must_use]
     pub const fn slow(&self) -> bool {
         matches!(self.state, State::Resting)
     }
 
+    #[must_use]
     pub const fn windowed(&self) -> bool {
         matches!(self.state, State::Awake { .. })
     }
 
+    #[must_use]
     pub const fn ticks(&self) -> u16 {
         if self.slow() { REST_TICKS } else { 1 }
     }
@@ -274,7 +279,7 @@ mod tests {
         pace.woken();
         pace.tick(false);
         assert_eq!(pace.tick(false), Some(Step::Window));
-        let wait = (1u16..)
+        let wait = (1..=u16::MAX)
             .find(|_| pace.tick(false) == Some(Step::Feed))
             .unwrap();
         assert_eq!(
