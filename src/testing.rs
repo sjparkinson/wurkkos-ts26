@@ -7,7 +7,7 @@
 mod examples;
 
 #[cfg(test)]
-pub use examples::example;
+pub(crate) use examples::example;
 pub use examples::{EXAMPLES, Example, Expect};
 
 use core::fmt;
