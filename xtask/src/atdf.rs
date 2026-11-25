@@ -2,6 +2,7 @@
 //! `crate::` or `ts26::`.
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 struct Element {
     name: String,
@@ -223,11 +224,20 @@ impl Consts {
     fn render(&self, kind: fn(u32) -> &'static str) -> String {
         self.0
             .iter()
-            .map(|(name, (value, doc))| {
-                let kind = kind(*value);
-                format!("/// {doc}\npub const {name}: {kind} = {value:#04X};\n")
+            .fold(String::new(), |mut out, (name, (value, doc))| {
+                let (kind, value) = (kind(*value), hex(*value));
+                let _ = writeln!(out, "/// {doc}\npub const {name}: {kind} = {value};");
+                out
             })
-            .collect()
+    }
+}
+
+// Six digits and up are grouped, as clippy::unreadable_literal asks.
+fn hex(value: u32) -> String {
+    if value > 0xF_FFFF {
+        format!("0x{:X}_{:04X}", value >> 16, value & 0xFFFF)
+    } else {
+        format!("{value:#04X}")
     }
 }
 
@@ -433,6 +443,13 @@ mod tests {
             consts.render(|_| "u8"),
             "/// first\npub const A: u8 = 0x01;\n"
         );
+    }
+
+    #[test]
+    fn six_hex_digits_and_up_are_grouped() {
+        assert_eq!(hex(0xF_FFFF), "0xFFFFF");
+        assert_eq!(hex(0x10_0000), "0x10_0000");
+        assert_eq!(hex(0xFFFF_FFFF), "0xFFFF_FFFF");
     }
 
     #[test]

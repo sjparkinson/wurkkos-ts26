@@ -112,14 +112,14 @@ const SECOND_CYCLES: u64 = int::u64_from_u32(CLK_PER);
 const SECOND_TICKS: usize = int::usize_from_u16(TICKS_PER_SECOND);
 const TICK_CYCLES: u64 = SECOND_CYCLES / int::u64_from_u16(TICKS_PER_SECOND);
 const _: () = assert!(TICK_CYCLES * int::u64_from_u16(TICKS_PER_SECOND) == SECOND_CYCLES);
-/// No AVRxt instruction takes more than 4 cycles.
+/// No `AVRxt` instruction takes more than 4 cycles.
 pub const TICK_BUDGET: u64 = TICK_CYCLES / 4;
 const PWM_CYCLE: u64 = 2 * int::u64_from_u16(PWM_TOP);
 /// Six in and four for `reti` on a 16 KB part (§13.3.2.3, table 13-1).
 const INTERRUPT_CYCLES: u64 = 10;
 pub const HANDLER_BUDGET: u64 = (PWM_CYCLE - INTERRUPT_CYCLES) / 4;
 /// At the lowest level the delta-sigma only carries into the duty once every
-/// 2^DSM_BITS / DSM_FLOOR cycles, so a duty of 0 for a cycle is normal there.
+/// `2^DSM_BITS / DSM_FLOOR` cycles, so a duty of 0 for a cycle is normal there.
 const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / int::u32_from_u16(DSM_FLOOR) + 1;
 const DSM_WINDOW: usize = 1 << DSM_BITS;
 const DSM_SLACK: u32 = 2;

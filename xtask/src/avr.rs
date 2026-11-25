@@ -1,4 +1,4 @@
-//! An AVRxt CPU (tinyAVR 1-series), so the real firmware can run on the host.
+//! An `AVRxt` CPU (tinyAVR 1-series), so the real firmware can run on the host.
 //! Encodings and flags are from the AVR Instruction Set Manual (DS40002198).
 //! It counts instructions, not cycles. Only interrupt level 0 is modelled.
 //!
@@ -280,7 +280,7 @@ impl Cpu {
                         if w & 1 != 0 {
                             self.set_pair(30, z.wrapping_add(1));
                         }
-                        self.program_byte(bus, z)?
+                        Self::program_byte(bus, z)?
                     }
                     0xF => self.pop(bus)?,
                     _ => return Err(unknown(w)),
@@ -343,7 +343,7 @@ impl Cpu {
                         self.pc = self.pop_pc(bus)?;
                     }
                     0x95A8 => bus.wdr()?,
-                    0x95C8 => *self.reg_mut(0) = self.program_byte(bus, self.pair(30))?, // lpm
+                    0x95C8 => *self.reg_mut(0) = Self::program_byte(bus, self.pair(30))?, // lpm
                     0x9588 => self.sleep(bus)?,
                     _ => return Err(unknown(w)),
                 },
@@ -553,7 +553,7 @@ impl Cpu {
         Ok(())
     }
 
-    fn program_byte(&self, bus: &impl Bus, addr: u16) -> Result<u8, String> {
+    fn program_byte(bus: &impl Bus, addr: u16) -> Result<u8, String> {
         let w = bus
             .fetch(u32::from(addr >> 1))
             .ok_or_else(|| format!("lpm from {addr:#06x}, outside flash"))?;
@@ -1119,7 +1119,7 @@ mod tests {
     }
 
     /// What the pinned nightly compiles `a.wrapping_mul(b)` on two `u16`s,
-    /// and `a % 10` on a `u8`, to for the ATtiny1616, with the `ret` left off.
+    /// and `a % 10` on a `u8`, to for the `ATtiny1616`, with the `ret` left off.
     #[test]
     fn runs_what_llvm_emits_for_u16_multiply_and_u8_remainder() {
         let mul_u16 = [
@@ -1225,7 +1225,7 @@ mod tests {
     fn takes_nothing_with_sreg_i_clear() {
         let image = program(&[(3, &clears(1 << 3))], &[ldi(17, 1), NOP]);
         let (_, bus) = run(&image, |_, bus| bus.pending = 1 << 3);
-        assert!(bus.log.is_empty());
+        assert!(bus.log.is_empty(), "{:?}", bus.log);
     }
 
     const INC_R17: u16 = 0x9513;

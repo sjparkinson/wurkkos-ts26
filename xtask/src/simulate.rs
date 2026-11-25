@@ -392,7 +392,7 @@ mod tests {
         for ticks in 0..10 {
             let hold = Event::Hold { clicks: 1, ticks };
             let now = u32::from(HOLD_TICKS + ticks);
-            assert!(log.note(now, Some(hold), 0).is_empty());
+            assert_eq!(log.note(now, Some(hold), 0), Vec::<String>::new());
         }
         let now = u32::from(HOLD_TICKS) + 10;
         let line = log
@@ -409,8 +409,8 @@ mod tests {
     fn logs_a_change_of_level_with_no_event() {
         let mut log = Log::default();
         assert!(log.note(0, None, 30)[0].ends_with("level 30/150"));
-        assert!(log.note(1, None, 30).is_empty());
-        assert!(log.note(2, None, 31).is_empty());
+        assert_eq!(log.note(1, None, 30), Vec::<String>::new());
+        assert_eq!(log.note(2, None, 31), Vec::<String>::new());
         let lines = log.note(3, None, 31);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].starts_with(&Seconds(2).to_string()), "{lines:?}");
@@ -487,7 +487,7 @@ mod tests {
     fn h_holds_the_switch_until_pressed_again() {
         let mut live = Live::default();
         live.key('h');
-        assert!(ticks_of(&mut live, 64).is_empty());
+        assert_eq!(ticks_of(&mut live, 64), Vec::<String>::new());
         assert!(live.pressed);
         live.key('h');
         let lines = ticks_of(&mut live, 64);
