@@ -506,7 +506,7 @@ fn tick_lands_on_a_press(sim: &mut Sim, report: &mut Report) -> Result<(), Strin
 }
 
 fn wakes_from_rest(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
-    let samples = script("wait:2s 1C wait:2s 3C wait:7s 1C wait:7s 3C wait:2s 1H")?;
+    let samples = script("wait:2s 1C wait:2s 2H wait:7s 1C wait:7s 2H wait:2s 1H")?;
     let end = in_step(sim, samples, report)?;
     if end != Some(ts26::ui::FLOOR) {
         return Err(format!("ends at level {end:?}, not the floor"));

@@ -1,4 +1,4 @@
-use crate::button::Event;
+use crate::button::{Count, Event};
 use crate::ramp::CEILING;
 
 /// Levels 5, 11 and 13 all flickered slightly on this torch.
@@ -7,6 +7,11 @@ pub const FLOOR: u8 = 17;
 pub const ON_LEVEL: u8 = 52;
 
 const _: () = assert!(FLOOR >= 1 && FLOOR < ON_LEVEL && ON_LEVEL < CEILING);
+
+pub const TWO_H: Event = Event::Hold {
+    clicks: 1,
+    ticks: 0,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -29,7 +34,6 @@ pub struct Ui {
     mode: Mode,
     level: u8,
     up: bool,
-    clicked_off: bool,
 }
 
 impl Default for Ui {
@@ -45,7 +49,6 @@ impl Ui {
             mode: Mode::Off,
             level: ON_LEVEL,
             up: false,
-            clicked_off: false,
         }
     }
 
@@ -63,10 +66,10 @@ impl Ui {
     }
 
     #[must_use]
-    pub const fn most_clicks(&self) -> Option<u8> {
+    pub const fn count(&self) -> Count {
         match self.mode {
-            Mode::On | Mode::Off => Some(1),
-            Mode::Lockout => None,
+            Mode::On | Mode::Off => Count::Each,
+            Mode::Lockout => Count::Group,
         }
     }
 
@@ -95,8 +98,7 @@ impl Ui {
     }
 
     pub fn handle_unlit(&mut self, event: Event) -> bool {
-        let locks = core::mem::take(&mut self.clicked_off)
-            && matches!((self.mode, event), (Mode::Off, Event::Click(3)));
+        let locks = matches!(self.mode, Mode::Off | Mode::On) && event == TWO_H;
         if locks {
             self.mode = Mode::Lockout;
         }
@@ -125,10 +127,7 @@ impl Ui {
                 self.up = false;
             }
 
-            (Mode::On, Event::Click(1)) => {
-                self.off();
-                self.clicked_off = true;
-            }
+            (Mode::On, Event::Click(1)) => self.off(),
             (Mode::On, Event::Hold { clicks: 0, ticks }) => {
                 if ticks == 0 {
                     self.up = !self.up;
@@ -140,7 +139,7 @@ impl Ui {
                 };
             }
 
-            (Mode::Lockout, Event::Click(3)) => self.mode = Mode::Off,
+            (Mode::Lockout, TWO_H) => self.mode = Mode::Off,
 
             _ => {}
         }
@@ -169,7 +168,7 @@ mod tests {
         ui.handle(Event::Release { clicks });
     }
 
-    const LOCK: [Event; 3] = [Event::Click(1), Event::Click(1), Event::Click(3)];
+    const LOCK: [Event; 3] = [Event::Click(1), Event::Click(1), TWO_H];
 
     fn lock(ui: &mut Ui) {
         for event in LOCK {
@@ -204,14 +203,22 @@ mod tests {
     }
 
     #[test]
-    fn off_answers_to_1c_and_1h_and_nothing_else() {
+    fn clicks_count_one_at_a_time_unless_locked() {
+        let mut ui = Ui::new();
+        assert_eq!(ui.count(), Count::Each);
+        ui.handle(Event::Click(1));
+        assert_eq!(ui.count(), Count::Each);
+        lock(&mut ui);
+        assert_eq!(ui.count(), Count::Group);
+    }
+
+    #[test]
+    fn off_answers_to_1c_1h_and_2h_and_nothing_else() {
         for event in [
             Event::Click(2),
             Event::Click(3),
-            Event::Click(4),
-            Event::Click(5),
             hold(0, 1),
-            hold(1, 0),
+            hold(1, 1),
             hold(2, 0),
         ] {
             let mut ui = Ui::new();
@@ -273,132 +280,97 @@ mod tests {
     }
 
     #[test]
-    fn a_2h_does_nothing_while_on_and_does_not_count_as_a_1h() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        hold_for(&mut ui, 1, 100);
-        assert_eq!(ui.output_level(), ON_LEVEL);
-        hold_for(&mut ui, 0, 3);
-        assert_eq!(ui.output_level(), ON_LEVEL + 3);
-    }
-
-    #[test]
-    fn on_ignores_other_clicks() {
-        for clicks in [2, 3, 4, 5] {
+    fn on_ignores_other_clicks_and_holds_after_more_than_one() {
+        for event in [Event::Click(2), Event::Click(3), hold(2, 0), hold(3, 0)] {
             let mut ui = Ui::new();
             ui.handle(Event::Click(1));
-            ui.handle(Event::Click(clicks));
-            assert_eq!(ui.output_level(), ON_LEVEL, "{clicks}C");
+            ui.handle(event);
+            assert_eq!(ui.output_level(), ON_LEVEL, "{event:?}");
         }
     }
 
     #[test]
-    fn nothing_past_most_clicks_does_anything() {
-        for setup in [&[][..], &[Event::Click(1)], &LOCK] {
-            let mut ui = Ui::new();
-            for &event in setup {
-                ui.handle(event);
-            }
-            let Some(most) = ui.most_clicks() else {
-                continue;
-            };
-            for n in most + 1..=most + 4 {
-                let mut after = ui.clone();
-                after.handle(Event::Click(n));
-                after.handle(hold(n, 0));
-                assert_eq!(after.mode(), ui.mode(), "{n}C");
-                assert_eq!(after.output_level(), ui.output_level(), "{n}C");
-            }
-        }
-    }
-
-    #[test]
-    fn three_clicks_with_the_light_on_turn_it_off_at_the_first_and_lock_it() {
+    fn a_2h_with_the_light_on_puts_it_out_and_locks_it() {
         let mut ui = Ui::new();
         ui.handle(Event::Click(1));
-        ui.handle(Event::Click(1));
-        assert_eq!(ui.mode(), Mode::Off);
-        ui.handle(Event::Click(3));
+        ui.handle(TWO_H);
+        assert_eq!(ui.mode(), Mode::Lockout);
+        assert_eq!(ui.output_level(), 0);
+    }
+
+    #[test]
+    fn a_2h_from_off_locks_it() {
+        let mut ui = Ui::new();
+        ui.handle(TWO_H);
         assert_eq!(ui.mode(), Mode::Lockout);
     }
 
     #[test]
-    fn three_clicks_from_off_light_it_and_do_not_lock_it() {
+    fn the_hold_that_locks_it_does_not_unlock_it() {
         let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(3));
-        assert_eq!(ui.output_level(), ON_LEVEL);
+        hold_for(&mut ui, 1, 500);
+        assert_eq!(ui.mode(), Mode::Lockout);
     }
 
     #[test]
-    fn only_a_count_of_three_straight_after_the_click_off_locks_it() {
-        for between in [
-            Event::Click(2),
-            Event::Click(4),
-            hold(1, 0),
-            Event::Release { clicks: 1 },
-        ] {
-            let mut ui = Ui::new();
-            ui.handle(Event::Click(1));
-            ui.handle(Event::Click(1));
-            ui.handle(between);
-            ui.handle(Event::Click(3));
-            assert_eq!(ui.mode(), Mode::Off, "{between:?}");
-        }
+    fn a_light_that_was_put_out_still_locks_on_a_2h() {
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        ui.off();
+        ui.handle(TWO_H);
+        assert_eq!(ui.mode(), Mode::Lockout);
     }
 
     #[test]
     fn handled_unlit_it_only_ever_locks_and_never_lights() {
-        for event in [Event::Click(1), Event::Click(3), hold(0, 0), hold(0, 1)] {
+        for event in [
+            Event::Click(1),
+            Event::Click(3),
+            hold(0, 0),
+            hold(0, 1),
+            TWO_H,
+        ] {
             for setup in [&[][..], &[Event::Click(1)], &LOCK] {
                 let mut ui = Ui::new();
                 for &event in setup {
                     ui.handle(event);
                 }
-                let before = (ui.mode(), ui.output_level());
-                assert!(!ui.handle_unlit(event));
-                assert_eq!((ui.mode(), ui.output_level()), before, "{event:?}");
+                let (before, level) = (ui.mode(), ui.output_level());
+                let locks = ui.handle_unlit(event);
+                assert_eq!(locks, event == TWO_H && before != Mode::Lockout);
+                let after = if locks {
+                    (Mode::Lockout, 0)
+                } else {
+                    (before, level)
+                };
+                assert_eq!(
+                    (ui.mode(), ui.output_level()),
+                    after,
+                    "{event:?} from {before:?}"
+                );
             }
         }
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(1));
-        assert!(ui.handle_unlit(Event::Click(3)));
-        assert_eq!(ui.mode(), Mode::Lockout);
     }
 
     #[test]
-    fn an_event_handled_unlit_ends_the_chance_to_lock() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(1));
-        assert!(!ui.handle_unlit(Event::Click(1)));
-        ui.handle(Event::Click(3));
-        assert_eq!(ui.mode(), Mode::Off);
-    }
-
-    #[test]
-    fn a_light_that_was_put_out_does_not_lock_on_a_count_of_three() {
-        let mut ui = Ui::new();
-        ui.handle(Event::Click(1));
-        ui.off();
-        ui.handle(Event::Click(3));
-        assert_eq!(ui.mode(), Mode::Off);
-    }
-
-    #[test]
-    fn lockout_never_lights_and_3c_unlocks() {
+    fn lockout_never_lights_and_a_2h_unlocks_it_to_off() {
         let mut ui = Ui::new();
         lock(&mut ui);
-        for event in [Event::Click(1), Event::Click(2), Event::Click(4)] {
+        for event in [
+            Event::Click(1),
+            Event::Click(2),
+            Event::Click(3),
+            Event::Click(4),
+        ] {
             ui.handle(event);
         }
         hold_for(&mut ui, 0, 100);
-        hold_for(&mut ui, 1, 100);
+        hold_for(&mut ui, 2, 100);
         assert_eq!(ui.mode(), Mode::Lockout);
         assert_eq!(ui.output_level(), 0);
-        ui.handle(Event::Click(3));
+        hold_for(&mut ui, 1, 100);
         assert_eq!(ui.mode(), Mode::Off);
+        assert_eq!(ui.output_level(), 0);
     }
 
     #[test]
@@ -425,8 +397,7 @@ mod tests {
         assert_eq!(ui.aux(), Aux::Blue);
         ui.handle(Event::Click(1));
         assert_eq!(ui.aux(), Aux::Off);
-        ui.handle(Event::Click(1));
-        ui.handle(Event::Click(3));
+        ui.handle(TWO_H);
         assert_eq!(ui.aux(), Aux::Red);
     }
 }

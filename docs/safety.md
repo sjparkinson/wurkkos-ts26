@@ -30,7 +30,7 @@ Each way found so far that this torch could hurt someone or itself, and what cov
 
 **Hazard.** A press on the switch under pressure.
 
-**Cover.** 3C with the light on puts it out at the first click and locks it, and 3C in lockout unlocks it to off. A torch that's off only locks by lighting it first. In lockout `ui::Ui` never lights, a hold does nothing, and a fourth press makes a 4C, which does nothing.
+**Cover.** 2H locks it from off or on, and the light is out by the time the hold counts, though a 2H from off lights `ui::ON_LEVEL` until then. 2H in lockout unlocks it to off, and a tap then a long press, which a pocket can make, does that too. In lockout `ui::Ui` never lights, and quick clicks count as one, so a press before the 2H makes a 3H, which does nothing.
 
 ### H6. Corrupt or half-written flash
 
@@ -66,7 +66,7 @@ Each way found so far that this torch could hurt someone or itself, and what cov
 
 **Hazard.** Dirt, a pressed-in switch or a jammed button.
 
-**Cover.** `ui::Ui` bounds every hold. Locked, a hold does nothing. Off, 1H lights `ui::FLOOR` and stays there. Lit, it ramps and stops at `ramp::CEILING` or `ui::FLOOR`, and the ceilings in H3 and H4 still apply.
+**Cover.** `ui::Ui` bounds every hold. Locked, a hold does nothing, and 2H unlocks it to off. A switch that sticks within `button::GUARD_TICKS` of a click that acted does nothing, and one that sticks later inside the click's `button::RELEASE_TICKS` is a 2H, which locks it or unlocks it to off. Off, 1H lights `ui::FLOOR` and stays there. Lit, it ramps and stops at `ramp::CEILING` or `ui::FLOOR`, and the ceilings in H3 and H4 still apply.
 
 ### H12. A dead or garbage ADC
 
@@ -84,4 +84,4 @@ Each way found so far that this torch could hurt someone or itself, and what cov
 
 **Hazard.** A switch that chatters, or that actuates twice on one press.
 
-**Cover.** `button::Debounce` counts a change of the switch once two samples in a row show it. After a click that acts as it's let go, `button::Clicks` ignores the switch until it has been up for `button::RELEASE_TICKS`.
+**Cover.** `button::Debounce` counts a change of the switch once two samples in a row show it. After a click that acts as it's let go, `button::Clicks` ignores a press that starts before the switch has been up for `button::GUARD_TICKS`, however long it's held. `button::GUARD_TICKS` is a guess, and chatter that outlasts it is a second click, which toggles the light, or a 2H if it's held.
