@@ -1490,8 +1490,7 @@ mod tests {
 
     #[expect(
         clippy::too_many_lines,
-        clippy::similar_names,
-        reason = "one walk of the torch beside its model, tick by tick, whose names pair up"
+        reason = "one walk of the torch beside its model, tick by tick"
     )]
     fn live(
         rng: &mut Rng,
@@ -1521,7 +1520,7 @@ mod tests {
         };
         let start_up = pace == Pace::Slow && rng.next_u16().is_multiple_of(2);
         let (mut pressed, mut switch_left) = (start_up, 0);
-        let (mut cell, mut head) = (Source::Steady(3516), Source::Steady(2124));
+        let (mut cell, mut temperature) = (Source::Steady(3516), Source::Steady(2124));
         let (mut lose, mut world_left) = (0, 0);
         let (mut up, mut faulted_for) = (0_u32, 0_u32);
         let (mut converted, mut converted_before) = (None, None);
@@ -1535,7 +1534,7 @@ mod tests {
             switch_left -= 1;
             if world_left == 0 {
                 cell = Source::cell(rng);
-                head = Source::head(rng);
+                temperature = Source::head(rng);
                 lose = match rng.next_u16() % 16 {
                     0..=11 => 0,
                     12..=14 => 4,
@@ -1563,7 +1562,7 @@ mod tests {
                 .start_with(rig.torch.convert(), |channel| match channel {
                     Channel::Voltage => cell.read(rng),
                     Channel::Ground => 0,
-                    Channel::Temperature => head.read(rng),
+                    Channel::Temperature => temperature.read(rng),
                 });
             let health = rig.limits.health();
             let level = rig.level();
