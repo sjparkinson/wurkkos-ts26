@@ -22,12 +22,14 @@ pub struct Step {
     pub unloaded: Option<u16>,
 }
 
+/// `repr(C)` holds `thermal`, the biggest field, last, so the fields before it
+/// stay within `ldd` and `std`'s 63-byte reach.
 #[derive(Clone, Debug)]
+#[repr(C)]
 pub struct Limits {
     schedule: Schedule,
     calibration: Calibration,
     protection: Protection,
-    thermal: Thermal,
     asked: u8,
     level: u8,
     fade: Fade,
@@ -35,6 +37,7 @@ pub struct Limits {
     convert: Option<Convert>,
     bad_grounds: u8,
     fault: bool,
+    thermal: Thermal,
 }
 
 impl Limits {
