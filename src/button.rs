@@ -737,13 +737,9 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::similar_names,
-        reason = "pressed and presses are a run and its lengths"
-    )]
     fn matches_the_model_for_every_six_runs_around_the_boundaries() {
         const RUNS: usize = 6;
-        let presses = [
+        let press_lengths = [
             1,
             2,
             HOLD_TICKS - 1,
@@ -751,7 +747,7 @@ mod tests {
             HOLD_TICKS + 1,
             HOLD_TICKS + 2,
         ];
-        let releases = [
+        let release_lengths = [
             1,
             2,
             RELEASE_TICKS - 1,
@@ -766,7 +762,11 @@ mod tests {
                 let mut digits = code;
                 for (index, run) in runs.iter_mut().enumerate() {
                     let pressed = first == index.is_multiple_of(2);
-                    let lengths = if pressed { &presses } else { &releases };
+                    let lengths = if pressed {
+                        &press_lengths
+                    } else {
+                        &release_lengths
+                    };
                     *run = (pressed, lengths[digits % 6]);
                     digits /= 6;
                 }
