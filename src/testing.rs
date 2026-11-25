@@ -495,21 +495,21 @@ mod tests {
         }
     }
 
-    fn convert(channel: Channel) -> Option<Convert> {
-        Some(Convert {
+    const fn convert(channel: Channel) -> Convert {
+        Convert {
             channel,
             setup: false,
-        })
+        }
     }
 
     #[test]
     fn answers_for_the_channel_a_tick_later() {
         let mut adc = Adc::new();
         assert_eq!(adc.result(), None);
-        adc.start(convert(Channel::Temperature));
+        adc.start(Some(convert(Channel::Temperature)));
         assert_eq!(adc.result(), Some(2124));
         assert_eq!(adc.result(), None);
-        adc.start(convert(Channel::Voltage));
+        adc.start(Some(convert(Channel::Voltage)));
         assert_eq!(adc.result(), Some(3516));
         adc.start(None);
         assert_eq!(adc.result(), None);
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn measures_what_was_there_when_it_started() {
         let mut adc = Adc::new();
-        adc.start(convert(Channel::Voltage));
+        adc.start(Some(convert(Channel::Voltage)));
         adc.voltage = 7;
         assert_eq!(adc.result(), Some(3516));
     }

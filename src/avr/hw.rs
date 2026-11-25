@@ -325,8 +325,8 @@ pub fn flash_ok() -> bool {
             "nop",
             "nop",
             options(nostack, preserves_flags)
-        )
-    };
+        );
+    }
     while read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_BUSY != 0 {}
     read(reg::CRCSCAN_STATUS) & regs::CRCSCAN_OK != 0
 }
