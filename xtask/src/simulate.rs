@@ -13,7 +13,10 @@ use ts26::testing::{self, Rig, Scene, clicks};
 
 pub use ts26::testing::Action;
 
+use crate::int;
 use crate::terminal::{CTRL_C, Terminal};
+
+const PER_SECOND: u64 = int::u64_from_u16(TICKS_PER_SECOND);
 
 pub fn parse(words: &[&str]) -> Result<Vec<Action>, String> {
     testing::parse(words.iter().copied())
@@ -30,10 +33,10 @@ pub struct Run {
 pub fn run(actions: &[Action]) -> Run {
     let mut log = Log::default();
     let mut lines = Vec::new();
-    let mut ticks = 0;
+    let mut ticks = 0_u32;
     let rig = Rig::play_with(actions.iter().copied(), |rig, event| {
         lines.extend(log.note(ticks, event, rig.level()));
-        ticks += 1;
+        ticks = ticks.saturating_add(1);
     });
     lines.extend(log.settle());
     Run {
@@ -68,7 +71,9 @@ struct Fade {
 
 impl Fade {
     const fn continues(&self, now: u32, before: u8, level: u8) -> bool {
-        self.last + 1 == now && self.to == before && (level > before) == (self.to > self.from)
+        matches!(now.checked_sub(self.last), Some(1))
+            && self.to == before
+            && (level > before) == (self.to > self.from)
     }
 }
 
@@ -108,7 +113,7 @@ impl Log {
         if from.abs_diff(to) == 1 {
             return Some(format!("{}  {:<16} → {}", Seconds(start), "", Level(to)));
         }
-        let over = Seconds(last + 1 - start).to_string();
+        let over = Seconds(last.abs_diff(start).saturating_add(1)).to_string();
         Some(
             format!(
                 "{}  {:<16} → {}",
@@ -123,15 +128,17 @@ impl Log {
         let (what, before) = match event {
             Some(Event::Click(n)) => (format!("{n}C"), before),
             Some(Event::Hold { ticks, .. }) => {
-                let start = now - u32::from(HOLD_TICKS) - u32::from(ticks);
+                let start = now
+                    .saturating_sub(u32::from(HOLD_TICKS))
+                    .saturating_sub(u32::from(ticks));
                 self.hold.get_or_insert((start, before));
                 return None;
             }
             Some(Event::Release { clicks }) => {
                 let (start, before) = self.hold.take().unwrap_or((now, before));
-                let held = Seconds(now - start).to_string();
+                let held = Seconds(now.abs_diff(start)).to_string();
                 (
-                    format!("{}H, held {}", clicks + 1, held.trim_start()),
+                    format!("{}H, held {}", u16::from(clicks) + 1, held.trim_start()),
                     before,
                 )
             }
@@ -151,8 +158,9 @@ struct Seconds(u32);
 
 impl fmt::Display for Seconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let per = u32::from(TICKS_PER_SECOND);
-        write!(f, "{:>3}.{:02} s", self.0 / per, self.0 % per * 100 / per)
+        let ticks = u64::from(self.0);
+        let hundredths = ticks * 100 / PER_SECOND;
+        write!(f, "{:>3}.{:02} s", ticks / PER_SECOND, hundredths % 100)
     }
 }
 
@@ -189,7 +197,7 @@ pub fn interactive() -> Result<(), String> {
     };
     print(&terminal, &format!("{HELP}\n"));
 
-    let period = Duration::from_micros(1_000_000 / u64::from(TICKS_PER_SECOND));
+    let period = Duration::from_micros(1_000_000 / PER_SECOND);
     let mut next = Instant::now();
     let mut shown = String::new();
     loop {
@@ -214,7 +222,9 @@ pub fn interactive() -> Result<(), String> {
             shown = status;
         }
         // Keep to the clock, not to how long each pass took.
-        next += period;
+        next = next
+            .checked_add(period)
+            .ok_or("the next tick is past the end of the clock")?;
         thread::sleep(next.saturating_duration_since(Instant::now()));
     }
 }
@@ -242,7 +252,11 @@ impl Live {
         match key.to_ascii_lowercase() {
             'q' | CTRL_C => return Command::Quit,
             ' ' => self.click(1),
-            digit @ '1'..='9' => self.click(digit as u8 - b'0'),
+            digit @ '1'..='9' => {
+                if let Some(n) = digit.to_digit(10).and_then(|n| u8::try_from(n).ok()) {
+                    self.click(n);
+                }
+            }
             'h' => self.held = !self.held,
             '?' => return Command::Help,
             'r' => {
@@ -263,7 +277,7 @@ impl Live {
         self.pressed = self.queue.pop_front().unwrap_or(self.held);
         let event = self.torch.tick_in(self.pressed, &Scene::NORMAL);
         let lines = self.log.note(self.now, event, self.torch.level());
-        self.now += 1;
+        self.now = self.now.saturating_add(1);
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
@@ -286,7 +300,7 @@ impl Live {
         format!(
             "\x1b[33m{}\x1b[2m{}\x1b[0m{text}",
             "█".repeat(lit),
-            "░".repeat(BAR - lit)
+            "░".repeat(BAR.saturating_sub(lit))
         )
     }
 }
