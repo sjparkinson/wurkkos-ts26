@@ -19,6 +19,10 @@ mod panics {
 
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the index that can run off the end is the panic the check has to find"
+    )]
     extern "C" fn main() -> ! {
         hw::hold_enable_low();
         hw::init();

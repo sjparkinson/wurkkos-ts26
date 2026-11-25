@@ -44,9 +44,9 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}-
 
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core
       - run: cargo test --workspace --locked -- --include-ignored
-      - run: cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings
       - run: cargo xtask hex
 
       - uses: actions/upload-artifact@v7.0.2

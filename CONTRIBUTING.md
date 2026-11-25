@@ -6,9 +6,9 @@ CI runs these on every pull request, so run them before you push.
 
 ```sh
 cargo fmt --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --locked
+cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core
 cargo test --workspace --locked -- --include-ignored
-cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings
 cargo xtask hex
 ```
 

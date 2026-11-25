@@ -1,21 +1,6 @@
 #![cfg_attr(target_arch = "avr", no_std, no_main)]
 #![cfg_attr(target_arch = "avr", feature(asm_experimental_arch))]
 #![cfg_attr(target_arch = "avr", feature(abi_avr_interrupt))]
-#![cfg_attr(
-    target_arch = "avr",
-    deny(
-        clippy::indexing_slicing,
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
-        clippy::as_conversions,
-    )
-)]
 
 #[cfg(target_arch = "avr")]
 mod avr {

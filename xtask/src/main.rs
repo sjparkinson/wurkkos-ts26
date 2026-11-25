@@ -1,3 +1,15 @@
+#![cfg_attr(
+    test,
+    expect(
+        clippy::arithmetic_side_effects,
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "a test that overflows or truncates fails, which is what a test is for"
+    )
+)]
+
 #[cfg(test)]
 mod atdf;
 mod avr;
@@ -6,8 +18,6 @@ mod elf;
 mod ihex;
 mod int;
 mod layout;
-#[cfg(test)]
-mod lints;
 #[cfg(test)]
 mod mistakes;
 mod serial;

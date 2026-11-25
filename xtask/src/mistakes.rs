@@ -643,6 +643,12 @@ fn copy_of_the_tree(name: &str) -> TempDir {
     for entry in BUILT {
         _ = copy_tree(&root().join(entry), &dir.path().join(entry));
     }
+    // A mistake that leaves dead code behind would stop at the compiler,
+    // before the check it names.
+    let manifest = dir.path().join("Cargo.toml");
+    let denied = fs::read_to_string(&manifest).unwrap();
+    let warned = substitute(&denied, "warnings = \"deny\"\n", "").unwrap();
+    fs::write(&manifest, warned).unwrap();
     dir
 }
 
