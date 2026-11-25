@@ -24,6 +24,15 @@ cargo xtask flash /dev/cu.usbserial-XXXX [file.hex]
 cargo xtask restore /dev/cu.usbserial-XXXX backup/torch
 ```
 
+## Using it
+
+- **Off.** 1C turns it on, at the same level each time, and 1H turns it on at the lowest level.
+- **On.** 1C turns it off, and 1H ramps, each 1H going the other way from the last.
+- **Lockout.** 2H locks it from on or off, confirmed with red aux for five seconds, and 2H again unlocks it to off.
+- **Blue** aux shows while it's off, and goes dark when the cell's low.
+- **Yellow** aux for five seconds after a press means the cell's flat.
+- **White** aux means a fault, and it won't light again until the cell's taken out.
+
 ## Acknowledgements
 
 - [Anduril](https://github.com/ToyKeeper/anduril), by ToyKeeper, the stock firmware, for the click notation and most of what's known about this hardware.
