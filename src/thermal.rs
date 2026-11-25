@@ -1,7 +1,7 @@
 use crate::gradual::Ceiling;
 use crate::ramp::CEILING;
 use crate::sensors::CYCLE_TICKS;
-use crate::u16_from;
+use crate::{u16_from, usize_from};
 
 #[expect(
     clippy::as_conversions,
@@ -19,7 +19,8 @@ pub const FLOOR: u8 = 50;
 const _: () = assert!(FLOOR <= CEILING);
 
 const FRACTION: i16 = 16;
-const HISTORY: usize = 8;
+const HISTORY_MASK: u8 = 7;
+const HISTORY: usize = usize_from(HISTORY_MASK) + 1;
 const LOOKAHEAD: i16 = 4;
 const WINDOW: i16 = 2 * FRACTION;
 const WARMING: i16 = FRACTION;
@@ -67,18 +68,7 @@ const GLITCHES: u8 = 3;
 
 const _: () = assert!(u16_from(MAX_STEP_DOWN) * u16_from(DOWN_EVERY) <= u16_from(CYCLE_TICKS));
 
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::as_conversions,
-    reason = "the assert below holds HISTORY to a u8, and try_from can't be called in a const"
-)]
-const HISTORY_MASK: u8 = HISTORY as u8 - 1;
-
-#[expect(
-    clippy::as_conversions,
-    reason = "widening u8 to usize in a const, where From can't be called"
-)]
-const _: () = assert!(HISTORY.is_power_of_two() && HISTORY <= u8::MAX as usize);
+const _: () = assert!(HISTORY.is_power_of_two());
 
 #[derive(Clone, Debug)]
 struct Smoothed {
