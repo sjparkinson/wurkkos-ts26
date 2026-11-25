@@ -490,22 +490,16 @@ impl Cpu {
         &mut self.r[n]
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "lo is the low register of a pair, so r30 at most"
-    )]
     const fn pair(&self, lo: usize) -> u16 {
-        u16::from_le_bytes([self.reg(lo), self.reg(lo + 1)])
+        debug_assert!(lo & 1 == 0);
+        u16::from_le_bytes([self.reg(lo), self.reg(lo | 1)])
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "lo is the low register of a pair, so r30 at most"
-    )]
     const fn set_pair(&mut self, lo: usize, value: u16) {
+        debug_assert!(lo & 1 == 0);
         let [low, high] = value.to_le_bytes();
         *self.reg_mut(lo) = low;
-        *self.reg_mut(lo + 1) = high;
+        *self.reg_mut(lo | 1) = high;
     }
 
     /// V must already be set.
