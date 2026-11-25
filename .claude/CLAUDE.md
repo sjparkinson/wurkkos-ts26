@@ -2,16 +2,9 @@
 
 Firmware for the Wurkkos TS26 torch (model 0721, ATtiny1616, MP3432 boost driver), in Rust, with no crate dependencies. README.md says what it is, CONTRIBUTING.md has the checks and rules, and docs/ has the hardware, the hazard log and the toolchain.
 
-## Commands
+## Checks
 
-```sh
-cargo fmt --check
-cargo test --workspace --locked -q     # plain `cargo test` skips xtask
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy --package ts26 --lib --bins --examples --release --target avr-none -Zbuild-std=core -- -D warnings   # the only lint on hw.rs and rt.rs
-cargo xtask hex                        # after any firmware change
-cargo test --package xtask --locked -q -- --ignored   # about ten seconds, after touching sim.rs, layout.rs, hw.rs, rt.rs, main.rs or a mistake's lines
-```
+CONTRIBUTING.md has the commands, every one CI runs, and it's the only copy. Plain `cargo test` only tests the root package, so always pass `--workspace`.
 
 The firmware clippy and xtask rebuild `core`, and the first run fetches crates, which the sandbox may block. Rerun outside it if so.
 
