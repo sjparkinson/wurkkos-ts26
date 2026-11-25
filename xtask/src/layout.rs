@@ -4,13 +4,15 @@ use ts26::regs::{VECTORS, addr};
 
 use crate::avr::{io_address, is_two_words, long_target};
 use crate::elf::{DATA_SPACE, Elf, RAM, Segment};
+use crate::int;
 use crate::updi::map;
 
 /// CPU.CCP's I/O address is the same number as its data-space one.
-const CPU_CCP: u16 = addr::CPU_CCP as u16;
+const CPU_CCP: u16 = int::u16_of(addr::CPU_CCP);
 
-const MAPPED_FLASH: u32 = map::FLASH as u32;
-const FLASH_SIZE: u32 = map::FLASH_SIZE as u32;
+const MAPPED_FLASH: u32 = int::u32_from_u16(map::FLASH);
+const FLASH_SIZE: u32 = int::u32_of(map::FLASH_SIZE);
+const TABLE_END: u32 = int::u32_of(VECTORS * 4);
 /// `eor Rd, Rr` is 0010 01rd dddd rrrr.
 const EOR_R1_R1: u16 = 0x2411;
 
@@ -18,8 +20,10 @@ pub fn check(elf: &Elf) -> Result<(), String> {
     memory(elf)?;
     let text = elf.section(".text").ok_or("no .text section")?;
     let image = elf.flash_image();
-    let text = image
-        .get(text.start as usize..text.end as usize)
+    let text = usize::try_from(text.start)
+        .ok()
+        .zip(usize::try_from(text.end).ok())
+        .and_then(|(start, end)| image.get(start..end))
         .ok_or(".text isn't in the flash image")?;
     protected_writes(text)?;
     sleeps(text)?;
@@ -76,35 +80,41 @@ pub fn memory(elf: &Elf) -> Result<(), String> {
 }
 
 fn vectors(image: &[u8], reset: u32, unhandled: u32, halt: u32) -> Result<(), String> {
-    let table_end = (VECTORS * 4) as u32;
-    for slot in 0..VECTORS {
-        let target = jmp_target(image, slot * 4)
-            .ok_or_else(|| format!("vector {slot} at {:#06x} isn't a jmp", slot * 4))?;
+    for (slot, at) in (0..VECTORS * 4).step_by(4).enumerate() {
+        let target = jmp_target(image, at)
+            .ok_or_else(|| format!("vector {slot} at {at:#06x} isn't a jmp"))?;
         if slot == 0 && target != reset {
             return Err(format!(
                 "the reset vector jumps to {target:#06x}, but __reset is at {reset:#06x}"
             ));
         }
-        if target < table_end || target as usize >= image.len() {
+        if !is_after_table(image, target) {
             return Err(format!(
                 "vector {slot} jumps to {target:#06x}, outside the code after the table"
             ));
         }
     }
-    if word(image, unhandled as usize) != Some(EOR_R1_R1) {
+    let at = usize::try_from(unhandled).ok();
+    if at.and_then(|at| word(image, at)) != Some(EOR_R1_R1) {
         return Err(format!(
             "__unhandled_interrupt at {unhandled:#06x} doesn't start with `eor r1, r1`"
         ));
     }
-    let target = jmp_target(image, unhandled as usize + 2).ok_or_else(|| {
-        format!("__unhandled_interrupt at {unhandled:#06x} doesn't `jmp` after clearing r1")
-    })?;
-    if target < table_end || target as usize >= image.len() || target != halt {
+    let target = at
+        .and_then(|at| jmp_target(image, at.checked_add(2)?))
+        .ok_or_else(|| {
+            format!("__unhandled_interrupt at {unhandled:#06x} doesn't `jmp` after clearing r1")
+        })?;
+    if !is_after_table(image, target) || target != halt {
         return Err(format!(
             "__unhandled_interrupt jumps to {target:#06x}, but hw::halt is at {halt:#06x}"
         ));
     }
     Ok(())
+}
+
+fn is_after_table(image: &[u8], target: u32) -> bool {
+    target >= TABLE_END && usize::try_from(target).is_ok_and(|target| target < image.len())
 }
 
 struct Ram {
@@ -127,21 +137,19 @@ fn ram(r: &Ram, segments: &[Segment]) -> Result<(), String> {
         (r.bss_end, "__bss_end"),
         (RAM.end, "the end of SRAM"),
     ];
-    for pair in order.windows(2) {
-        let [(a, a_name), (b, b_name)] = pair else {
-            unreachable!()
-        };
+    for (&(a, a_name), &(b, b_name)) in order.iter().zip(order.iter().skip(1)) {
         if a > b {
             return Err(format!("{a_name} ({a:#08x}) is after {b_name} ({b:#08x})"));
         }
     }
 
-    let len = r.data_end - r.data_start;
-    if len == 0 {
+    let len = r.data_end.abs_diff(r.data_start);
+    let Some(rest) = len.checked_sub(1) else {
         return Ok(());
-    }
+    };
     let window = MAPPED_FLASH..MAPPED_FLASH + FLASH_SIZE;
-    if !window.contains(&r.data_load) || !window.contains(&(r.data_load + len - 1)) {
+    let last = r.data_load.checked_add(rest);
+    if !window.contains(&r.data_load) || !last.is_some_and(|last| window.contains(&last)) {
         return Err(format!(
             "__data_load ({:#06x}) isn't in the mapped-flash window",
             r.data_load
@@ -151,7 +159,9 @@ fn ram(r: &Ram, segments: &[Segment]) -> Result<(), String> {
         .iter()
         .find(|s| s.vaddr == r.data_start)
         .ok_or("no loadable segment holds .data's initial values")?;
-    if data.paddr + MAPPED_FLASH != r.data_load || data.data.len() as u32 != len {
+    if data.paddr.checked_add(MAPPED_FLASH) != Some(r.data_load)
+        || u32::try_from(data.data.len()) != Ok(len)
+    {
         return Err(format!(
             "__data_load is {:#06x}, but .data's {} bytes are at flash {:#06x} ({} bytes)",
             r.data_load,
@@ -169,7 +179,9 @@ fn mapped(segments: &[Segment]) -> Result<(), String> {
         let expected = if s.vaddr < DATA_SPACE {
             s.paddr
         } else if (elf_window..elf_window + FLASH_SIZE).contains(&s.vaddr) {
-            s.paddr + elf_window
+            s.paddr.checked_add(elf_window).ok_or_else(|| {
+                format!("segment at flash {:#06x} is past the end of flash", s.paddr)
+            })?
         } else {
             continue; // .data, checked by `ram`
         };
@@ -186,18 +198,16 @@ fn mapped(segments: &[Segment]) -> Result<(), String> {
 /// The chip only accepts a protected write within four instructions of the
 /// CCP key.
 fn protected_writes(text: &[u8]) -> Result<usize, String> {
-    let mut found = 0;
-    let mut at = 0;
-    while let Some(w) = word(text, at) {
+    let mut found = 0_usize;
+    for (at, w, after) in instructions(text) {
         if out_address(w) == Some(CPU_CCP) {
-            if !word(text, at + 2).is_some_and(is_st_z) {
+            if !after.is_some_and(is_st_z) {
                 return Err(format!(
                     "the CCP unlock at {at:#06x} isn't followed by `st Z`"
                 ));
             }
-            found += 1;
+            found = found.saturating_add(1);
         }
-        at += if is_two_words(w) { 4 } else { 2 };
     }
     if found == 0 {
         return Err("no CCP unlock in .text, but hw::init should set the clock through one".into());
@@ -210,20 +220,19 @@ const SLEEP: u16 = 0x9588;
 const RJMP_TO_THE_SLEEP_BEFORE: u16 = 0xCFFE;
 
 fn sleeps(text: &[u8]) -> Result<usize, String> {
-    let (mut found, mut at, mut before) = (0, 0, None);
-    while let Some(w) = word(text, at) {
+    let (mut found, mut before) = (0_usize, None);
+    for (at, w, after) in instructions(text) {
         if w == SLEEP {
-            let for_good = word(text, at + 2) == Some(RJMP_TO_THE_SLEEP_BEFORE);
+            let for_good = after == Some(RJMP_TO_THE_SLEEP_BEFORE);
             if before != Some(SEI) && !for_good {
                 return Err(format!(
                     "the `sleep` at {at:#06x} doesn't follow `sei`, so an interrupt that lands \
                      between them is slept through"
                 ));
             }
-            found += 1;
+            found = found.saturating_add(1);
         }
         before = Some(w);
-        at += if is_two_words(w) { 4 } else { 2 };
     }
     if found == 0 {
         return Err("no `sleep` in .text, but hw::wait_for_tick should have one".into());
@@ -231,18 +240,37 @@ fn sleeps(text: &[u8]) -> Result<usize, String> {
     Ok(found)
 }
 
+fn instructions(text: &[u8]) -> impl Iterator<Item = (usize, u16, Option<u16>)> {
+    let mut words = text
+        .as_chunks()
+        .0
+        .iter()
+        .zip((0..).step_by(2))
+        .map(|(&pair, at)| (at, u16::from_le_bytes(pair)))
+        .peekable();
+    std::iter::from_fn(move || {
+        let (at, w) = words.next()?;
+        let after = words.peek().map(|&(_, after)| after);
+        if is_two_words(w) {
+            words.next();
+        }
+        Some((at, w, after))
+    })
+}
+
 pub(crate) fn word(bytes: &[u8], at: usize) -> Option<u16> {
-    let b = bytes.get(at..at + 2)?;
-    Some(u16::from_le_bytes([b[0], b[1]]))
+    let pair = bytes.get(at..)?.first_chunk()?;
+    Some(u16::from_le_bytes(*pair))
 }
 
 /// `jmp k` is 1001 010k kkkk 110k, then the low 16 bits of k, a word address.
 pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
-    let (w0, w1) = (word(image, at)?, word(image, at + 2)?);
+    let &[a, b, c, d] = image.get(at..)?.first_chunk()?;
+    let (w0, w1) = (u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d]));
     if w0 & 0xFE0E != 0x940C {
         return None;
     }
-    Some(long_target(w0, w1) * 2)
+    long_target(w0, w1).checked_mul(2)
 }
 
 /// `out A, Rr` is 1011 1AAr rrrr AAAA.

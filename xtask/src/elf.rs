@@ -1,12 +1,16 @@
+use std::ffi::CStr;
 use std::ops::Range;
 
 use ts26::regs::mem;
 
+use crate::int;
+
 /// AVR ELF files put data space at 0x800000.
 pub const DATA_SPACE: u32 = 0x80_0000;
-pub const RAM: Range<u32> =
-    DATA_SPACE + mem::INTERNAL_SRAM_START as u32..DATA_SPACE + mem::INTERNAL_SRAM_END as u32;
-pub const SRAM: Range<u16> = (RAM.start - DATA_SPACE) as u16..(RAM.end - DATA_SPACE) as u16;
+pub const RAM: Range<u32> = DATA_SPACE + int::u32_of(mem::INTERNAL_SRAM_START)
+    ..DATA_SPACE + int::u32_of(mem::INTERNAL_SRAM_END);
+pub const SRAM: Range<u16> =
+    int::u16_of(mem::INTERNAL_SRAM_START)..int::u16_of(mem::INTERNAL_SRAM_END);
 
 const PT_LOAD: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -18,6 +22,7 @@ pub struct Elf {
     segments: Vec<Segment>,
     sections: Vec<Section>,
     symbols: Vec<(String, u32)>,
+    image: Vec<u8>,
 }
 
 pub struct Segment {
@@ -29,13 +34,16 @@ pub struct Segment {
 struct Section {
     name: String,
     flags: u32,
-    addr: u32,
+    addr: Range<u32>,
     size: u32,
 }
 
 impl Elf {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let r = Reader(bytes);
+        let r = Reader {
+            file: bytes,
+            base: 0,
+        };
         if bytes.get(..4) != Some(b"\x7fELF".as_slice()) {
             return Err("not an ELF file".into());
         }
@@ -49,71 +57,62 @@ impl Elf {
 
         let (phoff, phentsize, phnum) = (r.u32(28)?, r.u16(42)?, r.u16(44)?);
         let mut segments = Vec::new();
-        for i in 0..u32::from(phnum) {
-            let at = (phoff + i * u32::from(phentsize)) as usize;
-            let (kind, offset, vaddr, paddr, filesz) = (
-                r.u32(at)?,
-                r.u32(at + 4)?,
-                r.u32(at + 8)?,
-                r.u32(at + 12)?,
-                r.u32(at + 16)?,
-            );
+        for i in 0..phnum {
+            let ph = r.at(phoff)?.entry(phentsize, i.into())?;
+            let (kind, offset, vaddr, paddr, filesz) =
+                (ph.u32(0)?, ph.u32(4)?, ph.u32(8)?, ph.u32(12)?, ph.u32(16)?);
             if kind == PT_LOAD && filesz > 0 && paddr < DATA_SPACE {
-                let data = r.slice(offset as usize, filesz as usize)?.to_vec();
+                let data = r.slice(offset, filesz)?.to_vec();
                 segments.push(Segment { vaddr, paddr, data });
             }
         }
 
         let (shoff, shentsize, shnum, shstrndx) = (r.u32(32)?, r.u16(46)?, r.u16(48)?, r.u16(50)?);
-        let header = |i: u32| (shoff + i * u32::from(shentsize)) as usize;
-        let names = r.u32(header(u32::from(shstrndx)) + 16)? as usize;
+        let header = |i: u32| r.at(shoff)?.entry(shentsize, i);
+        let names = r.at(header(shstrndx.into())?.u32(16)?)?;
         let mut sections = Vec::new();
         let mut symbols = Vec::new();
-        for i in 0..u32::from(shnum) {
-            let at = header(i);
+        for i in 0..shnum {
+            let sh = header(i.into())?;
+            let name = names.cstr(sh.u32(0)?)?;
+            let (flags, addr, size) = (sh.u32(8)?, sh.u32(12)?, sh.u32(20)?);
+            let end = addr
+                .checked_add(size)
+                .ok_or_else(|| format!("section {name} ends past the 32-bit address space"))?;
             sections.push(Section {
-                name: r.cstr(names + r.u32(at)? as usize)?,
-                flags: r.u32(at + 8)?,
-                addr: r.u32(at + 12)?,
-                size: r.u32(at + 20)?,
+                name,
+                flags,
+                addr: addr..end,
+                size,
             });
-            if r.u32(at + 4)? == SHT_SYMTAB {
-                let (offset, size) = (r.u32(at + 16)? as usize, r.u32(at + 20)? as usize);
-                let strings = r.u32(header(r.u32(at + 24)?) + 16)? as usize;
-                for sym in (offset..offset + size).step_by(16).skip(1) {
-                    let name = r.cstr(strings + r.u32(sym)? as usize)?;
-                    symbols.push((name, r.u32(sym + 4)?));
+            if sh.u32(4)? == SHT_SYMTAB {
+                let (table, size) = (r.at(sh.u32(16)?)?, sh.u32(20)?);
+                let strings = r.at(header(sh.u32(24)?)?.u32(16)?)?;
+                for sym in (0..size).step_by(16).skip(1) {
+                    let sym = table.at(sym)?;
+                    symbols.push((strings.cstr(sym.u32(0)?)?, sym.u32(4)?));
                 }
             }
         }
 
+        let image = lay_out(&segments)?;
         Ok(Self {
             entry,
             segments,
             sections,
             symbols,
+            image,
         })
     }
 
     pub fn flash_image(&self) -> Vec<u8> {
-        let end = self
-            .segments
-            .iter()
-            .map(|s| s.paddr as usize + s.data.len())
-            .max()
-            .unwrap_or(0);
-        let mut image = vec![0xFF; end];
-        for s in &self.segments {
-            let start = s.paddr as usize;
-            image[start..start + s.data.len()].copy_from_slice(&s.data);
-        }
-        image
+        self.image.clone()
     }
 
     pub fn ram_bytes(&self) -> u32 {
         self.sections
             .iter()
-            .filter(|s| s.flags & SHF_ALLOC != 0 && RAM.contains(&s.addr))
+            .filter(|s| s.flags & SHF_ALLOC != 0 && RAM.contains(&s.addr.start))
             .map(|s| s.size)
             .sum()
     }
@@ -130,7 +129,7 @@ impl Elf {
         self.sections
             .iter()
             .find(|s| s.name == name)
-            .map(|s| s.addr..s.addr + s.size)
+            .map(|s| s.addr.clone())
     }
 
     pub fn symbol(&self, name: &str) -> Option<u32> {
@@ -150,39 +149,94 @@ impl Elf {
     }
 }
 
-struct Reader<'a>(&'a [u8]);
+fn lay_out(segments: &[Segment]) -> Result<Vec<u8>, String> {
+    let mut image = Vec::new();
+    for s in segments {
+        let too_big = || format!("the segment at flash {:#06x} is too big", s.paddr);
+        let start = usize::try_from(s.paddr).map_err(|_| too_big())?;
+        let end = start.checked_add(s.data.len()).ok_or_else(too_big)?;
+        if image.len() < end {
+            image.resize(end, 0xFF);
+        }
+        for (to, &from) in image.iter_mut().skip(start).zip(&s.data) {
+            *to = from;
+        }
+    }
+    Ok(image)
+}
 
-impl Reader<'_> {
-    fn slice(&self, at: usize, len: usize) -> Result<&[u8], String> {
-        self.0
-            .get(at..at + len)
+#[derive(Clone, Copy)]
+struct Reader<'a> {
+    file: &'a [u8],
+    base: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn position(self, offset: u32) -> Result<usize, String> {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|offset| self.base.checked_add(offset))
+            .ok_or_else(|| format!("truncated at byte {offset} after byte {}", self.base))
+    }
+
+    fn at(self, offset: u32) -> Result<Self, String> {
+        Ok(Self {
+            file: self.file,
+            base: self.position(offset)?,
+        })
+    }
+
+    fn entry(self, size: u16, index: u32) -> Result<Self, String> {
+        let offset = index.checked_mul(size.into()).ok_or_else(|| {
+            format!(
+                "truncated at entry {index} of the table at byte {}",
+                self.base
+            )
+        })?;
+        self.at(offset)
+    }
+
+    fn slice(self, offset: u32, len: u32) -> Result<&'a [u8], String> {
+        let at = self.position(offset)?;
+        usize::try_from(len)
+            .ok()
+            .and_then(|len| at.checked_add(len))
+            .and_then(|end| self.file.get(at..end))
             .ok_or_else(|| format!("truncated at byte {at}"))
     }
 
-    fn u8(&self, at: usize) -> Result<u8, String> {
-        Ok(self.slice(at, 1)?[0])
+    fn array<const N: usize>(self, offset: u32) -> Result<[u8; N], String> {
+        let at = self.position(offset)?;
+        self.file
+            .get(at..)
+            .and_then(<[u8]>::first_chunk)
+            .copied()
+            .ok_or_else(|| format!("truncated at byte {at}"))
     }
 
-    fn u16(&self, at: usize) -> Result<u16, String> {
-        let b = self.slice(at, 2)?;
-        Ok(u16::from_le_bytes([b[0], b[1]]))
+    fn u8(self, offset: u32) -> Result<u8, String> {
+        self.array(offset).map(u8::from_le_bytes)
     }
 
-    fn u32(&self, at: usize) -> Result<u32, String> {
-        let b = self.slice(at, 4)?;
-        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    fn u16(self, offset: u32) -> Result<u16, String> {
+        self.array(offset).map(u16::from_le_bytes)
     }
 
-    fn cstr(&self, at: usize) -> Result<String, String> {
+    fn u32(self, offset: u32) -> Result<u32, String> {
+        self.array(offset).map(u32::from_le_bytes)
+    }
+
+    fn cstr(self, offset: u32) -> Result<String, String> {
+        let at = self.position(offset)?;
         let rest = self
-            .0
+            .file
             .get(at..)
             .ok_or_else(|| format!("truncated at byte {at}"))?;
-        let len = rest
-            .iter()
-            .position(|&b| b == 0)
-            .ok_or_else(|| format!("unterminated string at byte {at}"))?;
-        String::from_utf8(rest[..len].to_vec()).map_err(|_| format!("bad string at byte {at}"))
+        let text = CStr::from_bytes_until_nul(rest)
+            .map_err(|_| format!("unterminated string at byte {at}"))?;
+        text.to_str()
+            .map(str::to_owned)
+            .map_err(|_| format!("bad string at byte {at}"))
     }
 }
 
