@@ -14,11 +14,6 @@
 //! enabled, it's refused inside a handler or with SREG.I clear, since only
 //! figure 13-1, a block diagram, says that interrupt couldn't wake the CPU.
 
-#![expect(
-    clippy::redundant_pub_crate,
-    reason = "pub(crate) inside private modules says who uses an item, not who can"
-)]
-
 use std::ops::Range;
 
 use ts26::regs::addr;
@@ -677,7 +672,7 @@ impl Cpu {
 
 /// `lds` 1001 000d dddd 0000, `sts` 1001 001d dddd 0000, `jmp` 1001 010k
 /// kkkk 110k and `call` 1001 010k kkkk 111k.
-pub(crate) const fn is_two_words(w: u16) -> bool {
+pub const fn is_two_words(w: u16) -> bool {
     w & 0xFC0F == 0x9000 || w & 0xFE0C == 0x940C
 }
 
@@ -686,7 +681,7 @@ pub(crate) const fn is_two_words(w: u16) -> bool {
     clippy::arithmetic_side_effects,
     reason = "ldi only takes r16 to r31, which is what every caller passes"
 )]
-pub(crate) fn ldi(d: u8, k: u8) -> u16 {
+pub fn ldi(d: u8, k: u8) -> u16 {
     let (d, k) = (u16::from(d), u16::from(k));
     0xE000 | (k & 0xF0) << 4 | (d - 16) << 4 | k & 0x0F
 }
@@ -700,20 +695,20 @@ const fn immediate(w: u16) -> (u8, u8) {
     (0x10 | low >> 4, high << 4 | low & 0x0F)
 }
 
-pub(crate) fn ldi_operands(w: u16) -> Option<(u8, u8)> {
+pub fn ldi_operands(w: u16) -> Option<(u8, u8)> {
     (w >> 12 == 0xE).then_some(immediate(w))
 }
 
-pub(crate) fn long_target(w0: u16, w1: u16) -> u32 {
+pub fn long_target(w0: u16, w1: u16) -> u32 {
     let high = u32::from(w0 & 0x01F0) << 13 | u32::from(w0 & 1) << 16;
     high | u32::from(w1)
 }
 
-pub(crate) const fn io_address(w: u16) -> u16 {
+pub const fn io_address(w: u16) -> u16 {
     (w >> 5) & 0x30 | w & 0x0F
 }
 
-pub(crate) const fn is_call(w: u16) -> bool {
+pub const fn is_call(w: u16) -> bool {
     w & 0xFE0E == 0x940E
 }
 
@@ -722,28 +717,28 @@ fn unknown(w: u16) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod asm {
-    pub(crate) const NOP: u16 = 0x0000;
-    pub(crate) const SEI: u16 = 0x9478;
-    pub(crate) const CLI: u16 = 0x94F8;
-    pub(crate) const SLEEP: u16 = 0x9588;
-    pub(crate) const RETI: u16 = 0x9518;
+pub mod asm {
+    pub const NOP: u16 = 0x0000;
+    pub const SEI: u16 = 0x9478;
+    pub const CLI: u16 = 0x94F8;
+    pub const SLEEP: u16 = 0x9588;
+    pub const RETI: u16 = 0x9518;
 
-    pub(crate) const fn jmp(byte_addr: u32) -> [u16; 2] {
+    pub const fn jmp(byte_addr: u32) -> [u16; 2] {
         let k = byte_addr / 2;
         let w0 = 0x940C | ((k >> 13) & 0x01F0) as u16 | ((k >> 16) & 1) as u16;
         [w0, k as u16]
     }
 
-    pub(crate) const fn out(a: u16, r: u8) -> u16 {
+    pub const fn out(a: u16, r: u8) -> u16 {
         0xB800 | (a & 0x30) << 5 | (r as u16) << 4 | a & 0x0F
     }
 
-    pub(crate) const fn sts(r: u8, a: u16) -> [u16; 2] {
+    pub const fn sts(r: u8, a: u16) -> [u16; 2] {
         [0x9200 | (r as u16) << 4, a]
     }
 
-    pub(crate) fn bytes(words: impl IntoIterator<Item = u16>) -> Vec<u8> {
+    pub fn bytes(words: impl IntoIterator<Item = u16>) -> Vec<u8> {
         words.into_iter().flat_map(u16::to_le_bytes).collect()
     }
 }
