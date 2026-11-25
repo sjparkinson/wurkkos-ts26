@@ -94,15 +94,25 @@ impl Ui {
         }
     }
 
+    pub fn handle_unlit(&mut self, event: Event) -> bool {
+        let locks = core::mem::take(&mut self.clicked_off)
+            && matches!((self.mode, event), (Mode::Off, Event::Click(3)));
+        if locks {
+            self.mode = Mode::Lockout;
+        }
+        locks
+    }
+
     pub fn handle(&mut self, event: Event) {
-        let clicked_off = core::mem::take(&mut self.clicked_off);
+        if self.handle_unlit(event) {
+            return;
+        }
         match (self.mode, event) {
             (Mode::Off, Event::Click(1)) => {
                 self.mode = Mode::On;
                 self.level = ON_LEVEL;
                 self.up = false;
             }
-            (Mode::Off, Event::Click(3)) if clicked_off => self.mode = Mode::Lockout,
             (
                 Mode::Off,
                 Event::Hold {
@@ -335,6 +345,36 @@ mod tests {
             ui.handle(Event::Click(3));
             assert_eq!(ui.mode(), Mode::Off, "{between:?}");
         }
+    }
+
+    #[test]
+    fn handled_unlit_it_only_ever_locks_and_never_lights() {
+        for event in [Event::Click(1), Event::Click(3), hold(0, 0), hold(0, 1)] {
+            for setup in [&[][..], &[Event::Click(1)], &LOCK] {
+                let mut ui = Ui::new();
+                for &event in setup {
+                    ui.handle(event);
+                }
+                let before = (ui.mode(), ui.output_level());
+                assert!(!ui.handle_unlit(event));
+                assert_eq!((ui.mode(), ui.output_level()), before, "{event:?}");
+            }
+        }
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        ui.handle(Event::Click(1));
+        assert!(ui.handle_unlit(Event::Click(3)));
+        assert_eq!(ui.mode(), Mode::Lockout);
+    }
+
+    #[test]
+    fn an_event_handled_unlit_ends_the_chance_to_lock() {
+        let mut ui = Ui::new();
+        ui.handle(Event::Click(1));
+        ui.handle(Event::Click(1));
+        assert!(!ui.handle_unlit(Event::Click(1)));
+        ui.handle(Event::Click(3));
+        assert_eq!(ui.mode(), Mode::Off);
     }
 
     #[test]
