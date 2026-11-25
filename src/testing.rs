@@ -16,7 +16,7 @@ use core::ops::Deref;
 use core::str::FromStr;
 
 use crate::battery;
-use crate::button::{Event, HOLD_TICKS, RELEASE_TICKS};
+use crate::button::{Event, GUARD_TICKS, HOLD_TICKS, RELEASE_TICKS};
 use crate::selftest::Faults;
 use crate::sensors::{Channel, Convert};
 use crate::temp::Calibration;
@@ -112,6 +112,10 @@ impl Adc {
 
 const PRESS_TICKS: u16 = 4;
 const GAP_TICKS: u16 = 4;
+const _: () = assert!(
+    GUARD_TICKS < GAP_TICKS && GAP_TICKS < RELEASE_TICKS,
+    "past the guard, or a quick click after one that acted counts for nothing, and inside the release, or quick clicks stop grouping"
+);
 const SETTLE_TICKS: u16 = RELEASE_TICKS + 1;
 const DEFAULT_HOLD_TICKS: u16 = TICKS_PER_SECOND;
 
@@ -769,9 +773,9 @@ mod tests {
         let mut clicks = 0;
         Rig::play_with(parse(["2C", "wait:1s"]).map(Result::unwrap), |_, event| {
             ticks += 1;
-            clicks += usize::from(event == Some(Event::Click(2)));
+            clicks += usize::from(event == Some(Event::Click(1)));
         });
-        assert_eq!(clicks, 1);
+        assert_eq!(clicks, 2);
         assert_eq!(ticks, 2 * 8 + SETTLE_TICKS + TICKS_PER_SECOND);
     }
 
