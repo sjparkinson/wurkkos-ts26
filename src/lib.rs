@@ -1,17 +1,14 @@
 #![no_std]
 #![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
+    test,
+    expect(
         clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
         clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::float_arithmetic,
+        reason = "a test that overflows or truncates fails, which is what a test is for"
     )
 )]
 
@@ -26,18 +23,6 @@ pub mod selftest;
 pub mod sensors;
 pub mod temp;
 #[cfg(any(test, feature = "testing"))]
-#[allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable,
-    clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::as_conversions
-)]
 pub mod testing;
 pub mod thermal;
 pub mod torch;

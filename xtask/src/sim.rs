@@ -3429,7 +3429,7 @@ mod tests {
     }
 
     fn stop_for_good(first: u16) -> Result<u64, String> {
-        let mut sim = Sim::new(image([first, SLEEP]), SRAM.start, Ends::default()).unwrap();
+        let mut sim = Sim::new(image([first, SLEEP]), SRAM.start, Ends::default())?;
         sim.chip.io[reg::SLPCTRL_CTRLA] = SLEEP_IDLE | SLPCTRL_SEN;
         sim.tick(false)
     }
@@ -3934,7 +3934,7 @@ mod tests {
     }
 
     fn pit(chip: &mut Chip, value: u8) -> Result<(), String> {
-        while peek(chip, reg::RTC_PITSTATUS).unwrap() != 0 {}
+        while peek(chip, reg::RTC_PITSTATUS)? != 0 {}
         poke(chip, reg::RTC_PITCTRLA, value)
     }
 
