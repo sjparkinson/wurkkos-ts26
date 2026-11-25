@@ -65,17 +65,12 @@ impl Gradual {
         self.level
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "level is over target going down, so at least 1, and under it going up, \
-                  so at most 254"
-    )]
     pub const fn tick(&mut self, target: u8) -> u8 {
         let level = self.level;
         let (every, next) = if target < level {
-            (self.down_every, level - 1)
+            (self.down_every, level.saturating_sub(1))
         } else if target > level {
-            (self.up_every, level + 1)
+            (self.up_every, level.saturating_add(1))
         } else {
             self.waited = 0;
             return level;
