@@ -12,4 +12,7 @@ rustflags = [
   "-C", "linker=rust-lld",
   "-C", "linker-flavor=ld.lld",
   "-C", "relocation-model=static",
+  # Fills of up to 16 bytes (thermal's history) go in as stores rather than
+  # a call, which keeps compiler_builtins' 148-byte memset out of the image.
+  "-C", "llvm-args=--max-store-memset=16",
 ]

@@ -89,7 +89,7 @@ struct Smoothed {
 }
 
 impl Smoothed {
-    /// Building the history whole pulls in `memcpy`, which is bigger than this `memset`.
+    /// Building the history whole pulls in `memcpy`, which is bigger than filling it in place.
     fn start(slot: &mut Option<Self>, reading: u16) -> &mut Self {
         let now = reading.cast_signed();
         let smoothed = slot.insert(Self {
