@@ -511,11 +511,7 @@ fn io_error(error: io::Error) -> String {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "pub(crate) inside private modules says who uses an item, not who can"
-)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use fake::Tiny;
 
@@ -1258,7 +1254,7 @@ pub(crate) mod tests {
 
     /// Written from the same datasheet as the programmer, so it catches
     /// slips, not misreadings.
-    pub(crate) mod fake {
+    pub mod fake {
         use super::super::*;
         use std::collections::VecDeque;
 

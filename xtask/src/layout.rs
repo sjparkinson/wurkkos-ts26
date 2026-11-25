@@ -1,10 +1,5 @@
 //! Opcodes are from the AVR Instruction Set Manual.
 
-#![expect(
-    clippy::redundant_pub_crate,
-    reason = "pub(crate) inside private modules says who uses an item, not who can"
-)]
-
 use ts26::regs::{VECTORS, addr};
 
 use crate::avr::{io_address, is_two_words, long_target};
@@ -39,7 +34,7 @@ pub fn check(elf: &Elf) -> Result<(), String> {
 /// names this nightly emits, so a new nightly can rename them past the check.
 const PANIC_PATTERNS: [&str; 2] = ["panic", "begin_unwind"];
 
-pub(crate) fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
+pub fn no_panics<'a>(symbols: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
     let found: Vec<&str> = symbols
         .into_iter()
         .filter(|name| PANIC_PATTERNS.iter().any(|p| name.contains(p)))
@@ -263,13 +258,13 @@ fn instructions(text: &[u8]) -> impl Iterator<Item = (usize, u16, Option<u16>)> 
     })
 }
 
-pub(crate) fn word(bytes: &[u8], at: usize) -> Option<u16> {
+pub fn word(bytes: &[u8], at: usize) -> Option<u16> {
     let pair = bytes.get(at..)?.first_chunk()?;
     Some(u16::from_le_bytes(*pair))
 }
 
 /// `jmp k` is 1001 010k kkkk 110k, then the low 16 bits of k, a word address.
-pub(crate) fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
+pub fn jmp_target(image: &[u8], at: usize) -> Option<u32> {
     let &[a, b, c, d] = image.get(at..)?.first_chunk()?;
     let (w0, w1) = (u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d]));
     if w0 & 0xFE0E != 0x940C {
