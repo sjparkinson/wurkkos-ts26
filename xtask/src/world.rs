@@ -87,7 +87,7 @@ impl From<Scene> for World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ts26::testing::temperature_reading;
+    use ts26::testing::{AdcFault, temperature_reading};
 
     #[test]
     fn factory_fuses_pass_and_a_bad_one_is_a_fault() {
@@ -103,8 +103,7 @@ mod tests {
             kelvin: 353,
             fault: true,
             corrupt_flash: true,
-            adc_dead: true,
-            adc_frozen: true,
+            adc: Some(AdcFault::Dead),
         };
         let world = World::from(scene);
         assert_eq!(world.scene, scene);
