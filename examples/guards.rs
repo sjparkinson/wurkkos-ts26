@@ -52,11 +52,7 @@ mod guards {
     #[allow(unsafe_code, clippy::empty_loop)]
     #[unsafe(no_mangle)]
     #[inline(never)]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "a named stopping point the simulator looks for, never evaluated at compile time"
-    )]
-    extern "C" fn guards_done() -> ! {
+    const extern "C" fn guards_done() -> ! {
         loop {}
     }
 
