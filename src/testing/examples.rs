@@ -181,10 +181,6 @@ pub const EXAMPLES: &[Example] = &[
 
 #[cfg(test)]
 #[must_use]
-#[expect(
-    clippy::missing_panics_doc,
-    reason = "tests only, where a name with no example should fail the test"
-)]
 pub fn example(name: &str) -> &'static Example {
     EXAMPLES
         .iter()
