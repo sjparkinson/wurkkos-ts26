@@ -1819,12 +1819,7 @@ mod tests {
         ticks
     }
 
-    #[expect(
-        clippy::similar_names,
-        reason = "the seed it starts from and what it has seen"
-    )]
-    fn throw_noise_at_torches(seed: u32, pace: Pace, ticks: u32, seen: &mut Seen) {
-        let mut rng = Rng::new(seed);
+    fn throw_noise_at_torches(mut rng: Rng, pace: Pace, ticks: u32, seen: &mut Seen) {
         let (mut life, mut run) = (0, 0);
         while run < ticks {
             let faults = match rng.next_u16() % 8 {
@@ -1847,7 +1842,7 @@ mod tests {
     fn random_switching_with_long_rests_never_breaks_a_promise() {
         let mut seen = Seen::default();
         for seed in [0x5EED_0005, 0x5EED_0006] {
-            throw_noise_at_torches(seed, Pace::Slow, 4_000_000, &mut seen);
+            throw_noise_at_torches(Rng::new(seed), Pace::Slow, 4_000_000, &mut seen);
         }
         for (what, times) in [
             ("resting", seen.resting),
@@ -1871,7 +1866,7 @@ mod tests {
     fn random_switching_and_readings_never_break_a_promise() {
         let mut seen = Seen::default();
         for seed in [0x5EED_0003, 0x5EED_0004] {
-            throw_noise_at_torches(seed, Pace::Quick, 1_000_000, &mut seen);
+            throw_noise_at_torches(Rng::new(seed), Pace::Quick, 1_000_000, &mut seen);
         }
         for (what, times) in [
             ("blue dark for the cell", seen.blue_dark_for_the_cell),
