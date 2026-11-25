@@ -127,6 +127,10 @@ impl Cpu {
             .map_err(|e| format!("{address:#06x}: {e}"))
     }
 
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "the instruction set manual's operand names"
+    )]
     fn execute(&mut self, bus: &mut impl Bus, w: u16) -> Result<(), String> {
         let d = usize::from((w >> 4) & 0x1F);
         let r = usize::from(w & 0x0F | (w >> 5) & 0x10);
@@ -137,38 +141,7 @@ impl Cpu {
 
         match w >> 12 {
             0x0 => match (w >> 10) & 3 {
-                0 => match (w >> 8) & 3 {
-                    0 if w == 0 => {} // nop
-                    1 => {
-                        // movw
-                        let (d, r) = (usize::from((w >> 4) & 0xF) * 2, usize::from(w & 0xF) * 2);
-                        self.set_pair(d, self.pair(r));
-                    }
-                    2 => {
-                        // muls, r16 to r31 only.
-                        let (a, b) = (self.reg(hi), self.reg(16 + usize::from(w & 0xF)));
-                        let p = sign_extended(a).wrapping_mul(sign_extended(b));
-                        self.product(p.cast_unsigned(), false);
-                    }
-                    3 => {
-                        // mulsu, fmul, fmuls and fmulsu, r16 to r23 only.
-                        let (a, b) = (
-                            self.reg(16 + usize::from((w >> 4) & 7)),
-                            self.reg(16 + usize::from(w & 7)),
-                        );
-                        let (sa, sb, fractional) = match w & 0x88 {
-                            0x00 => (true, false, false), // mulsu
-                            0x08 => (false, false, true), // fmul
-                            0x80 => (true, true, true),   // fmuls
-                            _ => (true, false, true),     // fmulsu
-                        };
-                        let a = if sa { sign_extended(a) } else { i16::from(a) };
-                        let b = if sb { sign_extended(b) } else { i16::from(b) };
-                        // 255 * 255 doesn't fit an i16, but its bits are right.
-                        self.product(a.wrapping_mul(b).cast_unsigned(), fractional);
-                    }
-                    _ => return Err(unknown(w)),
-                },
+                0 => self.execute_multiply(w)?,
                 1 => {
                     self.sub(rd, rr, carry, true); // cpc
                 }
@@ -232,32 +205,75 @@ impl Cpu {
                 self.jump_relative(w);
             }
             0xE => *self.reg_mut(hi) = k, // ldi
-            _ => {
-                let [low, _] = w.to_le_bytes();
-                let bit = low & 7;
-                match (w >> 9) & 7 {
-                    0..=3 => {
-                        // brbs/brbc, where bit 10 picks "branch if clear".
-                        if self.flag(bit) != (w & 0x0400 != 0) {
-                            let k = (w << 6).cast_signed() >> 9;
-                            self.pc = self.pc.wrapping_add_signed(i32::from(k));
-                        }
-                    }
-                    4 if w & 8 == 0 => {
-                        // bld
-                        let mask = 1 << bit;
-                        *self.reg_mut(d) = if self.flag(T) { rd | mask } else { rd & !mask };
-                    }
-                    5 if w & 8 == 0 => self.set(T, rd & 1 << bit != 0), // bst
-                    6 | 7 if w & 8 == 0 => {
-                        // sbrc/sbrs, where bit 9 picks "skip if set".
-                        if (rd & 1 << bit != 0) == (w & 0x0200 != 0) {
-                            self.skip(bus)?;
-                        }
-                    }
-                    _ => return Err(unknown(w)),
+            _ => self.execute_f(bus, w, d)?,
+        }
+        Ok(())
+    }
+
+    /// nop, movw, muls, mulsu, fmul, fmuls and fmulsu.
+    fn execute_multiply(&mut self, w: u16) -> Result<(), String> {
+        match (w >> 8) & 3 {
+            0 if w == 0 => {} // nop
+            1 => {
+                // movw
+                let (d, r) = (usize::from((w >> 4) & 0xF) * 2, usize::from(w & 0xF) * 2);
+                self.set_pair(d, self.pair(r));
+            }
+            2 => {
+                // muls, r16 to r31 only.
+                let hi = usize::from(immediate(w).0);
+                let (a, b) = (self.reg(hi), self.reg(16 + usize::from(w & 0xF)));
+                let p = sign_extended(a).wrapping_mul(sign_extended(b));
+                self.product(p.cast_unsigned(), false);
+            }
+            3 => {
+                // mulsu, fmul, fmuls and fmulsu, r16 to r23 only.
+                let (a, b) = (
+                    self.reg(16 + usize::from((w >> 4) & 7)),
+                    self.reg(16 + usize::from(w & 7)),
+                );
+                let (sa, sb, fractional) = match w & 0x88 {
+                    0x00 => (true, false, false), // mulsu
+                    0x08 => (false, false, true), // fmul
+                    0x80 => (true, true, true),   // fmuls
+                    _ => (true, false, true),     // fmulsu
+                };
+                let a = if sa { sign_extended(a) } else { i16::from(a) };
+                let b = if sb { sign_extended(b) } else { i16::from(b) };
+                // 255 * 255 doesn't fit an i16, but its bits are right.
+                self.product(a.wrapping_mul(b).cast_unsigned(), fractional);
+            }
+            _ => return Err(unknown(w)),
+        }
+        Ok(())
+    }
+
+    /// brbs, brbc, bld, bst, sbrc and sbrs.
+    fn execute_f(&mut self, bus: &impl Bus, w: u16, d: usize) -> Result<(), String> {
+        let rd = self.reg(d);
+        let [low, _] = w.to_le_bytes();
+        let bit = low & 7;
+        match (w >> 9) & 7 {
+            0..=3 => {
+                // brbs/brbc, where bit 10 picks "branch if clear".
+                if self.flag(bit) != (w & 0x0400 != 0) {
+                    let k = (w << 6).cast_signed() >> 9;
+                    self.pc = self.pc.wrapping_add_signed(i32::from(k));
                 }
             }
+            4 if w & 8 == 0 => {
+                // bld
+                let mask = 1 << bit;
+                *self.reg_mut(d) = if self.flag(T) { rd | mask } else { rd & !mask };
+            }
+            5 if w & 8 == 0 => self.set(T, rd & 1 << bit != 0), // bst
+            6 | 7 if w & 8 == 0 => {
+                // sbrc/sbrs, where bit 9 picks "skip if set".
+                if (rd & 1 << bit != 0) == (w & 0x0200 != 0) {
+                    self.skip(bus)?;
+                }
+            }
+            _ => return Err(unknown(w)),
         }
         Ok(())
     }
@@ -297,99 +313,8 @@ impl Cpu {
                 0xF => self.push(bus, rd)?,
                 _ => return Err(unknown(w)),
             },
-            2 => match w & 0xF {
-                0x0 => {
-                    // com
-                    self.set(C, true);
-                    *self.reg_mut(d) = self.logic(!rd);
-                }
-                0x1 => *self.reg_mut(d) = self.sub(0, rd, false, false), // neg
-                0x2 => *self.reg_mut(d) = rd.rotate_left(4),             // swap
-                0x3 => {
-                    // inc
-                    let v = rd.wrapping_add(1);
-                    self.set(V, v == 0x80);
-                    *self.reg_mut(d) = self.nzs(v);
-                }
-                0x5 => *self.reg_mut(d) = self.shift(rd >> 1 | rd & 0x80, rd & 1 != 0), // asr
-                0x6 => *self.reg_mut(d) = self.shift(rd >> 1, rd & 1 != 0),             // lsr
-                0x7 => {
-                    // ror
-                    let v = rd >> 1 | u8::from(self.flag(C)) << 7;
-                    *self.reg_mut(d) = self.shift(v, rd & 1 != 0);
-                }
-                0xA => {
-                    // dec
-                    let v = rd.wrapping_sub(1);
-                    self.set(V, v == 0x7F);
-                    *self.reg_mut(d) = self.nzs(v);
-                }
-                0x8 if w & 0x0100 == 0 => {
-                    // bset/bclr, which covers sei, cli, sec, clc and friends.
-                    let [low, _] = w.to_le_bytes();
-                    let (bit, on) = ((low >> 4) & 7, w & 0x80 == 0);
-                    self.set(bit, on);
-                    if bit == I && on {
-                        self.hold = true; // sei
-                    }
-                }
-                0x8 => match w {
-                    0x9508 => self.pc = self.pop_pc(bus)?, // ret
-                    0x9518 => {
-                        // reti. It leaves SREG.I alone on AVRxt.
-                        if self.handling.take().is_none() {
-                            return Err("reti outside an interrupt handler".into());
-                        }
-                        self.pc = self.pop_pc(bus)?;
-                    }
-                    0x95A8 => bus.wdr()?,
-                    0x95C8 => *self.reg_mut(0) = Self::program_byte(bus, self.pair(30))?, // lpm
-                    0x9588 => self.sleep(bus)?,
-                    _ => return Err(unknown(w)),
-                },
-                0x9 => match w {
-                    0x9409 => self.pc = u32::from(self.pair(30)), // ijmp
-                    0x9509 => {
-                        // icall
-                        self.push_pc(bus)?;
-                        self.pc = u32::from(self.pair(30));
-                    }
-                    _ => return Err(unknown(w)),
-                },
-                0xC..=0xF => {
-                    // jmp (110k) and call (111k) take a 22-bit word address.
-                    let target = long_target(w, self.next_word(bus)?);
-                    if w & 2 != 0 {
-                        self.push_pc(bus)?;
-                    }
-                    self.pc = target;
-                }
-                _ => return Err(unknown(w)),
-            },
-            3 => {
-                // adiw/sbiw on r25:r24, X, Y or Z.
-                let reg = match (w >> 4) & 3 {
-                    0 => 24,
-                    1 => 26,
-                    2 => 28,
-                    _ => 30,
-                };
-                let k = ((w >> 2) & 0x30) | (w & 0x0F);
-                let a = self.pair(reg);
-                let (v, overflow, borrow) = if w & 0x0100 == 0 {
-                    let v = a.wrapping_add(k);
-                    (v, !a & v & 0x8000 != 0, !v & a & 0x8000 != 0)
-                } else {
-                    let v = a.wrapping_sub(k);
-                    (v, a & !v & 0x8000 != 0, v & !a & 0x8000 != 0)
-                };
-                self.set_pair(reg, v);
-                self.set(V, overflow);
-                self.set(C, borrow);
-                self.set(N, v & 0x8000 != 0);
-                self.set(Z, v == 0);
-                self.set(S, self.flag(N) != self.flag(V));
-            }
+            2 => self.execute_one_operand(bus, w, d)?,
+            3 => self.adiw_sbiw(w),
             4 | 5 => {
                 // cbi, sbic, sbi, sbis on the first 32 I/O addresses.
                 let a = (w >> 3) & 0x1F;
@@ -414,6 +339,107 @@ impl Cpu {
             }
         }
         Ok(())
+    }
+
+    /// The 1001 010x group: one-operand arithmetic, SREG bits, returns,
+    /// indirect and long jumps and calls, and the system instructions.
+    fn execute_one_operand(&mut self, bus: &mut impl Bus, w: u16, d: usize) -> Result<(), String> {
+        let rd = self.reg(d);
+        match w & 0xF {
+            0x0 => {
+                // com
+                self.set(C, true);
+                *self.reg_mut(d) = self.logic(!rd);
+            }
+            0x1 => *self.reg_mut(d) = self.sub(0, rd, false, false), // neg
+            0x2 => *self.reg_mut(d) = rd.rotate_left(4),             // swap
+            0x3 => {
+                // inc
+                let v = rd.wrapping_add(1);
+                self.set(V, v == 0x80);
+                *self.reg_mut(d) = self.nzs(v);
+            }
+            0x5 => *self.reg_mut(d) = self.shift(rd >> 1 | rd & 0x80, rd & 1 != 0), // asr
+            0x6 => *self.reg_mut(d) = self.shift(rd >> 1, rd & 1 != 0),             // lsr
+            0x7 => {
+                // ror
+                let v = rd >> 1 | u8::from(self.flag(C)) << 7;
+                *self.reg_mut(d) = self.shift(v, rd & 1 != 0);
+            }
+            0xA => {
+                // dec
+                let v = rd.wrapping_sub(1);
+                self.set(V, v == 0x7F);
+                *self.reg_mut(d) = self.nzs(v);
+            }
+            0x8 if w & 0x0100 == 0 => {
+                // bset/bclr, which covers sei, cli, sec, clc and friends.
+                let [low, _] = w.to_le_bytes();
+                let (bit, on) = ((low >> 4) & 7, w & 0x80 == 0);
+                self.set(bit, on);
+                if bit == I && on {
+                    self.hold = true; // sei
+                }
+            }
+            0x8 => match w {
+                0x9508 => self.pc = self.pop_pc(bus)?, // ret
+                0x9518 => {
+                    // reti. It leaves SREG.I alone on AVRxt.
+                    if self.handling.take().is_none() {
+                        return Err("reti outside an interrupt handler".into());
+                    }
+                    self.pc = self.pop_pc(bus)?;
+                }
+                0x95A8 => bus.wdr()?,
+                0x95C8 => *self.reg_mut(0) = Self::program_byte(bus, self.pair(30))?, // lpm
+                0x9588 => self.sleep(bus)?,
+                _ => return Err(unknown(w)),
+            },
+            0x9 => match w {
+                0x9409 => self.pc = u32::from(self.pair(30)), // ijmp
+                0x9509 => {
+                    // icall
+                    self.push_pc(bus)?;
+                    self.pc = u32::from(self.pair(30));
+                }
+                _ => return Err(unknown(w)),
+            },
+            0xC..=0xF => {
+                // jmp (110k) and call (111k) take a 22-bit word address.
+                let target = long_target(w, self.next_word(bus)?);
+                if w & 2 != 0 {
+                    self.push_pc(bus)?;
+                }
+                self.pc = target;
+            }
+            _ => return Err(unknown(w)),
+        }
+        Ok(())
+    }
+
+    /// adiw/sbiw on r25:r24, X, Y or Z.
+    const fn adiw_sbiw(&mut self, w: u16) {
+        let pair = match (w >> 4) & 3 {
+            0 => 24,
+            1 => 26,
+            2 => 28,
+            _ => 30,
+        };
+        let k = ((w >> 2) & 0x30) | (w & 0x0F);
+        let a = self.pair(pair);
+        let (v, overflow, borrow) = if w & 0x0100 == 0 {
+            let v = a.wrapping_add(k);
+            (v, !a & v & 0x8000 != 0, !v & a & 0x8000 != 0)
+        } else {
+            let v = a.wrapping_sub(k);
+            (v, a & !v & 0x8000 != 0, v & !a & 0x8000 != 0)
+        };
+        self.set_pair(pair, v);
+        self.set(V, overflow);
+        self.set(C, borrow);
+        self.set(N, v & 0x8000 != 0);
+        self.set(Z, v == 0);
+        self.set(S, self.flag(N) != self.flag(V));
     }
 
     fn sleep(&mut self, bus: &mut impl Bus) -> Result<(), String> {
@@ -1031,6 +1057,10 @@ mod tests {
     }
 
     /// r1:r0 start non-zero, so Z has to be earned.
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "the instruction set manual's operand names"
+    )]
     fn multiply(w: u16, (d, a): (usize, u8), (r, b): (usize, u8)) -> (u16, bool, bool) {
         let (cpu, _) = run(&[w], |cpu, _| {
             cpu.set_pair(0, 0xA5A5);
