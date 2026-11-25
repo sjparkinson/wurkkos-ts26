@@ -206,12 +206,8 @@ struct Consts(BTreeMap<String, (u32, String)>);
 impl Consts {
     /// A name can turn up more than once (RTC.PITINTFLAGS.PI and
     /// RTC.PITINTCTRL.PI), which is fine while the value agrees.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "doc moves into the map when the name is new"
-    )]
-    fn add(&mut self, name: String, value: u32, doc: String) {
-        let name = name.to_ascii_uppercase();
+    fn add(&mut self, mut name: String, value: u32, doc: String) {
+        name.make_ascii_uppercase();
         if let Some((theirs, first)) = self.0.get(&name) {
             assert_eq!(
                 *theirs, value,
