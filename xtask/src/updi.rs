@@ -18,29 +18,31 @@ use ts26::regs::{
 pub mod map {
     use ts26::regs::{self, addr, mem};
 
+    use crate::int;
+
     /// Writes land in the page buffer until an NVM command commits them.
-    pub const FLASH: u16 = mem::MAPPED_PROGMEM_START as u16;
+    pub const FLASH: u16 = int::u16_of(mem::MAPPED_PROGMEM_START);
     pub const FLASH_SIZE: usize = mem::MAPPED_PROGMEM_SIZE;
     pub const FLASH_PAGE: usize = mem::MAPPED_PROGMEM_PAGE;
 
-    pub const EEPROM: u16 = mem::EEPROM_START as u16;
+    pub const EEPROM: u16 = int::u16_of(mem::EEPROM_START);
     pub const EEPROM_SIZE: usize = mem::EEPROM_SIZE;
     pub const EEPROM_PAGE: usize = mem::EEPROM_PAGE;
 
-    pub const SIGNATURE: u16 = mem::SIGNATURES_START as u16;
+    pub const SIGNATURE: u16 = int::u16_of(mem::SIGNATURES_START);
     pub const ATTINY1616: [u8; 3] = regs::SIGNATURE;
 
     /// Read only, since UPDI can't write the signature row (DS table 6-5).
-    pub const SERIAL: u16 = addr::SIGROW_SERNUM0 as u16;
+    pub const SERIAL: u16 = int::u16_of(addr::SIGROW_SERNUM0);
     pub const SERIAL_SIZE: usize = addr::SIGROW_SERNUM9 - addr::SIGROW_SERNUM0 + 1;
 
     /// The fuses, then the lock byte. Read for `backup`, and nothing here
     /// writes them.
-    pub const FUSES: u16 = mem::FUSES_START as u16;
+    pub const FUSES: u16 = int::u16_of(mem::FUSES_START);
     pub const FUSES_SIZE: usize = mem::LOCKBITS_END - mem::FUSES_START;
 
-    pub const NVMCTRL_CTRLA: u16 = addr::NVMCTRL_CTRLA as u16;
-    pub const NVMCTRL_STATUS: u16 = addr::NVMCTRL_STATUS as u16;
+    pub const NVMCTRL_CTRLA: u16 = int::u16_of(addr::NVMCTRL_CTRLA);
+    pub const NVMCTRL_STATUS: u16 = int::u16_of(addr::NVMCTRL_STATUS);
 }
 
 /// `send` swallows the echo of what it writes.
@@ -272,13 +274,13 @@ impl<W: Wire> Programmer<W> {
         // inside the start-up time. SUT is 64 ms at most (ATDF), and avrdude
         // allows 500 ms.
         self.reset()?;
-        let deadline = self.wire.now() + PROGMODE_TIMEOUT;
+        let start = self.wire.now();
         loop {
             let status = self.ldcs(ASI_SYS_STATUS)?;
             if status & SYS_STATUS_LOCKSTATUS == 0 && status & SYS_STATUS_NVMPROG != 0 {
                 return Ok(());
             }
-            if self.wire.now() >= deadline {
+            if self.wire.now().duration_since(start) >= PROGMODE_TIMEOUT {
                 break;
             }
         }
@@ -309,9 +311,9 @@ impl<W: Wire> Programmer<W> {
 
     pub fn read(&mut self, addr: u16, len: usize) -> Result<Vec<u8>> {
         let mut out = vec![0; len];
-        for (i, chunk) in out.chunks_mut(MAX_BLOCK).enumerate() {
-            self.st_ptr(offset(addr, i * MAX_BLOCK)?)?;
-            let mut frame = repeat(chunk.len());
+        for (chunk, at) in out.chunks_mut(MAX_BLOCK).zip((0..).step_by(MAX_BLOCK)) {
+            self.st_ptr(offset(addr, at)?)?;
+            let mut frame = repeat(chunk.len())?;
             frame.extend([SYNC, LD | PTR_INC | DATA_8]);
             self.send(&frame)?;
             self.recv(chunk)?;
@@ -349,24 +351,22 @@ impl<W: Wire> Programmer<W> {
         skip_blank: bool,
     ) -> Result<()> {
         self.wait_nvm()?;
-        for (i, chunk) in data.chunks(page).enumerate() {
+        for (chunk, at) in data.chunks(page).zip((0..).step_by(page)) {
             if skip_blank && chunk.iter().all(|&b| b == 0xFF) {
                 continue;
             }
-            self.write_page(offset(addr, i * page)?, chunk, command)?;
+            self.write_page(offset(addr, at)?, chunk, command)?;
         }
         Ok(())
     }
 
     pub fn verify(&mut self, addr: u16, data: &[u8]) -> Result<()> {
         let actual = self.read(addr, data.len())?;
-        match actual.iter().zip(data).position(|(a, b)| a != b) {
+        let mut bytes = actual.iter().zip(data).zip(usize::from(addr)..);
+        match bytes.find(|((read, wrote), _)| read != wrote) {
             None => Ok(()),
-            Some(i) => Err(format!(
-                "verify failed at 0x{:04X}: wrote {:02X}, read {:02X}",
-                usize::from(addr) + i,
-                data[i],
-                actual[i]
+            Some(((read, wrote), at)) => Err(format!(
+                "verify failed at 0x{at:04X}: wrote {wrote:02X}, read {read:02X}"
             )),
         }
     }
@@ -385,12 +385,13 @@ impl<W: Wire> Programmer<W> {
 
     /// Expects the NVM controller to be idle.
     fn write_page(&mut self, addr: u16, data: &[u8], command: u8) -> Result<()> {
+        let repeat = repeat(data.len())?;
         self.nvm_command(NVM_PAGE_BUFFER_CLEAR)?;
         self.wait_nvm()?;
 
         self.st_ptr(addr)?;
         let mut frame = vec![SYNC, STCS | CS_CTRLA, CTRLA_IBDLY | CTRLA_RSD];
-        frame.extend(repeat(data.len()));
+        frame.extend(repeat);
         frame.extend([SYNC, ST | PTR_INC | DATA_8]);
         frame.extend(data);
         frame.extend([SYNC, STCS | CS_CTRLA, CTRLA_IBDLY]);
@@ -479,12 +480,17 @@ impl<W: Wire> Programmer<W> {
 }
 
 fn offset(addr: u16, by: usize) -> Result<u16> {
-    u16::try_from(usize::from(addr) + by).map_err(|_| "address out of range".to_string())
+    usize::from(addr)
+        .checked_add(by)
+        .and_then(|at| u16::try_from(at).ok())
+        .ok_or_else(|| "address out of range".to_string())
 }
 
-fn repeat(count: usize) -> Vec<u8> {
-    assert!((1..=MAX_BLOCK).contains(&count), "REPEAT covers 1 to 256");
-    vec![SYNC, REPEAT, (count - 1) as u8]
+fn repeat(count: usize) -> Result<Vec<u8>> {
+    match count.checked_sub(1).map(u8::try_from) {
+        Some(Ok(more)) => Ok(vec![SYNC, REPEAT, more]),
+        _ => Err(format!("REPEAT covers 1 to {MAX_BLOCK}, not {count}")),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
