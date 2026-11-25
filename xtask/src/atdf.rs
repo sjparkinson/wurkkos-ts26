@@ -254,9 +254,30 @@ pub fn generate(xml: &str) -> Result<String, String> {
     let document = parse(xml)?;
     let file = document.child("avr-tools-device-file")?;
     let device = file.child("devices")?.child("device")?;
+    let addr = addresses(&document)?;
+    let mem = memory(device)?;
+    let bits = bitfields(file)?;
+    let vectors = vectors(device)?;
+    let signature = signature(device)?;
 
+    Ok(format!(
+        "/// Data-space addresses of every register.\n\
+         pub mod addr {{\n{}}}\n\n\
+         /// Every memory segment. All of them are in data space but PROGMEM.\n\
+         pub mod mem {{\n{}}}\n\n\
+         {}\n{}\n\
+         /// The device signature.\n\
+         pub const SIGNATURE: [u8; 3] = {signature:#04X?};\n",
+        addr.render(|_| "usize"),
+        mem.render(|_| "usize"),
+        bits.render(|value| if value > 0xFF { "u16" } else { "u8" }),
+        vectors.render(|_| "usize"),
+    ))
+}
+
+fn addresses(document: &Element) -> Result<Consts, String> {
     let mut addr = Consts::default();
-    for r in registers(&document)? {
+    for r in registers(document)? {
         let width = match r.size {
             1 => String::new(),
             size => {
@@ -272,7 +293,10 @@ pub fn generate(xml: &str) -> Result<String, String> {
             doc(format!("{}.{}{width}", r.instance, r.name), r.element),
         );
     }
+    Ok(addr)
+}
 
+fn memory(device: &Element) -> Result<Consts, String> {
     let mut mem = Consts::default();
     let spaces = device.child("address-spaces")?.all("address-space");
     for segment in spaces.flat_map(|space| space.all("memory-segment")) {
@@ -290,7 +314,10 @@ pub fn generate(xml: &str) -> Result<String, String> {
             mem.add(format!("{name}_PAGE"), num(page)?, doc);
         }
     }
+    Ok(mem)
+}
 
+fn bitfields(file: &Element) -> Result<Consts, String> {
     let mut bits = Consts::default();
     for module in file.child("modules")?.all("module") {
         let prefix = module.get("name")?;
@@ -320,7 +347,10 @@ pub fn generate(xml: &str) -> Result<String, String> {
             }
         }
     }
+    Ok(bits)
+}
 
+fn vectors(device: &Element) -> Result<Consts, String> {
     let mut vectors = Consts::default();
     let mut count = 0;
     for interrupt in device.child("interrupts")?.all("interrupt") {
@@ -339,7 +369,10 @@ pub fn generate(xml: &str) -> Result<String, String> {
     }
     let doc = "Entries in the vector table, reset included.".to_string();
     vectors.add("VECTORS".into(), count, doc);
+    Ok(vectors)
+}
 
+fn signature(device: &Element) -> Result<[u32; 3], String> {
     let property = |name: &str| {
         let groups = device.child("property-groups")?.all("property-group");
         groups
@@ -348,25 +381,11 @@ pub fn generate(xml: &str) -> Result<String, String> {
             .ok_or_else(|| format!("no property {name}"))?
             .num("value")
     };
-    let signature = [
+    Ok([
         property("SIGNATURE0")?,
         property("SIGNATURE1")?,
         property("SIGNATURE2")?,
-    ];
-
-    Ok(format!(
-        "/// Data-space addresses of every register.\n\
-         pub mod addr {{\n{}}}\n\n\
-         /// Every memory segment. All of them are in data space but PROGMEM.\n\
-         pub mod mem {{\n{}}}\n\n\
-         {}\n{}\n\
-         /// The device signature.\n\
-         pub const SIGNATURE: [u8; 3] = {signature:#04X?};\n",
-        addr.render(|_| "usize"),
-        mem.render(|_| "usize"),
-        bits.render(|value| if value > 0xFF { "u16" } else { "u8" }),
-        vectors.render(|_| "usize"),
-    ))
+    ])
 }
 
 #[cfg(test)]
