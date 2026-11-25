@@ -46,3 +46,35 @@ pub const fn u32_of(value: usize) -> u32 {
 pub const fn u32_from_u16(value: u16) -> u32 {
     value as u32
 }
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub const fn u64_from_u16(value: u16) -> u64 {
+    value as u64
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub const fn u64_from_u32(value: u32) -> u64 {
+    value as u64
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub const fn usize_from_u8(value: u8) -> usize {
+    value as usize
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub const fn usize_from_u16(value: u16) -> usize {
+    value as usize
+}

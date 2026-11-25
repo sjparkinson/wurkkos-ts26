@@ -12,6 +12,7 @@
 //! - Every instruction takes four clocks.
 
 use std::iter;
+use std::num::NonZeroU32;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -96,24 +97,30 @@ const JUNK: u8 = 0xA5;
 const SWITCH: u8 = 1 << board::SWITCH; // PA5, active low
 const PWM: u8 = 1 << board::PWM; // PB0, the brightness
 const ENABLE: u8 = 1 << board::ENABLE; // PB2, the boost converter
-const SWITCH_PIN: usize = board::SWITCH as usize;
-const ENABLE_PIN: usize = board::ENABLE as usize;
-const UPDI_PIN: usize = board::UPDI as usize;
-const BATTERY_PIN: usize = board::BATTERY as usize;
+const SWITCH_PIN: usize = int::usize_from_u8(board::SWITCH);
+const ENABLE_PIN: usize = int::usize_from_u8(board::ENABLE);
+const UPDI_PIN: usize = int::usize_from_u8(board::UPDI);
+const BATTERY_PIN: usize = int::usize_from_u8(board::BATTERY);
+const SWITCH_CTRL: usize = reg::PORTA_PIN0CTRL + SWITCH_PIN;
+const ENABLE_CTRL: usize = reg::PORTB_PIN0CTRL + ENABLE_PIN;
+const UPDI_CTRL: usize = reg::PORTA_PIN0CTRL + UPDI_PIN;
+const BATTERY_CTRL: usize = reg::PORTA_PIN0CTRL + BATTERY_PIN;
 const AUX: u8 = board::AUX_PINS;
 
 const BOOT_BUDGET: u64 = 100_000;
-const TICK_CYCLES: u64 = CLK_PER as u64 / TICKS_PER_SECOND as u64;
-const _: () = assert!(TICK_CYCLES * TICKS_PER_SECOND as u64 == CLK_PER as u64);
+const SECOND_CYCLES: u64 = int::u64_from_u32(CLK_PER);
+const SECOND_TICKS: usize = int::usize_from_u16(TICKS_PER_SECOND);
+const TICK_CYCLES: u64 = SECOND_CYCLES / int::u64_from_u16(TICKS_PER_SECOND);
+const _: () = assert!(TICK_CYCLES * int::u64_from_u16(TICKS_PER_SECOND) == SECOND_CYCLES);
 /// No AVRxt instruction takes more than 4 cycles.
 pub const TICK_BUDGET: u64 = TICK_CYCLES / 4;
-const PWM_CYCLE: u64 = 2 * PWM_TOP as u64;
+const PWM_CYCLE: u64 = 2 * int::u64_from_u16(PWM_TOP);
 /// Six in and four for `reti` on a 16 KB part (§13.3.2.3, table 13-1).
 const INTERRUPT_CYCLES: u64 = 10;
 pub const HANDLER_BUDGET: u64 = (PWM_CYCLE - INTERRUPT_CYCLES) / 4;
 /// At the lowest level the delta-sigma only carries into the duty once every
 /// 2^DSM_BITS / DSM_FLOOR cycles, so a duty of 0 for a cycle is normal there.
-const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / DSM_FLOOR as u32 + 1;
+const ZERO_DUTY_CYCLES: u32 = (1 << DSM_BITS) / int::u32_from_u16(DSM_FLOOR) + 1;
 const DSM_WINDOW: usize = 1 << DSM_BITS;
 const DSM_SLACK: u32 = 2;
 
@@ -121,11 +128,11 @@ const DSM_SLACK: u32 = 2;
 const PIT_SYNC_READS: u8 = 2;
 const PIT_FRAME: u8 = regs::RTC_PERIOD_CYC512;
 /// Two to three WDT clocks (§19.3.6), and a `wdr` meanwhile is ignored.
-const WDR_SYNC_CYCLES: u64 = 3 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64;
+const WDR_SYNC_CYCLES: u64 = 3 * TICK_CYCLES / int::u64_from_u32(WDT_CLOCKS_PER_TICK);
 
 /// PERIOD counts 2 << n RTC clocks.
 const fn pit_frames(pitctrla: u8) -> u32 {
-    1 << (((pitctrla & RTC_PERIOD) - PIT_FRAME) >> 3)
+    1 << ((pitctrla & RTC_PERIOD).saturating_sub(PIT_FRAME) >> 3)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -147,14 +154,14 @@ impl Report {
         self.off_instructions = self.off_instructions.max(run.off_instructions);
         self.rest_instructions = self.rest_instructions.max(run.rest_instructions);
         self.handler_instructions = self.handler_instructions.max(run.handler_instructions);
-        self.landed += run.landed;
-        self.woken += run.woken;
+        self.landed = self.landed.saturating_add(run.landed);
+        self.woken = self.woken.saturating_add(run.woken);
     }
 
     fn take(&mut self, sim: &Sim) {
         self.stack = self.stack.max(sim.stack());
         self.handler_instructions = self.handler_instructions.max(sim.longest_handler);
-        self.landed += sim.overflows_landed;
+        self.landed = self.landed.saturating_add(sim.overflows_landed);
         self.last_new = self.last_new.max(sim.last_new);
     }
 
@@ -202,7 +209,8 @@ struct Ends {
 impl Linked {
     fn of(elf: &Elf) -> Result<Self, String> {
         let symbol = |name| elf.require(name);
-        let sram = |name| -> Result<u16, String> { Ok((symbol(name)? - DATA_SPACE) as u16) };
+        let sram = |name| data_address(elf, name);
+        let load = symbol("__data_load")?;
         Ok(Self {
             main: symbol("main")? / 2,
             ends: Ends {
@@ -212,7 +220,8 @@ impl Linked {
             layout: Layout {
                 data: sram("__data_start")?..sram("__data_end")?,
                 bss: sram("__bss_start")?..sram("__bss_end")?,
-                load: symbol("__data_load")? as u16,
+                load: u16::try_from(load)
+                    .map_err(|_| format!("`__data_load` ({load:#x}) isn't a 16-bit address"))?,
             },
         })
     }
@@ -220,6 +229,13 @@ impl Linked {
     fn boot(&self, image: Vec<u8>) -> Result<Sim, String> {
         Sim::new(image, self.layout.bss.end, self.ends)
     }
+}
+
+fn data_address(elf: &Elf, name: &str) -> Result<u16, String> {
+    elf.require(name)?
+        .checked_sub(DATA_SPACE)
+        .and_then(|addr| u16::try_from(addr).ok())
+        .ok_or_else(|| format!("`{name}` isn't in data space"))
 }
 
 pub fn check(elf: &Elf) -> Result<Report, String> {
@@ -299,7 +315,8 @@ pub fn check(elf: &Elf) -> Result<Report, String> {
     Ok(report)
 }
 
-const PASS_BUDGET: u64 = PASS_CLOCKS as u64 * TICK_CYCLES / WDT_CLOCKS_PER_TICK as u64 / 4;
+const PASS_BUDGET: u64 =
+    int::u64_from_u16(PASS_CLOCKS) * TICK_CYCLES / int::u64_from_u32(WDT_CLOCKS_PER_TICK) / 4;
 
 type FaultCheck = fn(&mut Sim, &mut Report) -> Result<(), String>;
 
@@ -348,7 +365,7 @@ fn settle(runs: Vec<Result<Report, Failed>>) -> Result<Report, String> {
     }
 }
 
-const LANDING_MARGIN: u32 = 2 * TICKS_PER_SECOND as u32;
+const LANDING_MARGIN: u32 = 2 * int::u32_from_u16(TICKS_PER_SECOND);
 
 fn both_ways(
     power_on: &impl Fn() -> Result<Sim, String>,
@@ -356,7 +373,7 @@ fn both_ways(
     example: Option<&Example>,
 ) -> Result<Report, Failed> {
     let mut report = run(power_on, soonest, example, Landing::Watch)?;
-    let until = report.last_new + LANDING_MARGIN;
+    let until = report.last_new.saturating_add(LANDING_MARGIN);
     report.merge(&run(power_on, soonest, example, Landing::Until(until))?);
     Ok(report)
 }
@@ -427,7 +444,7 @@ fn script(words: &'static str) -> Result<impl Iterator<Item = Sample>, String> {
 
 /// The 32 kHz oscillator 30% slow and the 20 MHz one 5% fast (tables 36-13 and 36-12).
 const SLOWEST_TICK_CYCLES: u64 = TICK_CYCLES * 105 / 70;
-const DEADLINE_CYCLES: u64 = TICK_DEADLINE_CYCLES as u64 * PWM_CYCLE;
+const DEADLINE_CYCLES: u64 = int::u64_from_u16(TICK_DEADLINE_CYCLES) * PWM_CYCLE;
 const _: () = assert!(
     4 * SLOWEST_TICK_CYCLES < DEADLINE_CYCLES,
     "only a stopped oscillator may trip the deadline, since it stops the chip for good"
@@ -447,7 +464,6 @@ fn adc_stuck(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
 }
 
 fn adc_broken(sim: &mut Sim, report: &mut Report, dead: bool) -> Result<(), String> {
-    let seconds = |s: usize| s * usize::from(TICKS_PER_SECOND);
     let mut levels = Vec::new();
     let samples = script("1C wait:10s 1C wait:2s")?.map(|sample| Sample {
         scene: Scene {
@@ -468,7 +484,7 @@ fn adc_broken(sim: &mut Sim, report: &mut Report, dead: bool) -> Result<(), Stri
         .iter()
         .position(|&level| level > 0)
         .ok_or("the light never came on")?;
-    let out = lit + seconds(4);
+    let out = lit.saturating_add(4 * SECOND_TICKS);
     if !levels.get(out..).is_some_and(|l| l.iter().all(|&l| l == 0)) {
         return Err(format!(
             "the light isn't out and staying out from 4 s after it came on ({:?} at {out})",
@@ -520,7 +536,7 @@ fn switch_stuck(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
 }
 
 const HALT_BUDGET: u64 = 100;
-const DOWN_PERIODS: u64 = 4 * TICKS_PER_SECOND as u64;
+const DOWN_PERIODS: u64 = 4 * int::u64_from_u16(TICKS_PER_SECOND);
 
 fn oscillator_stops(sim: &mut Sim, report: &mut Report) -> Result<(), String> {
     lit(sim, 0, report)?;
@@ -547,15 +563,16 @@ fn stops_at_the_deadline(sim: &mut Sim, report: &mut Report) -> Result<(), Strin
     let stopped = sim.chip.now;
     while sim.chip.pwm_running() {
         sim.step()?;
-        if sim.chip.now - stopped > DEADLINE_CYCLES + TICK_BUDGET {
+        let running = sim.chip.since(stopped)?;
+        if running > DEADLINE_CYCLES + TICK_BUDGET {
             return Err(format!(
                 "the PWM's still running {} PWM cycles on, past the deadline of \
                  {TICK_DEADLINE_CYCLES}",
-                (sim.chip.now - stopped) / PWM_CYCLE
+                running / PWM_CYCLE
             ));
         }
     }
-    let took = sim.chip.now - stopped;
+    let took = sim.chip.since(stopped)?;
     if took < DEADLINE_CYCLES - PWM_CYCLE {
         return Err(format!(
             "the PWM stopped after {} PWM cycles, before the deadline of {TICK_DEADLINE_CYCLES}",
@@ -583,7 +600,7 @@ fn stops_at_the_deadline(sim: &mut Sim, report: &mut Report) -> Result<(), Strin
     if !sim.chip.powering_down() {
         return Err("stopped for good in idle, which leaves the main clock running".into());
     }
-    let until = sim.chip.now + DOWN_PERIODS * TICK_CYCLES;
+    let until = sim.chip.now.saturating_add(DOWN_PERIODS * TICK_CYCLES);
     while sim.chip.now < until {
         sim.step()?;
         if !sim.cpu.asleep || sim.chip.enabled_high() {
@@ -624,7 +641,7 @@ fn unhandled_interrupt(mut sim: Sim) -> Result<(), String> {
 
 fn unhandled_interrupt_at_rest(mut sim: Sim) -> Result<(), String> {
     in_step(&mut sim, script("wait:2s")?, &mut Report::default())?;
-    if sim.chip.io[reg::RTC_PITCTRLA] & RTC_PERIOD == PIT_FRAME {
+    if sim.chip.io(reg::RTC_PITCTRLA) & RTC_PERIOD == PIT_FRAME {
         return Err("still at 64 Hz after 2 s at rest, so this checks nothing".into());
     }
     stops_for_good(sim)
@@ -632,16 +649,17 @@ fn unhandled_interrupt_at_rest(mut sim: Sim) -> Result<(), String> {
 
 fn stops_for_good(mut sim: Sim) -> Result<(), String> {
     sim.chip.force_interrupt(VECTOR_UNHANDLED);
-    let mut steps = 0;
-    while !sim.chip.down {
-        if steps == HALT_BUDGET {
-            return Err(format!(
-                "didn't stop for good within {HALT_BUDGET} instructions of {} being forced",
-                vector_name(VECTOR_UNHANDLED)
-            ));
+    for _ in 0..HALT_BUDGET {
+        if sim.chip.down {
+            break;
         }
         sim.step()?;
-        steps += 1;
+    }
+    if !sim.chip.down {
+        return Err(format!(
+            "didn't stop for good within {HALT_BUDGET} instructions of {} being forced",
+            vector_name(VECTOR_UNHANDLED)
+        ));
     }
     if sim.forced != Some(VECTOR_UNHANDLED) || sim.cpu.handling != sim.forced {
         return Err("stopped for good without taking the forced interrupt".into());
@@ -664,16 +682,13 @@ fn stops_for_good(mut sim: Sim) -> Result<(), String> {
         return Err("stopped for good in idle, which leaves the main clock running".into());
     }
 
-    let periods = sim.chip.wdt_periods_left();
-    if periods == 0 {
+    let Some(spare) = sim.chip.wdt_periods_left().checked_sub(1) else {
         return Err(
             "stopped for good with the watchdog about to bite, so nothing's left to watch".into(),
         );
-    }
-    let (ticks, until) = (
-        sim.chip.ticks,
-        sim.chip.next_pit + (periods - 1) * sim.chip.tick_cycles,
-    );
+    };
+    let spare = spare.saturating_mul(sim.chip.tick_cycles);
+    let (ticks, until) = (sim.chip.ticks, sim.chip.next_pit.saturating_add(spare));
     while sim.chip.now < until {
         sim.step()?;
         if !sim.cpu.asleep || sim.cpu.handling != sim.forced || sim.chip.enabled_high() {
@@ -722,9 +737,9 @@ fn in_step_with(
     }
     let mut rig = Rig::new(power_on.faults());
     let mut finished = true;
-    for (tick, sample) in samples.enumerate() {
+    for (tick, sample) in (0..).zip(samples) {
         let at = |e: String| format!("tick {tick}: {e}");
-        sim.tick_no = tick as u32;
+        sim.tick_no = tick;
         let landing = match sim.landing {
             Landing::Until(until) if sim.tick_no > until => {
                 finished = false;
@@ -749,7 +764,7 @@ fn in_step_with(
             report.off_instructions = report.off_instructions.max(took);
         }
         report.in_budget().map_err(at)?;
-        report.woken += u32::from(woken);
+        report.woken = report.woken.saturating_add(u32::from(woken));
         sim.chip.shows(rig.torch.output()).map_err(at)?;
         if sim.chip.aux() != board::aux_pin(rig.torch.aux()) {
             return Err(at(format!(
@@ -791,7 +806,7 @@ fn paced(chip: &Chip, rig: &Rig, took: u64, woken: bool) -> Result<(), String> {
     if !woken && !rig.ticked && took > 0 {
         return Err("the firmware ran in a 64 Hz tick the library rests through".into());
     }
-    let slow = chip.io[reg::RTC_PITCTRLA] & RTC_PERIOD != PIT_FRAME;
+    let slow = chip.io(reg::RTC_PITCTRLA) & RTC_PERIOD != PIT_FRAME;
     if woken && slow {
         return Err("the firmware woke on a press at rest, but left the PIT at 1 Hz".into());
     }
@@ -802,7 +817,7 @@ fn paced(chip: &Chip, rig: &Rig, took: u64, woken: bool) -> Result<(), String> {
             rate(slow)
         ));
     }
-    let windowed = chip.io[reg::WDT_CTRLA] & WDT_WINDOW != 0;
+    let windowed = chip.io(reg::WDT_CTRLA) & WDT_WINDOW != 0;
     if windowed != rig.pace.windowed() {
         return Err(format!(
             "the library has the watchdog's window {}, but WDT.CTRLA has it {}",
@@ -822,6 +837,7 @@ const fn on(on: bool) -> &'static str {
 }
 
 const PROBE_EXPECTED: [u8; 7] = [0x12, 0x34, 0x56, 0x9A, 0xBC, 0xDE, 0];
+const PROBE_LEN: u16 = int::u16_of(PROBE_EXPECTED.len());
 
 pub fn probe(elf: &Elf) -> Result<(), String> {
     let linked = Linked::of(elf)?;
@@ -836,8 +852,11 @@ pub fn probe(elf: &Elf) -> Result<(), String> {
         .map_err(|e| format!("startup: {e}"))?;
     sim.run_to(elf.require("link_probe_done")? / 2, BOOT_BUDGET)?;
 
-    let copy = (elf.require("LINK_PROBE_COPY")? - DATA_SPACE) as u16;
-    let got = sim.chip.sram(&(copy..copy + PROBE_EXPECTED.len() as u16));
+    let copy = data_address(elf, "LINK_PROBE_COPY")?;
+    let end = copy
+        .checked_add(PROBE_LEN)
+        .ok_or("LINK_PROBE_COPY runs past the end of data space")?;
+    let got = sim.chip.sram(&(copy..end))?;
     if got != PROBE_EXPECTED {
         return Err(format!(
             "LINK_PROBE_COPY holds {got:02x?}, expected {PROBE_EXPECTED:02x?}"
@@ -870,50 +889,53 @@ struct Layout {
 
 fn check_startup(chip: &Chip, layout: &Layout) -> Result<(), String> {
     let from = usize::from(layout.load.wrapping_sub(MAPPED));
-    let len = usize::from(layout.data.end - layout.data.start);
     let initial = chip
         .flash
-        .get(from..from + len)
+        .get(from..)
+        .and_then(|rest| rest.get(..layout.data.len()))
         .ok_or(".data's initial values are outside flash")?;
-    if chip.sram(&layout.data) != initial {
+    if chip.sram(&layout.data)? != initial {
         return Err(".data in SRAM doesn't match its initial values in flash".into());
     }
-    if let Some((i, b)) = chip
-        .sram(&layout.bss)
-        .iter()
-        .enumerate()
-        .find(|&(_, &b)| b != 0)
-    {
-        return Err(format!(
-            ".bss isn't zeroed: {:#06x} holds {b:#04x}",
-            usize::from(layout.bss.start) + i
-        ));
+    let mut bss = layout.bss.clone().zip(chip.sram(&layout.bss)?);
+    if let Some((at, b)) = bss.find(|&(_, &b)| b != 0) {
+        return Err(format!(".bss isn't zeroed: {at:#06x} holds {b:#04x}"));
     }
     Ok(())
 }
 
 /// `reset` is a byte address.
 fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(), String> {
+    const START: u16 = SRAM.start + 0x11;
+    const DATA: Range<u16> = START..START + 5;
+    const BSS: Range<u16> = START + 5..START + 12;
+
     let values = [0x11, 0x22, 0x33, 0x44, 0x55];
     let mut image = image.to_vec();
     image.resize(image.len().next_multiple_of(2), 0xFF);
-    let load = MAPPED + image.len() as u16;
+    let load = u16::try_from(image.len())
+        .ok()
+        .and_then(|len| MAPPED.checked_add(len))
+        .ok_or("the image leaves no room in flash for the statics")?;
     image.extend(values);
 
-    let start = SRAM.start + 0x11;
     let moved = Layout {
-        data: start..start + 5,
-        bss: start + 5..start + 12,
+        data: DATA,
+        bss: BSS,
         load,
     };
-    patch_startup(&mut image, reset as usize, &linked.layout, &moved)?;
+    let reset = usize::try_from(reset).map_err(|_| "__reset is outside flash")?;
+    patch_startup(&mut image, reset, &linked.layout, &moved)?;
 
-    let mut sim = Sim::new(image, moved.bss.end, linked.ends)?;
+    let mut sim = Sim::new(image, BSS.end, linked.ends)?;
     sim.run_to(linked.main, BOOT_BUDGET)?;
     check_startup(&sim.chip, &moved)?;
-    for edge in [moved.data.start - 1, moved.bss.end] {
-        if sim.chip.sram(&(edge..edge + 1)) != [JUNK] {
-            return Err(format!("wrote to {edge:#06x}, outside .data and .bss"));
+    for edge in [DATA.start - 1..DATA.start, BSS.end..BSS.end + 1] {
+        if sim.chip.sram(&edge)? != [JUNK] {
+            return Err(format!(
+                "wrote to {:#06x}, outside .data and .bss",
+                edge.start
+            ));
         }
     }
     Ok(())
@@ -921,16 +943,16 @@ fn startup_with_statics(image: &[u8], reset: u32, linked: &Linked) -> Result<(),
 
 fn loads(l: &Layout) -> Vec<(u8, u8)> {
     [
-        (26, l.data.start),
-        (30, l.load),
-        (24, l.data.end),
-        (26, l.bss.start),
-        (24, l.bss.end),
+        ((26, 27), l.data.start),
+        ((30, 31), l.load),
+        ((24, 25), l.data.end),
+        ((26, 27), l.bss.start),
+        ((24, 25), l.bss.end),
     ]
     .into_iter()
-    .flat_map(|(r, v)| {
+    .flat_map(|((low, high), v)| {
         let [lo, hi] = v.to_le_bytes();
-        [(r, lo), (r + 1, hi)]
+        [(low, lo), (high, hi)]
     })
     .collect()
 }
@@ -941,17 +963,22 @@ fn patch_startup(
     linked: &Layout,
     moved: &Layout,
 ) -> Result<(), String> {
+    let no_call = "no call to main after __reset";
+    let (words, _) = image.get_mut(reset..).ok_or(no_call)?.as_chunks_mut();
+    let mut words = words.iter_mut();
     let mut found = Vec::new();
-    let mut at = reset;
     loop {
-        let w = word(image, at).ok_or("no call to main after __reset")?;
+        let pair = words.next().ok_or(no_call)?;
+        let w = u16::from_le_bytes(*pair);
         if is_call(w) {
             break; // call main
         }
         if let Some((r, k)) = ldi_operands(w) {
-            found.push((at, r, k));
+            found.push((pair, r, k));
         }
-        at += if is_two_words(w) { 4 } else { 2 };
+        if is_two_words(w) {
+            words.next();
+        }
     }
 
     let actual: Vec<(u8, u8)> = found.iter().map(|&(_, r, k)| (r, k)).collect();
@@ -961,20 +988,20 @@ fn patch_startup(
                 .into(),
         );
     }
-    for (&(at, r, _), (_, k)) in found.iter().zip(loads(moved)) {
-        image[at..at + 2].copy_from_slice(&ldi(r, k).to_le_bytes());
+    for ((pair, r, _), (_, k)) in found.into_iter().zip(loads(moved)) {
+        *pair = ldi(r, k).to_le_bytes();
     }
     Ok(())
 }
 
 /// Only PORTB starts dirty, so this isn't a model of a stray jump to the reset vector.
 fn found_lit(mut sim: Sim) -> Result<(), String> {
-    sim.chip.io[reg::VPORTB_DIR] = ENABLE | PWM;
-    sim.chip.io[reg::VPORTB_OUT] = ENABLE;
+    *sim.chip.io_mut(reg::VPORTB_DIR) = ENABLE | PWM;
+    *sim.chip.io_mut(reg::VPORTB_OUT) = ENABLE;
     for _ in 0..BOOT_BUDGET {
         if sim.chip.register_writes == 0 {
             sim.step()?;
-        } else if sim.chip.io[reg::VPORTB_OUT] & ENABLE == 0 {
+        } else if sim.chip.io(reg::VPORTB_OUT) & ENABLE == 0 {
             return Ok(());
         } else {
             return Err(
@@ -1001,10 +1028,13 @@ fn boot_order(mut sim: Sim) -> Result<(), String> {
     ))
 }
 
+const VECTOR_BYTES: usize = 4;
+const _: () = assert!(int::u32_of(VECTOR_BYTES) == 2 * VECTOR_WORDS);
+
 /// `unhandled` is a word address.
 fn handled(image: &[u8], unhandled: u32) -> u32 {
-    (1..VECTORS).fold(0, |mask, v| {
-        let at = v * VECTOR_WORDS as usize * 2;
+    let vectors = (0..VECTORS).zip((0..).step_by(VECTOR_BYTES)).skip(1);
+    vectors.fold(0, |mask, (v, at)| {
         if jmp_target(image, at).is_some_and(|target| target / 2 != unhandled) {
             mask | 1 << v
         } else {
@@ -1064,7 +1094,7 @@ impl Sim {
             cpu,
             handled,
             chip,
-            stack_floor: bss_end - 1,
+            stack_floor: bss_end.saturating_sub(1),
             executed: 0,
             stop_after: Arc::new(AtomicU64::new(u64::MAX)),
             unhandled,
@@ -1091,7 +1121,10 @@ impl Sim {
         if self.cpu.handling.is_some() || self.cpu.asleep || !enabled || chip.tca.ovf {
             return;
         }
-        if let Some(seen @ false) = self.reached.get_mut(self.cpu.pc as usize) {
+        let reached = usize::try_from(self.cpu.pc)
+            .ok()
+            .and_then(|pc| self.reached.get_mut(pc));
+        if let Some(seen @ false) = reached {
             *seen = true;
             self.last_new = self.tick_no;
             if let Landing::Until(_) = self.landing {
@@ -1099,20 +1132,20 @@ impl Sim {
                 chip.tca.ovf_up_at = chip.now;
                 chip.tca.settled = 0;
                 chip.tca.zero_run = 0;
-                self.overflows_landed += 1;
+                self.overflows_landed = self.overflows_landed.saturating_add(1);
             }
         }
     }
 
     const fn stack(&self) -> u16 {
-        SRAM.end - 1 - self.lowest_sp
+        (SRAM.end - 1).abs_diff(self.lowest_sp)
     }
 
     fn step(&mut self) -> Result<(), String> {
         if self.executed > self.stop_after.load(Ordering::Relaxed) {
             return Err("stopped, since another run failed after fewer instructions".into());
         }
-        let pc = self.cpu.pc;
+        let address = u64::from(self.cpu.pc) * 2;
         let awake = !self.cpu.asleep;
         let handling = self.cpu.handling;
         self.chip.in_handler = handling.is_some() && !self.abandoned;
@@ -1123,9 +1156,8 @@ impl Sim {
         // enough, so stopping for good wants both.
         if self.chip.down && self.cpu.flag(I) {
             return Err(format!(
-                "{:#06x}: stops for good with SREG.I still set, which leaves the \
-                 interrupt enables alone keeping it down",
-                pc * 2
+                "{address:#06x}: stops for good with SREG.I still set, which leaves the \
+                 interrupt enables alone keeping it down"
             ));
         }
         self.watch_handler(handling)?;
@@ -1133,25 +1165,23 @@ impl Sim {
             self.abandon();
         }
         if awake {
-            self.executed += 1;
+            self.executed = self.executed.saturating_add(1);
             self.chip.elapse()?;
         }
         self.lowest_sp = self.lowest_sp.min(self.cpu.sp);
         if self.cpu.sp < self.stack_floor {
-            return Err(format!("{:#06x}: the stack ran into .bss", pc * 2));
+            return Err(format!("{address:#06x}: the stack ran into .bss"));
         }
         // The real chip would `reti` with the flag still up and take it again
         // forever, so this fails at the enable, before it fires.
-        if self.cpu.flag(I) {
-            let orphans = self.chip.enabled & !self.handled;
-            if orphans != 0 {
-                return Err(format!(
-                    "{:#06x}: enables {} with SREG.I set, but its vector goes to \
-                     __unhandled_interrupt",
-                    pc * 2,
-                    vector_name(orphans.trailing_zeros() as u8)
-                ));
-            }
+        if self.cpu.flag(I)
+            && let Some(orphan) = lowest(self.chip.enabled & !self.handled)
+        {
+            return Err(format!(
+                "{address:#06x}: enables {} with SREG.I set, but its vector goes to \
+                 __unhandled_interrupt",
+                vector_name(orphan)
+            ));
         }
         if self.cpu.pc == self.unhandled
             && let Some(vector) = self.cpu.handling
@@ -1202,7 +1232,7 @@ impl Sim {
             }
             (Some(_), Some(_)) if self.abandoned => {}
             (Some(vector), Some(_)) => {
-                self.handler_steps += 1;
+                self.handler_steps = self.handler_steps.saturating_add(1);
                 if self.handler_steps > HANDLER_BUDGET {
                     return Err(format!(
                         "the handler for {} ran past {HANDLER_BUDGET} instructions, \
@@ -1224,11 +1254,10 @@ impl Sim {
     }
 
     fn gave_back(&self, landed: &Landed) -> Result<(), String> {
-        let changed = (0..32).find(|&n| self.cpu.r[n] != landed.r[n]);
-        if let Some(n) = changed {
+        let mut registers = self.cpu.r.iter().zip(&landed.r).enumerate();
+        if let Some((n, (now, found))) = registers.find(|(_, (now, found))| now != found) {
             return Err(format!(
-                "returns with r{n} at {:#04x}, not the {:#04x} it found",
-                self.cpu.r[n], landed.r[n]
+                "returns with r{n} at {now:#04x}, not the {found:#04x} it found"
             ));
         }
         if self.cpu.sreg != landed.sreg {
@@ -1257,7 +1286,7 @@ impl Sim {
         }
         Err(format!(
             "didn't reach {:#06x} within {budget} instructions",
-            target * 2
+            u64::from(target) * 2
         ))
     }
 
@@ -1279,7 +1308,7 @@ impl Sim {
             if self.chip.tick_polled {
                 pass_end.get_or_insert(self.executed);
             }
-            let ran = pass_end.unwrap_or(self.executed) - start;
+            let ran = pass_end.unwrap_or(self.executed).abs_diff(start);
             if ran > TICK_BUDGET {
                 return Err(format!(
                     "a pass of the main loop ran past {TICK_BUDGET} instructions, \
@@ -1287,8 +1316,13 @@ impl Sim {
                 ));
             }
         }
-        Ok(pass_end.unwrap_or(self.executed) - start)
+        Ok(pass_end.unwrap_or(self.executed).abs_diff(start))
     }
+}
+
+fn lowest(vectors: u32) -> Option<u8> {
+    let vectors = NonZeroU32::new(vectors)?;
+    u8::try_from(vectors.trailing_zeros()).ok()
 }
 
 #[derive(Default)]
@@ -1303,7 +1337,7 @@ struct Wdt {
 const fn wdt_clocks(setting: u8) -> u32 {
     match setting {
         0 => 0,
-        n => 8 << (n - 1),
+        n => 4 << n,
     }
 }
 
@@ -1401,12 +1435,20 @@ const WIDE: [(Wide, Range<usize>, &str); 2] = [
 struct Temp([Option<(usize, u8)>; 2]);
 
 impl Temp {
+    const fn slot(&mut self, wide: Wide) -> &mut Option<(usize, u8)> {
+        let [tca0, adc0] = &mut self.0;
+        match wide {
+            Wide::Tca0 => tca0,
+            Wide::Adc0 => adc0,
+        }
+    }
+
     const fn latch(&mut self, wide: Wide, low: usize, byte: u8) {
-        self.0[wide as usize] = Some((low, byte));
+        *self.slot(wide) = Some((low, byte));
     }
 
     fn low(&mut self, wide: Wide, a: usize, value: u8) -> Result<(), String> {
-        if let Some((waiting, _)) = self.0[wide as usize] {
+        if let Some(waiting) = self.waiting(wide) {
             return Err(format!(
                 "writes the low byte of {} while {}'s is still waiting for its high byte",
                 name(a),
@@ -1417,24 +1459,29 @@ impl Temp {
         Ok(())
     }
 
-    fn take(&mut self, wide: Wide, high: usize) -> Option<u8> {
-        let (low, byte) = self.0[wide as usize].take()?;
-        (low + 1 == high).then_some(byte)
+    fn take(&mut self, wide: Wide, low: usize) -> Option<u8> {
+        let (latched, byte) = self.slot(wide).take()?;
+        (latched == low).then_some(byte)
     }
 
-    fn high(&mut self, wide: Wide, a: usize, value: u8) -> Result<u16, String> {
-        let lo = self.take(wide, a).ok_or_else(|| {
+    fn high(&mut self, wide: Wide, low: usize, value: u8) -> Result<u16, String> {
+        let lo = self.take(wide, low).ok_or_else(|| {
             format!(
                 "writes the high byte of {} without its low byte just before, so the chip \
                  pairs it with whatever TEMP held",
-                name(a - 1)
+                name(low)
             )
         })?;
         Ok(u16::from_le_bytes([lo, value]))
     }
 
     const fn waiting(&self, wide: Wide) -> Option<usize> {
-        match self.0[wide as usize] {
+        let [tca0, adc0] = &self.0;
+        let slot = match wide {
+            Wide::Tca0 => tca0,
+            Wide::Adc0 => adc0,
+        };
+        match *slot {
             Some((low, _)) => Some(low),
             None => None,
         }
@@ -1509,7 +1556,7 @@ impl Chip {
     fn new(flash: Vec<u8>) -> Self {
         Self {
             flash,
-            sram: vec![JUNK; usize::from(SRAM.end - SRAM.start)],
+            sram: vec![JUNK; SRAM.len()],
             io: vec![0; 0x1000],
             now: 0,
             next_event: TICK_CYCLES,
@@ -1571,33 +1618,68 @@ impl Chip {
         self.forced = Some(vector);
     }
 
-    fn sram(&self, range: &Range<u16>) -> &[u8] {
-        &self.sram[usize::from(range.start - SRAM.start)..usize::from(range.end - SRAM.start)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "a is a register this file names, and they're all under the 0x1000 io holds"
+    )]
+    fn io(&self, a: usize) -> u8 {
+        self.io[a]
+    }
+
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "a is a register this file names, and they're all under the 0x1000 io holds"
+    )]
+    fn io_mut(&mut self, a: usize) -> &mut u8 {
+        &mut self.io[a]
+    }
+
+    fn sram(&self, range: &Range<u16>) -> Result<&[u8], String> {
+        let at = |addr: u16| addr.checked_sub(SRAM.start).map(usize::from);
+        at(range.start)
+            .zip(at(range.end))
+            .and_then(|(start, end)| self.sram.get(start..end))
+            .ok_or_else(|| format!("{:#06x}..{:#06x} isn't in SRAM", range.start, range.end))
+    }
+
+    fn sram_byte(&mut self, addr: u16) -> Option<&mut u8> {
+        let at = addr.checked_sub(SRAM.start)?;
+        self.sram.get_mut(usize::from(at))
+    }
+
+    fn since(&self, then: u64) -> Result<u64, String> {
+        self.now.checked_sub(then).ok_or_else(|| {
+            format!(
+                "the simulator's clock is at {}, before the {then} it took for the past",
+                self.now
+            )
+        })
     }
 
     fn pwm_running(&self) -> bool {
-        self.io[reg::TCA0_CTRLB] & TCA_CMP0EN != 0
+        self.io(reg::TCA0_CTRLB) & TCA_CMP0EN != 0
     }
 
     fn enabled_high(&self) -> bool {
-        self.io[reg::VPORTB_OUT] & self.io[reg::VPORTB_DIR] & ENABLE != 0
+        self.io(reg::VPORTB_OUT) & self.io(reg::VPORTB_DIR) & ENABLE != 0
     }
 
     fn aux(&self) -> u8 {
-        let dir = self.io[reg::VPORTC_DIR];
-        let pulled_up = (0..8).fold(0, |bits, pin| {
-            let on = self.io[reg::PORTC_PIN0CTRL + pin] & PORT_PULLUPEN != 0;
+        let dir = self.io(reg::VPORTC_DIR);
+        let pins = (reg::PORTC_PIN0CTRL..).zip(0..8);
+        let pulled_up = pins.fold(0, |bits, (ctrl, pin)| {
+            let on = self.io(ctrl) & PORT_PULLUPEN != 0;
             bits | u8::from(on) << pin
         });
-        (self.io[reg::VPORTC_OUT] & dir | pulled_up & !dir) & AUX
+        (self.io(reg::VPORTC_OUT) & dir | pulled_up & !dir) & AUX
     }
 
     fn aux_bright(&self) -> u8 {
-        self.io[reg::VPORTC_OUT] & self.io[reg::VPORTC_DIR] & AUX
+        self.io(reg::VPORTC_OUT) & self.io(reg::VPORTC_DIR) & AUX
     }
 
     fn clocked_as_modelled(&self) -> Result<(), String> {
-        if self.io[reg::CLKCTRL_MCLKCTRLB] != CLOCK_10MHZ {
+        if self.io(reg::CLKCTRL_MCLKCTRLB) != CLOCK_10MHZ {
             return Err("never set the clock to 10 MHz".into());
         }
         if !self.tca_running() {
@@ -1613,7 +1695,7 @@ impl Chip {
     }
 
     fn duty(&self) -> u16 {
-        if self.io[reg::TCA0_CTRLB] & TCA_CMP0EN != 0 {
+        if self.io(reg::TCA0_CTRLB) & TCA_CMP0EN != 0 {
             self.tca.cmp0
         } else {
             0
@@ -1621,11 +1703,11 @@ impl Chip {
     }
 
     fn tca_running(&self) -> bool {
-        self.io[reg::TCA0_CTRLA] == TCA_RUNNING
+        self.io(reg::TCA0_CTRLA) == TCA_RUNNING
     }
 
     fn powering_down(&self) -> bool {
-        self.io[reg::SLPCTRL_CTRLA] == SLEEP_POWER_DOWN | SLPCTRL_SEN
+        self.io(reg::SLPCTRL_CTRLA) == SLEEP_POWER_DOWN | SLPCTRL_SEN
     }
 
     fn take_protected_write(&mut self, a: usize) -> Result<(), String> {
@@ -1651,15 +1733,15 @@ impl Chip {
             }
         }
         while self.now >= self.next_pit {
-            self.next_pit += self.tick_cycles;
+            self.next_pit = self.next_pit.saturating_add(self.tick_cycles);
             if self.osc32k_stopped {
                 continue;
             }
-            self.frames += 1;
-            let pit = self.io[reg::RTC_PITCTRLA];
+            self.frames = self.frames.saturating_add(1);
+            let pit = self.io(reg::RTC_PITCTRLA);
             if pit & RTC_PITEN != 0 && self.frames.is_multiple_of(pit_frames(pit)) {
                 self.pit_flag = true;
-                self.ticks += 1;
+                self.ticks = self.ticks.saturating_add(1);
             }
             self.land_wdt()?;
             self.wdt_period()?;
@@ -1669,24 +1751,27 @@ impl Chip {
     }
 
     fn wdt_open(&self) -> u32 {
-        wdt_clocks(self.io[reg::WDT_CTRLA] & WDT_PERIOD)
+        wdt_clocks(self.io(reg::WDT_CTRLA) & WDT_PERIOD)
     }
 
     /// 0 before the first `wdr` starts window mode (§19.3.3.2).
     fn wdt_closed(&self) -> u32 {
         if self.wdt.windowed {
-            wdt_clocks((self.io[reg::WDT_CTRLA] & WDT_WINDOW) >> 4)
+            wdt_clocks((self.io(reg::WDT_CTRLA) & WDT_WINDOW) >> 4)
         } else {
             0
         }
     }
 
+    fn wdt_timeout(&self) -> u32 {
+        self.wdt_closed().saturating_add(self.wdt_open())
+    }
+
     fn wdt_periods_left(&self) -> u64 {
-        let timeout = self.wdt_closed() + self.wdt_open();
-        if timeout == 0 {
+        let Some(last) = self.wdt_timeout().checked_sub(1) else {
             return DOWN_PERIODS;
-        }
-        let last_safe = (timeout - 1) / WDT_CLOCKS_PER_TICK;
+        };
+        let last_safe = last / WDT_CLOCKS_PER_TICK;
         u64::from(last_safe.saturating_sub(self.wdt.ticks)).min(DOWN_PERIODS)
     }
 
@@ -1694,12 +1779,12 @@ impl Chip {
         let Some(value) = self.wdt.pending.take() else {
             return Ok(());
         };
-        let was = self.io[reg::WDT_CTRLA];
+        let was = self.io(reg::WDT_CTRLA);
         if was & WDT_PERIOD == 0 {
             self.wdt.ticks = 0;
         }
         self.wdt.windowed &= was & WDT_WINDOW != 0;
-        self.io[reg::WDT_CTRLA] = value;
+        *self.io_mut(reg::WDT_CTRLA) = value;
         self.wdt_timed_out()
             .map_err(|e| format!("WDT.CTRLA lands with {e}"))
     }
@@ -1709,14 +1794,14 @@ impl Chip {
         if self.wdt_open() == 0 {
             return Ok(());
         }
-        self.wdt.ticks += 1;
+        self.wdt.ticks = self.wdt.ticks.saturating_add(1);
         self.wdt_timed_out()
             .map_err(|e| format!("the watchdog went {e}"))
     }
 
     fn wdt_timed_out(&self) -> Result<(), String> {
-        let clocks = self.wdt.ticks * WDT_CLOCKS_PER_TICK;
-        let timeout = self.wdt_closed() + self.wdt_open();
+        let clocks = self.wdt.ticks.saturating_mul(WDT_CLOCKS_PER_TICK);
+        let timeout = self.wdt_timeout();
         if clocks >= timeout {
             return Err(format!(
                 "{} ticks ({clocks} WDT clocks) without wdr, against a {timeout}-clock \
@@ -1728,18 +1813,20 @@ impl Chip {
     }
 
     const fn crc_status(&mut self) -> u8 {
-        match self.crc.started {
-            Some((at, before)) if self.now <= at + CRC_START_INSTRUCTIONS => before,
-            Some(_) if self.crc.busy_reads > 0 => {
-                self.crc.busy_reads -= 1;
-                CRCSCAN_BUSY
+        if let Some((at, before)) = self.crc.started {
+            if self.now <= at.saturating_add(CRC_START_INSTRUCTIONS) {
+                return before;
             }
-            _ => self.crc.status,
+            if let Some(left) = self.crc.busy_reads.checked_sub(1) {
+                self.crc.busy_reads = left;
+                return CRCSCAN_BUSY;
+            }
         }
+        self.crc.status
     }
 
     fn start_crc(&mut self) -> Result<(), String> {
-        let ctrlb = self.io[reg::CRCSCAN_CTRLB];
+        let ctrlb = self.io(reg::CRCSCAN_CTRLB);
         if ctrlb != CRCSCAN_FLASH_PRIORITY {
             return Err(format!(
                 "starts a CRC scan with CRCSCAN.CTRLB {ctrlb:#04x}; only the whole-flash \
@@ -1765,7 +1852,7 @@ impl Chip {
         if self.converting() {
             return Err("starts a conversion while one's still running".into());
         }
-        let io = |r: usize| self.io[r];
+        let io = |r: usize| self.io(r);
         if io(reg::ADC0_CTRLA) != ADC_ENABLE {
             return Err(format!(
                 "starts a conversion with ADC0.CTRLA {:#04x}; it wants the ADC enabled, \
@@ -1784,7 +1871,7 @@ impl Chip {
             return Err("starts a conversion without ADC0.CALIB at 25% duty".into());
         }
         let ctrlc = io(reg::ADC0_CTRLC);
-        let clk_adc = CLK_PER >> (1 + u32::from(ctrlc & ADC_PRESC));
+        let clk_adc = CLK_PER >> 1 >> (ctrlc & ADC_PRESC);
         if !(200_000..=1_500_000).contains(&clk_adc) {
             return Err(format!(
                 "runs the ADC at {clk_adc} Hz, outside 200 kHz to 1.5 MHz (table 36-26)"
@@ -1805,7 +1892,7 @@ impl Chip {
         let channel = match muxpos {
             ADC_MUXPOS_AIN1 => {
                 // §30.3.1.1: buffer off and nothing else, so never a pull-up.
-                let pa1 = io(reg::PORTA_PIN0CTRL + BATTERY_PIN);
+                let pa1 = io(BATTERY_CTRL);
                 if pa1 != ISC_INPUT_DISABLE {
                     return Err(format!(
                         "converts AIN1 with PORTA.PIN1CTRL at {pa1:#04x}: PA1 wants its \
@@ -1846,7 +1933,7 @@ impl Chip {
                 UNSETTLED
             };
         self.adc.last_setup = setup;
-        self.adc.ready_at = Some(self.now + CONVERSION_INSTRUCTIONS);
+        self.adc.ready_at = Some(self.now.saturating_add(CONVERSION_INSTRUCTIONS));
         Ok(())
     }
 
@@ -1859,7 +1946,7 @@ impl Chip {
     }
 
     fn elapse(&mut self) -> Result<(), String> {
-        self.advance_to(self.now + 1)
+        self.advance_to(self.now.saturating_add(1))
     }
 
     /// Table 20-6.
@@ -1877,7 +1964,9 @@ impl Chip {
             tca.cmp0 = tca.cmp0buf;
             tca.cmp0bv = false;
         }
-        tca.next_bottom += 2 * u64::from(tca.per.max(1));
+        tca.next_bottom = tca
+            .next_bottom
+            .saturating_add(2 * u64::from(tca.per.max(1)));
         if tca.cmp0 > tca.per {
             return Err(format!(
                 "CMP0 went live at {} against a PER of {}, which holds PB0 high for the cycle",
@@ -1886,14 +1975,16 @@ impl Chip {
         }
         let duty = self.duty();
         let tca = &mut self.tca;
-        tca.recent[tca.at] = duty;
-        tca.at = (tca.at + 1) % DSM_WINDOW;
-        tca.settled = (tca.settled + 1).min(DSM_WINDOW);
+        if let Some(slot) = tca.recent.get_mut(tca.at) {
+            *slot = duty;
+        }
+        tca.at = tca.at.saturating_add(1) % DSM_WINDOW;
+        tca.settled = tca.settled.saturating_add(1).min(DSM_WINDOW);
         if !self.enabled_high() || duty != 0 {
             self.tca.zero_run = 0;
             return Ok(());
         }
-        self.tca.zero_run += 1;
+        self.tca.zero_run = self.tca.zero_run.saturating_add(1);
         if self.tca.zero_run > ZERO_DUTY_CYCLES {
             return Err(format!(
                 "PB2's been high with the duty at 0 for {} PWM cycles, longer than the \
@@ -1935,7 +2026,7 @@ impl Chip {
     /// INVEN would flip both VPORTA.IN and which edge is which (§16.3.2.2),
     /// and the model does neither, so it refuses it.
     fn switch_ctrl(&self) -> u8 {
-        self.io[reg::PORTA_PIN0CTRL + SWITCH_PIN]
+        self.io(SWITCH_CTRL)
     }
 
     /// §16.5.10. `deep` is a CPU asleep in power-down, where PA5, only
@@ -1969,11 +2060,12 @@ impl Chip {
 
     fn interrupts(&self, senses: impl Fn(usize, u8) -> bool, tca: bool) -> u32 {
         let port = |base: usize, vector: u8| {
-            let on = (0..8).any(|pin| senses(pin, self.io[base + pin] & PORT_ISC));
+            let mut pins = (base..).zip(0..8);
+            let on = pins.any(|(ctrl, pin)| senses(pin, self.io(ctrl) & PORT_ISC));
             u32::from(on) << vector
         };
-        let pit = self.io[reg::RTC_PITINTCTRL] & RTC_PI != 0;
-        let ovf = tca && self.io[reg::TCA0_INTCTRL] & TCA_OVF != 0;
+        let pit = self.io(reg::RTC_PITINTCTRL) & RTC_PI != 0;
+        let ovf = tca && self.io(reg::TCA0_INTCTRL) & TCA_OVF != 0;
         port(reg::PORTA_PIN0CTRL, VECTOR_PORTA)
             | port(reg::PORTB_PIN0CTRL, VECTOR_PORTB)
             | port(reg::PORTC_PIN0CTRL, VECTOR_PORTC)
@@ -2014,7 +2106,7 @@ impl Chip {
                         regulated with TCA0 stopped"
                 .into());
         }
-        if self.io[reg::TCA0_INTCTRL] & TCA_OVF != 0 {
+        if self.io(reg::TCA0_INTCTRL) & TCA_OVF != 0 {
             return Err(
                 "powers down with the delta-sigma running, which TCA0 stopping \
                         leaves halfway through a PWM cycle on PB0"
@@ -2029,7 +2121,7 @@ impl Chip {
         }
         // §20.3.6 and §16.3.5 don't say what a waveform output holds with
         // TCA0's clock stopped.
-        if self.io[reg::TCA0_CTRLB] & TCA_CMP0EN != 0 {
+        if self.io(reg::TCA0_CTRLB) & TCA_CMP0EN != 0 {
             return Err(
                 "powers down with TCA0.CTRLB.CMP0EN set, so PB0 is left to a stopped \
                  timer, at a level the datasheet doesn't give"
@@ -2051,10 +2143,10 @@ impl Chip {
                     .into(),
             );
         }
-        if self.io[reg::ADC0_CTRLA] & ADC_ENABLE != 0 {
+        if self.io(reg::ADC0_CTRLA) & ADC_ENABLE != 0 {
             return Err("powers down with ADC0 still enabled".into());
         }
-        if self.io[reg::VREF_CTRLB] & VREF_ADC0REFEN != 0 {
+        if self.io(reg::VREF_CTRLB) & VREF_ADC0REFEN != 0 {
             return Err(
                 "powers down with VREF.CTRLB.ADC0REFEN set, forcing the reference on \
                         for as long as it sleeps"
@@ -2073,27 +2165,27 @@ impl Chip {
 
     fn write_pin_ctrl(&mut self, a: usize, value: u8) -> Result<(), String> {
         let pull_up = value & PORT_PULLUPEN != 0;
-        if pull_up && a == reg::PORTB_PIN0CTRL + ENABLE_PIN {
+        if pull_up && a == ENABLE_CTRL {
             return Err("gives PB2 a pull-up, which could creep the boost converter on".into());
         }
-        if a == reg::PORTA_PIN0CTRL + UPDI_PIN {
+        if a == UPDI_CTRL {
             return Err(format!(
                 "writes {value:#04x} to {}: PA0 is UPDI, and the firmware leaves its \
                  settings alone",
                 name(a)
             ));
         }
-        if pull_up && a == reg::PORTA_PIN0CTRL + BATTERY_PIN {
+        if pull_up && a == BATTERY_CTRL {
             return Err(format!(
                 "writes {value:#04x} to {}: PA1 is the battery divider, and a pull-up \
                  would skew it",
                 name(a)
             ));
         }
-        if a == reg::PORTA_PIN0CTRL + SWITCH_PIN && value & PORT_INVEN != 0 {
+        if a == SWITCH_CTRL && value & PORT_INVEN != 0 {
             return Err("sets INVEN on PA5, which the simulator doesn't model".into());
         }
-        self.io[a] = value;
+        *self.io_mut(a) = value;
         self.update_enabled();
         Ok(())
     }
@@ -2106,7 +2198,7 @@ impl Chip {
                  PB0's TCA0's"
             ));
         }
-        self.io[a] = value;
+        *self.io_mut(a) = value;
         let high = self.enabled_high();
         if high && !was {
             let handler = self.enabled & 1 << VECTOR_TCA0_OVF != 0;
@@ -2310,7 +2402,8 @@ fn name(addr: usize) -> String {
 
 impl Bus for Chip {
     fn fetch(&self, pc: u32) -> Option<u16> {
-        word(&self.flash, pc as usize * 2)
+        let at = usize::try_from(pc).ok()?.checked_mul(2)?;
+        word(&self.flash, at)
     }
 
     fn wdr(&mut self) -> Result<(), String> {
@@ -2323,12 +2416,12 @@ impl Bus for Chip {
         if self
             .wdt
             .last_wdr
-            .is_some_and(|at| self.now < at + WDR_SYNC_CYCLES)
+            .is_some_and(|at| self.now < at.saturating_add(WDR_SYNC_CYCLES))
         {
             return Ok(());
         }
         self.wdt.last_wdr = Some(self.now);
-        let clocks = self.wdt.ticks * WDT_CLOCKS_PER_TICK;
+        let clocks = self.wdt.ticks.saturating_mul(WDT_CLOCKS_PER_TICK);
         let closed = self.wdt_closed();
         if closed > 0 && clocks <= closed {
             return Err(format!(
@@ -2338,14 +2431,13 @@ impl Bus for Chip {
             ));
         }
         self.wdt.ticks = 0;
-        self.wdt.windowed = self.io[reg::WDT_CTRLA] & WDT_WINDOW != 0;
+        self.wdt.windowed = self.io(reg::WDT_CTRLA) & WDT_WINDOW != 0;
         Ok(())
     }
 
     /// Lowest vector first, the default static priority (§13.3.2.4).
     fn interrupt(&self) -> Option<u8> {
-        let requests = self.requests();
-        (requests != 0).then(|| requests.trailing_zeros() as u8)
+        lowest(self.requests())
     }
 
     fn woken(&mut self) -> bool {
@@ -2363,7 +2455,7 @@ impl Bus for Chip {
     fn sleep(&mut self) -> Result<bool, String> {
         self.ccp_hold = false;
         self.tick_polled = true;
-        let ctrla = self.io[reg::SLPCTRL_CTRLA];
+        let ctrla = self.io(reg::SLPCTRL_CTRLA);
         if ctrla & SLPCTRL_SEN == 0 {
             return Err(
                 "sleeps with SLPCTRL.SEN clear, which the chip treats as a nop, \
@@ -2373,7 +2465,7 @@ impl Bus for Chip {
         }
         let mut wakes = if self.powering_down() {
             self.ready_for_power_down()?;
-            self.power_downs += 1;
+            self.power_downs = self.power_downs.saturating_add(1);
             self.wakes_from_power_down()
         } else if ctrla == SLEEP_IDLE | SLPCTRL_SEN {
             self.enabled
@@ -2383,7 +2475,7 @@ impl Bus for Chip {
                  idle and power-down"
             ));
         };
-        if self.io[reg::RTC_PITCTRLA] & RTC_PITEN == 0 {
+        if self.io(reg::RTC_PITCTRLA) & RTC_PITEN == 0 {
             wakes &= !(1 << VECTOR_RTC_PIT);
         }
         if wakes == 0 && self.enabled != 0 {
@@ -2396,7 +2488,11 @@ impl Bus for Chip {
     /// TCA0 stops in power-down (§20.3.6 only promises idle).
     fn idle(&mut self) -> Result<(), String> {
         if self.powering_down() {
-            self.tca.next_bottom += self.next_pit - self.now;
+            let asleep = self
+                .next_pit
+                .checked_sub(self.now)
+                .ok_or("the simulator's next PIT period is already past")?;
+            self.tca.next_bottom = self.tca.next_bottom.saturating_add(asleep);
             self.plan_next_event();
             return self.advance_to(self.next_pit);
         }
@@ -2406,11 +2502,13 @@ impl Bus for Chip {
     fn read(&mut self, addr: u16) -> Result<u8, String> {
         let a = usize::from(addr);
         self.temp_undisturbed(a)?;
-        if SRAM.contains(&addr) {
-            return Ok(self.sram[usize::from(addr - SRAM.start)]);
+        if let Some(byte) = self.sram_byte(addr) {
+            return Ok(*byte);
         }
-        if (MAPPED..MAPPED + FLASH_SIZE as u16).contains(&addr) {
-            return Ok(*self.flash.get(usize::from(addr - MAPPED)).unwrap_or(&0xFF));
+        if let Some(offset) = addr.checked_sub(MAPPED).map(usize::from)
+            && offset < FLASH_SIZE
+        {
+            return Ok(self.flash.get(offset).copied().unwrap_or(0xFF));
         }
         match a {
             // Every ISC but INPUT_DISABLE leaves the input buffer on (§16.3.2.1,
@@ -2419,7 +2517,7 @@ impl Bus for Chip {
             // following the pin with its buffer off (§16.5.11's note), and
             // what it then holds is unknown, so it reads 1 here.
             reg::VPORTA_IN => {
-                let pa1 = self.io[reg::PORTA_PIN0CTRL + BATTERY_PIN];
+                let pa1 = self.io(BATTERY_CTRL);
                 if pa1 & PORT_ISC != ISC_INPUT_DISABLE {
                     return Err(
                         "reads VPORTA.IN with PA1's digital input buffer on, which reads the \
@@ -2480,21 +2578,23 @@ impl Bus for Chip {
                 self.temp.latch(Wide::Adc0, a, hi);
                 Ok(lo)
             }
-            _ if a == reg::ADC0_RES + 1 => self.temp.take(Wide::Adc0, a).ok_or_else(|| {
-                "reads ADC0.RES's high byte without its low byte just before, so it gets \
-                 whatever ADC0.TEMP held"
-                    .into()
-            }),
+            _ if a == reg::ADC0_RES + 1 => {
+                self.temp.take(Wide::Adc0, reg::ADC0_RES).ok_or_else(|| {
+                    "reads ADC0.RES's high byte without its low byte just before, so it gets \
+                     whatever ADC0.TEMP held"
+                        .into()
+                })
+            }
             reg::SIGROW_TEMPSENSE0 => Ok(CALIBRATION.gain),
-            reg::SIGROW_TEMPSENSE1 => Ok(CALIBRATION.offset as u8),
+            reg::SIGROW_TEMPSENSE1 => Ok(CALIBRATION.offset.cast_unsigned()),
             _ if self.world.fuse(a).is_some() => {
                 self.boot.fuses_read.get_or_insert(self.now);
                 Ok(self.world.fuse(a).unwrap_or(0xFF))
             }
             _ if plain(a) || (reg::PORTA_PIN0CTRL..reg::PORTA_PIN0CTRL + 8).contains(&a) => {
-                Ok(self.io[a])
+                Ok(self.io(a))
             }
-            _ if (reg::PORTB_PIN0CTRL..reg::PORTB_PIN0CTRL + 8).contains(&a) => Ok(self.io[a]),
+            _ if (reg::PORTB_PIN0CTRL..reg::PORTB_PIN0CTRL + 8).contains(&a) => Ok(self.io(a)),
             _ => Err(format!(
                 "reads {}, which the simulator doesn't model",
                 name(a)
@@ -2506,11 +2606,11 @@ impl Bus for Chip {
         let a = usize::from(addr);
         self.temp_undisturbed(a)?;
         self.ccp_hold = false;
-        if SRAM.contains(&addr) {
-            self.sram[usize::from(addr - SRAM.start)] = value;
+        if let Some(byte) = self.sram_byte(addr) {
+            *byte = value;
             return Ok(());
         }
-        self.register_writes += 1;
+        self.register_writes = self.register_writes.saturating_add(1);
         self.boot.write(self.now, a, value);
         match a {
             reg::CPU_CCP => {
@@ -2519,7 +2619,7 @@ impl Bus for Chip {
                         "writes {value:#04x} to CPU.CCP, which isn't the IOREG key"
                     ));
                 }
-                self.unlocked_until = Some(self.now + 4);
+                self.unlocked_until = Some(self.now.saturating_add(4));
                 self.ccp_hold = true;
             }
             reg::CLKCTRL_MCLKCTRLB => {
@@ -2530,7 +2630,7 @@ impl Bus for Chip {
                          10 MHz, and the PWM's frequency depends on it"
                     ));
                 }
-                self.io[a] = value;
+                *self.io_mut(a) = value;
             }
             reg::VPORTB_DIR | reg::VPORTB_OUT => self.write_portb(a, value)?,
             reg::TCA0_CTRLA => {
@@ -2540,9 +2640,9 @@ impl Bus for Chip {
                          assume the timer runs undivided, and it never stops"
                     ));
                 }
-                self.io[a] = value;
+                *self.io_mut(a) = value;
                 // Unconfirmed: a full first cycle at whatever PER is.
-                self.tca.next_bottom = self.now + 2 * u64::from(self.tca.per.max(1));
+                self.tca.next_bottom = self.now.saturating_add(2 * u64::from(self.tca.per.max(1)));
                 self.plan_next_event();
             }
             reg::TCA0_CTRLB => {
@@ -2552,18 +2652,18 @@ impl Bus for Chip {
                          dual-slope at BOTTOM on WO0"
                     ));
                 }
-                if (self.io[a] ^ value) & TCA_CMP0EN != 0 {
+                if (self.io(a) ^ value) & TCA_CMP0EN != 0 {
                     self.tca.settled = 0;
                 }
-                self.io[a] = value;
+                *self.io_mut(a) = value;
             }
             reg::TCA0_INTCTRL
-                if value & TCA_OVF != 0 && self.io[a] & TCA_OVF == 0 && self.io[DSM_SUM] != 0 =>
+                if value & TCA_OVF != 0 && self.io(a) & TCA_OVF == 0 && self.io(DSM_SUM) != 0 =>
             {
                 return Err(format!(
                     "turns TCA0's overflow interrupt on with the delta-sigma's sum at {}, \
                      left over from the last time the light was on",
-                    self.io[DSM_SUM]
+                    self.io(DSM_SUM)
                 ));
             }
             // The request is the flag and the enable together, and BOTTOM sets
@@ -2571,9 +2671,9 @@ impl Bus for Chip {
             // between a clear and this write is a real BOTTOM, and fine.
             reg::TCA0_INTCTRL
                 if value & TCA_OVF != 0
-                    && self.io[a] & TCA_OVF == 0
+                    && self.io(a) & TCA_OVF == 0
                     && self.tca.ovf
-                    && self.now - self.tca.ovf_up_at >= PWM_CYCLE =>
+                    && self.since(self.tca.ovf_up_at)? >= PWM_CYCLE =>
             {
                 return Err(
                     "turns TCA0's overflow interrupt on with INTFLAGS.OVF still up from \
@@ -2583,7 +2683,7 @@ impl Bus for Chip {
                 );
             }
             reg::TCA0_INTCTRL | reg::RTC_PITINTCTRL => {
-                self.io[a] = value;
+                *self.io_mut(a) = value;
                 self.update_enabled();
             }
             DSM_DUTY | DSM_FRACTION | DSM_SUM
@@ -2610,7 +2710,7 @@ impl Bus for Chip {
                         name(a)
                     ));
                 }
-                if self.io[a] & RTC_PITEN != 0 && value & RTC_PITEN == 0 {
+                if self.io(a) & RTC_PITEN != 0 && value & RTC_PITEN == 0 {
                     return Err("clears RTC.PITCTRLA.PITEN, which stops the RTC too \
                                 (errata 2.6.2), and the firmware never stops its tick"
                         .into());
@@ -2622,7 +2722,7 @@ impl Bus for Chip {
                          doesn't model: it moves in frames of 512 RTC clocks"
                     ));
                 }
-                let wdt = self.io[reg::WDT_CTRLA] | self.wdt.pending.unwrap_or(0);
+                let wdt = self.io(reg::WDT_CTRLA) | self.wdt.pending.unwrap_or(0);
                 if period != PIT_FRAME && wdt & WDT_WINDOW != 0 {
                     return Err(
                         "slows the PIT with the watchdog's window still on, which bites \
@@ -2630,7 +2730,7 @@ impl Bus for Chip {
                             .into(),
                     );
                 }
-                let was = self.io[a];
+                let was = self.io(a);
                 if self.tick_on_speed_up
                     && was & RTC_PITEN != 0
                     && was & RTC_PERIOD != PIT_FRAME
@@ -2638,7 +2738,7 @@ impl Bus for Chip {
                 {
                     self.pit_flag = true;
                 }
-                self.io[a] = value;
+                *self.io_mut(a) = value;
                 self.pit_busy = PIT_SYNC_READS;
             }
             reg::RTC_PITINTFLAGS => {
@@ -2660,8 +2760,9 @@ impl Bus for Chip {
                 self.temp.low(Wide::Tca0, a, value)?;
             }
             _ if (reg::TCA0_CNT..TCA0_WIDE_END).contains(&a) && a & 1 != 0 => {
-                let word = self.temp.high(Wide::Tca0, a, value)?;
-                self.tca_written(a - 1, word)?;
+                let low = a & !1;
+                let word = self.temp.high(Wide::Tca0, low, value)?;
+                self.tca_written(low, word)?;
             }
             reg::WDT_CTRLA => {
                 self.take_protected_write(a)?;
@@ -2701,9 +2802,9 @@ impl Bus for Chip {
                     ));
                 }
                 self.start_crc()?;
-                self.io[a] = value;
+                *self.io_mut(a) = value;
             }
-            reg::CRCSCAN_CTRLB => self.io[a] = value,
+            reg::CRCSCAN_CTRLB => *self.io_mut(a) = value,
             reg::ADC0_COMMAND => {
                 if value & ADC_STCONV != 0 {
                     self.start_conversion()?;
@@ -2727,7 +2828,7 @@ impl Bus for Chip {
                 if a == reg::ADC0_CTRLA && value & ADC_ENABLE == 0 {
                     self.adc.last_setup = None;
                 }
-                self.io[a] = value;
+                *self.io_mut(a) = value;
             }
             _ => {
                 return Err(format!(

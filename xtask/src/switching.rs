@@ -21,6 +21,7 @@ impl RandomSwitching {
         RELEASE_TICKS,
         RELEASE_TICKS + 1,
     ];
+    const EDGE_COUNT: usize = Self::EDGES.len();
 
     pub const fn new(seed: u32) -> Self {
         Self {
@@ -35,9 +36,11 @@ impl Iterator for RandomSwitching {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.pressed = !self.pressed;
-        let ticks = match self.rng.next_u32() % 3 {
-            0 => 1 + (self.rng.next_u32() % 100) as u16,
-            _ => Self::EDGES[self.rng.next_u32() as usize % Self::EDGES.len()],
+        let ticks = if self.rng.next_u32() % 3 == 0 {
+            1 + u16::from(u8::try_from(self.rng.next_u32() % 100).ok()?)
+        } else {
+            let pick = usize::try_from(self.rng.next_u32()).ok()? % Self::EDGE_COUNT;
+            *Self::EDGES.get(pick)?
         };
         Some((self.pressed, ticks))
     }
