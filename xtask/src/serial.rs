@@ -161,7 +161,7 @@ mod tests {
     fn draining_reads_what_is_waiting_and_stops_at_the_first_quiet_read() {
         let mut waiting: &[u8] = &[0xA5; 150];
         read_until_quiet(&mut waiting).unwrap();
-        assert!(waiting.is_empty());
+        assert_eq!(waiting, [0u8; 0]);
     }
 
     #[test]

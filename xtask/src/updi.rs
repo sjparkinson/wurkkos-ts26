@@ -1,4 +1,4 @@
-//! A UPDI programmer for the ATtiny1616 over a serial adapter (DS40002204A
+//! A UPDI programmer for the `ATtiny1616` over a serial adapter (DS40002204A
 //! chapter 33), with the sequences of pymcuprog.
 //!
 //! It deliberately can't write fuses, write the user row or unlock a locked

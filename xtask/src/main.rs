@@ -314,8 +314,7 @@ fn runs(start: u16, bytes: &[u8]) -> Vec<String> {
 fn this_boards_hex(path: &Path) -> Result<(), String> {
     let name = path
         .file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string_lossy().to_lowercase());
     if name.contains("ts26") || name.contains("0721") {
         return Ok(());
     }
