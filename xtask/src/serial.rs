@@ -96,12 +96,11 @@ impl Port {
         self.configure(BAUD, READ_TIMEOUT)
     }
 
-    fn read_full(&mut self, buf: &mut [u8]) -> io::Result<()> {
-        let mut filled = 0;
-        while filled < buf.len() {
-            match self.file.read(&mut buf[filled..])? {
+    fn read_full(&mut self, mut buf: &mut [u8]) -> io::Result<()> {
+        while !buf.is_empty() {
+            match self.file.read(buf)? {
                 0 => return Err(io::ErrorKind::TimedOut.into()),
-                n => filled += n,
+                n => buf = buf.get_mut(n..).unwrap_or_default(),
             }
         }
         Ok(())
