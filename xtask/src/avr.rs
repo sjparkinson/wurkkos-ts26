@@ -14,6 +14,11 @@
 //! enabled, it's refused inside a handler or with SREG.I clear, since only
 //! figure 13-1, a block diagram, says that interrupt couldn't wake the CPU.
 
+#![expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) inside private modules says who uses an item, not who can"
+)]
+
 use std::ops::Range;
 
 use ts26::regs::addr;

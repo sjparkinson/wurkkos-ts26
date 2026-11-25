@@ -128,14 +128,13 @@ pub struct SerialNumber([u8; map::SERIAL_SIZE]);
 
 impl SerialNumber {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        match bytes.try_into() {
-            Ok(bytes) => Ok(Self(bytes)),
-            Err(_) => Err(format!(
+        bytes.try_into().map(Self).map_err(|_| {
+            format!(
                 "a serial number is {} bytes, not {}",
                 map::SERIAL_SIZE,
                 bytes.len()
-            )),
-        }
+            )
+        })
     }
 
     pub const fn bytes(&self) -> &[u8] {
@@ -498,6 +497,10 @@ fn hex(bytes: &[u8]) -> String {
     hex.join(" ")
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "map_err hands the error over by value"
+)]
 fn io_error(error: io::Error) -> String {
     match error.kind() {
         io::ErrorKind::TimedOut => "no reply from the chip. Check the probe's contact, \
@@ -508,6 +511,10 @@ fn io_error(error: io::Error) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) inside private modules says who uses an item, not who can"
+)]
 pub(crate) mod tests {
     use super::*;
     use fake::Tiny;
@@ -1282,6 +1289,10 @@ pub(crate) mod tests {
             StIncData(usize),
         }
 
+        #[expect(
+            clippy::struct_excessive_bools,
+            reason = "the fake chip's state flags, which change independently"
+        )]
         pub struct Tiny {
             pub flash: Vec<u8>,
             pub eeprom: Vec<u8>,
