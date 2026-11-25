@@ -6,14 +6,15 @@
 
 mod examples;
 
-pub use examples::{EXAMPLES, Example, Expect, example};
+#[cfg(test)]
+pub use examples::example;
+pub use examples::{EXAMPLES, Example, Expect};
 
 use core::fmt;
 use core::iter;
 use core::ops::Deref;
 use core::str::FromStr;
 
-use crate::TICKS_PER_SECOND;
 use crate::battery;
 use crate::button::{Event, HOLD_TICKS, RELEASE_TICKS};
 use crate::selftest::Faults;
@@ -22,6 +23,7 @@ use crate::temp::Calibration;
 use crate::thermal;
 use crate::torch::Torch;
 use crate::watchdog::{Pace, REST_TICKS, Step};
+use crate::{TICKS_PER_SECOND, u32_from};
 
 const FULL_SCALE: u16 = 4 * 1023;
 
@@ -43,9 +45,9 @@ fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
     let first_at_least = |value: u16| {
         let (mut low, mut high) = (0, FULL_SCALE + 1);
         while low < high {
-            let mid = low + (high - low) / 2;
+            let mid = low.midpoint(high);
             if read(mid) < value {
-                low = mid + 1;
+                low = mid.saturating_add(1);
             } else {
                 high = mid;
             }
@@ -53,11 +55,11 @@ fn closest(target: u16, read: impl Fn(u16) -> u16) -> u16 {
         low
     };
     let above = first_at_least(target);
-    if above == 0 {
+    let Some(under) = above.checked_sub(1) else {
         return 0;
-    }
-    let below = read(above - 1);
-    if above > FULL_SCALE || target - below <= read(above) - target {
+    };
+    let below = read(under);
+    if above > FULL_SCALE || target.abs_diff(below) <= read(above).abs_diff(target) {
         first_at_least(below)
     } else {
         above
@@ -149,8 +151,8 @@ impl fmt::Display for Error {
             Self::Kind => "expected C (clicks), H (hold) or wait:",
             Self::TimedClick => "clicks don't take a duration; holds do (1H:2s)",
             Self::ShortHold => {
-                let ms = u32::from(HOLD_TICKS) * 1000 / u32::from(TICKS_PER_SECOND);
-                return write!(f, "that's a click; a hold needs longer than {ms} ms");
+                const MS: u32 = u32_from(HOLD_TICKS) * 1000 / u32_from(TICKS_PER_SECOND);
+                return write!(f, "that's a click; a hold needs longer than {MS} ms");
             }
             Self::Duration => "expected a duration like 500ms, 2s or 1.5s",
             Self::UnderATick => "that's shorter than a tick",
@@ -207,7 +209,7 @@ impl FromStr for Action {
                     return Err(Error::ShortHold);
                 }
                 Ok(Self::Hold {
-                    clicks: count - 1,
+                    clicks: count.checked_sub(1).ok_or(Error::Count)?,
                     ticks,
                 })
             }
@@ -245,14 +247,16 @@ pub fn parse<'a>(
 
 fn decimal(text: &str, places: u32) -> Option<u32> {
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
-    if fraction.len() > places as usize || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+    let fits = u32::try_from(fraction.len()).is_ok_and(|digits| digits <= places);
+    if !fits || !fraction.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let mut unit = 10u32.pow(places);
     let mut value = whole.parse::<u32>().ok()?.checked_mul(unit)?;
     for digit in fraction.bytes() {
         unit /= 10;
-        value = value.checked_add(u32::from(digit - b'0') * unit)?;
+        let digit = char::from(digit).to_digit(10)?;
+        value = value.checked_add(digit.checked_mul(unit)?)?;
     }
     Some(value)
 }
@@ -274,8 +278,11 @@ fn ticks(duration: &str) -> Result<u16, Error> {
         None
     };
     let ms = ms.ok_or(Error::Duration)?;
-    let ticks = (u64::from(ms) * u64::from(TICKS_PER_SECOND) + 500) / 1000;
-    match u16::try_from(ticks) {
+    let rounded = u64::from(ms)
+        .checked_mul(u64::from(TICKS_PER_SECOND))
+        .and_then(|scaled| scaled.checked_add(500))
+        .ok_or(Error::TooLong)?;
+    match u16::try_from(rounded / 1000) {
         Ok(0) => Err(Error::UnderATick),
         Ok(ticks) => Ok(ticks),
         Err(_) => Err(Error::TooLong),
@@ -414,7 +421,7 @@ impl Rig {
     }
 
     pub fn tick_in(&mut self, pressed: bool, scene: &Scene) -> Option<Event> {
-        self.frame = (self.frame + 1) % REST_TICKS;
+        self.frame = self.frame.wrapping_add(1) % REST_TICKS;
         let changed = core::mem::replace(&mut self.pressed, pressed) != pressed;
         let slow = self.pace.slow();
         if slow && changed {
@@ -481,7 +488,8 @@ impl Rng {
     }
 
     pub const fn next_u16(&mut self) -> u16 {
-        (self.next_u32() >> 16) as u16
+        let [_, _, low, high] = self.next_u32().to_le_bytes();
+        u16::from_le_bytes([low, high])
     }
 }
 
