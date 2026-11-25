@@ -46,3 +46,11 @@ pub(crate) const fn u16_from(value: u8) -> u16 {
 pub(crate) const fn u32_from(value: u16) -> u32 {
     value as u32
 }
+
+#[expect(
+    clippy::as_conversions,
+    reason = "widening in a const fn, where From can't be called"
+)]
+pub(crate) const fn usize_from(value: u8) -> usize {
+    value as usize
+}

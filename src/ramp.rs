@@ -1,3 +1,5 @@
+use crate::usize_from;
+
 pub const LEVELS: u8 = 150;
 
 pub const CEILING: u8 = LEVELS;
@@ -25,11 +27,7 @@ impl Output {
     };
 }
 
-#[expect(
-    clippy::as_conversions,
-    reason = "widening u8 to usize for an array length, where From can't be called"
-)]
-static TABLE: [u16; LEVELS as usize] = table();
+static TABLE: [u16; usize_from(LEVELS)] = table();
 
 #[must_use]
 pub fn output(level: u8) -> Output {
@@ -77,12 +75,12 @@ pub fn faded(position: u16) -> Output {
               the cubic term is at most span, which came from a u16, and From can't be called \
               in a const fn"
 )]
-const fn table() -> [u16; LEVELS as usize] {
-    let mut table = [0; LEVELS as usize];
+const fn table() -> [u16; usize_from(LEVELS)] {
+    let mut table = [0; usize_from(LEVELS)];
     let span = (DSM_TOP - DSM_FLOOR) as u64;
     let last = LEVELS as u64 - 1;
     let mut i = 0;
-    while i < LEVELS as usize {
+    while i < usize_from(LEVELS) {
         let step = i as u64;
         let curve = DSM_FLOOR + (span * step * step * step / (last * last * last)) as u16;
         table[i] = if i > 0 && curve <= table[i - 1] {
